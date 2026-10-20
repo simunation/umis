@@ -1,0 +1,28 @@
+[package]
+name = "umis-core"
+description = "Core types, seg codec, keccak, bmt-js port, time arithmetic, genesis, signing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+borsh.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+tiny-keccak.workspace = true
+ed25519-dalek.workspace = true
+rand_core.workspace = true
+rand_chacha.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+proptest.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.58"
+serde_json.workspace = true
+
+[lints]
+workspace = true

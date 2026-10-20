@@ -1,0 +1,10 @@
+/target
+/web/node_modules
+/web/dist
+/web/src/pkg
+/web/test-results
+/web/playwright-report
+/scripts/node_modules
+/.devnet
+*.log
+/web/spike/pkg

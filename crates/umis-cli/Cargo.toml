@@ -1,0 +1,37 @@
+[package]
+name = "umis-cli"
+description = "simunation command line: genesis, keygen, node, bootstrap, sim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "umis-cli"
+path = "src/main.rs"
+
+[dependencies]
+umis-core.workspace = true
+umis-task.workspace = true
+task-water3d = { workspace = true, features = ["stark"] }
+umis-net.workspace = true
+umis-node.workspace = true
+umis-protocol.workspace = true
+umis-proof.workspace = true
+rand = { workspace = true, features = ["std", "thread_rng"] }
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+borsh.workspace = true
+futures.workspace = true
+axum = "0.8"
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+tower-http = { version = "0.7", features = ["fs", "cors"] }
+
+[lints]
+workspace = true

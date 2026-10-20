@@ -1,0 +1,16 @@
+[package]
+name = "umis-proof"
+description = "Proof backends, transition statements, proof BMT assembly"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+umis-core.workspace = true
+umis-task.workspace = true
+borsh.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

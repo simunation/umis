@@ -1,0 +1,10 @@
+{
+  "name": "simunation-scripts",
+  "private": true,
+  "type": "module",
+  "description": "Node helpers: bmt-js conformance vectors and browser e2e drivers",
+  "dependencies": {
+    "@nugaon/bmt-js": "3.0.2",
+    "playwright-core": "^1.50.0"
+  }
+}

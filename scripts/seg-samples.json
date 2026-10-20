@@ -1,0 +1,546 @@
+[
+  {
+    "fields": [
+      {
+        "name": "zone",
+        "segment": 0
+      },
+      {
+        "name": "from_slot",
+        "segment": 0
+      },
+      {
+        "name": "slot",
+        "segment": 0
+      },
+      {
+        "name": "input_count",
+        "segment": 0
+      },
+      {
+        "name": "vote_count",
+        "segment": 0
+      },
+      {
+        "name": "parent",
+        "segment": 1
+      },
+      {
+        "name": "anchor_hash",
+        "segment": 2
+      },
+      {
+        "name": "params_hash",
+        "segment": 3
+      },
+      {
+        "name": "prev_state_root",
+        "segment": 4
+      },
+      {
+        "name": "state_root",
+        "segment": 5
+      },
+      {
+        "name": "outputs_root",
+        "segment": 6
+      },
+      {
+        "name": "inputs_commitment",
+        "segment": 7
+      },
+      {
+        "name": "votes_root",
+        "segment": 8
+      },
+      {
+        "name": "minter",
+        "segment": 9
+      }
+    ],
+    "hex": "010100000026000000000000004b0000000000000070009500ba000000000000c3751ea2572cb6b4f061af1127a67eaded2cfc191f2a18d69000bbe2e98b680aea2e640cf9cf85178466ebb2f721ea6b3ec88def0a8c3d3f7d31e775eed053477b2d9ad83603f6d16ce3a070609e9ad72bcf844975f740bddbafde0a0de6dc06c05de23bfc9a474d4cb19960330725d05fd8960ebedae32eb1868990b29a9056fda940ba5250d10bd3c701ef3e627a7b0bd0fd5143c45a35981f247fa1db38123f4efaf51cd915ee9f21d9f383cd44234d8cc20b70dbe44d9cc1b9e9c51b5cd2626899464858d84aa8a337b4fd305d199dad99f1c20a1129ab98bc233c50c6da0a1d16d5f4fda7e23b7730ca962dc906376114d9f843ea4f8a32aaee64eab06235e4c0e889c7b4a1dbd93b93ba6d59f653964f857930d809a095468537d42ea6",
+    "record": "ZoneBlockHeader"
+  },
+  {
+    "fields": [
+      {
+        "name": "link_id",
+        "segment": 0
+      },
+      {
+        "name": "src_zone",
+        "segment": 0
+      },
+      {
+        "name": "src_slot",
+        "segment": 0
+      },
+      {
+        "name": "src_block_hash",
+        "segment": 1
+      },
+      {
+        "name": "src_outputs_root",
+        "segment": 2
+      },
+      {
+        "name": "payload_address",
+        "segment": 3
+      }
+    ],
+    "hex": "0201000000260000004b00000000000000700000000000000000000000000000d2ed8d75f801ae8a206c07ff9b104f0e005238dcd1cbaf844fd9f40d63174c56fe07a98784cd1850eae35ede546d7028e6bf9569108995fc410868db775e5e6ac3751ea2572cb6b4f061af1127a67eaded2cfc191f2a18d69000bbe2e98b680a",
+    "record": "InputRef"
+  },
+  {
+    "fields": [
+      {
+        "name": "zone",
+        "segment": 0
+      },
+      {
+        "name": "from_slot",
+        "segment": 0
+      },
+      {
+        "name": "to_slot",
+        "segment": 0
+      },
+      {
+        "name": "params_hash",
+        "segment": 1
+      },
+      {
+        "name": "prev_state_root",
+        "segment": 2
+      },
+      {
+        "name": "state_root",
+        "segment": 3
+      },
+      {
+        "name": "inputs_commitment",
+        "segment": 4
+      },
+      {
+        "name": "outputs_root",
+        "segment": 5
+      },
+      {
+        "name": "proof_address",
+        "segment": 6
+      }
+    ],
+    "hex": "030100000026000000000000004b000000000000007000000000000000000000d2ed8d75f801ae8a206c07ff9b104f0e005238dcd1cbaf844fd9f40d63174c56fe07a98784cd1850eae35ede546d7028e6bf9569108995fc410868db775e5e6ac3751ea2572cb6b4f061af1127a67eaded2cfc191f2a18d69000bbe2e98b680aea2e640cf9cf85178466ebb2f721ea6b3ec88def0a8c3d3f7d31e775eed053477b2d9ad83603f6d16ce3a070609e9ad72bcf844975f740bddbafde0a0de6dc06c05de23bfc9a474d4cb19960330725d05fd8960ebedae32eb1868990b29a9056",
+    "record": "ProofLeaf"
+  },
+  {
+    "fields": [
+      {
+        "name": "zone",
+        "segment": 0
+      },
+      {
+        "name": "beacon_slot",
+        "segment": 0
+      },
+      {
+        "name": "dep_count",
+        "segment": 0
+      },
+      {
+        "name": "decision_count",
+        "segment": 0
+      },
+      {
+        "name": "tip_block_hash",
+        "segment": 1
+      },
+      {
+        "name": "prev_state_root",
+        "segment": 2
+      },
+      {
+        "name": "state_root",
+        "segment": 3
+      },
+      {
+        "name": "outputs_root",
+        "segment": 4
+      },
+      {
+        "name": "inputs_root",
+        "segment": 5
+      },
+      {
+        "name": "deps_root",
+        "segment": 6
+      },
+      {
+        "name": "decisions_root",
+        "segment": 7
+      },
+      {
+        "name": "signer",
+        "segment": 8
+      }
+    ],
+    "hex": "040100000026000000000000004b007000950000000000000000000000000000fe07a98784cd1850eae35ede546d7028e6bf9569108995fc410868db775e5e6ac3751ea2572cb6b4f061af1127a67eaded2cfc191f2a18d69000bbe2e98b680aea2e640cf9cf85178466ebb2f721ea6b3ec88def0a8c3d3f7d31e775eed053477b2d9ad83603f6d16ce3a070609e9ad72bcf844975f740bddbafde0a0de6dc06c05de23bfc9a474d4cb19960330725d05fd8960ebedae32eb1868990b29a9056fda940ba5250d10bd3c701ef3e627a7b0bd0fd5143c45a35981f247fa1db38123f4efaf51cd915ee9f21d9f383cd44234d8cc20b70dbe44d9cc1b9e9c51b5cd2a8bdcc02535366024696b5aa4bb6f094feb451863f4ed3904b6ca9f6b51d8f8d",
+    "record": "ZoneCommitment"
+  },
+  {
+    "fields": [
+      {
+        "name": "link_id",
+        "segment": 0
+      },
+      {
+        "name": "src_zone",
+        "segment": 0
+      },
+      {
+        "name": "src_slot",
+        "segment": 0
+      },
+      {
+        "name": "src_block_hash",
+        "segment": 1
+      }
+    ],
+    "hex": "0501000000260000004b00000000000000700000000000000000000000000000d2ed8d75f801ae8a206c07ff9b104f0e005238dcd1cbaf844fd9f40d63174c56",
+    "record": "Dep"
+  },
+  {
+    "fields": [
+      {
+        "name": "zone",
+        "segment": 0
+      },
+      {
+        "name": "beacon_slot",
+        "segment": 0
+      },
+      {
+        "name": "leaf_count",
+        "segment": 0
+      },
+      {
+        "name": "proof_bmt_root",
+        "segment": 1
+      },
+      {
+        "name": "signer",
+        "segment": 2
+      }
+    ],
+    "hex": "060100000026000000000000004b000000700000000000000000000000000000d2ed8d75f801ae8a206c07ff9b104f0e005238dcd1cbaf844fd9f40d63174c563937a028e74588213d87950216792b8d79fe8c10255d05d1f431f6ac1ff255eb",
+    "record": "ProofCommitment"
+  },
+  {
+    "fields": [
+      {
+        "name": "zone",
+        "segment": 0
+      },
+      {
+        "name": "accept",
+        "segment": 0
+      },
+      {
+        "name": "proposal_id",
+        "segment": 1
+      },
+      {
+        "name": "voter",
+        "segment": 2
+      }
+    ],
+    "hex": "0701000000260000000000000000000000000000000000000000000000000000d4c69e49e83a6047f46e42b2d053a1f0c6e70ea42862e5ef4ad66b3666c5e2af72c7c940ef9c7328f45724751c1779874ff123e8fde6e35ab003342740e4530d",
+    "record": "ZoneVote"
+  },
+  {
+    "fields": [
+      {
+        "name": "accept",
+        "segment": 0
+      },
+      {
+        "name": "yes",
+        "segment": 0
+      },
+      {
+        "name": "no",
+        "segment": 0
+      },
+      {
+        "name": "proposal_id",
+        "segment": 1
+      },
+      {
+        "name": "votes_root",
+        "segment": 2
+      }
+    ],
+    "hex": "080101004b007000000000000000000000000000000000000000000000000000d2ed8d75f801ae8a206c07ff9b104f0e005238dcd1cbaf844fd9f40d63174c56fe07a98784cd1850eae35ede546d7028e6bf9569108995fc410868db775e5e6a",
+    "record": "ZoneDecision"
+  },
+  {
+    "fields": [
+      {
+        "name": "px",
+        "segment": 0
+      },
+      {
+        "name": "py",
+        "segment": 0
+      },
+      {
+        "name": "pz",
+        "segment": 0
+      },
+      {
+        "name": "slot_ticks",
+        "segment": 0
+      },
+      {
+        "name": "founder_count",
+        "segment": 0
+      },
+      {
+        "name": "layer_id",
+        "segment": 1
+      },
+      {
+        "name": "params_hash",
+        "segment": 2
+      },
+      {
+        "name": "founders_root",
+        "segment": 3
+      },
+      {
+        "name": "proposer",
+        "segment": 4
+      }
+    ],
+    "hex": "0901000000260000004b000000700000009500ba00000000000000000000000073616d706c652d36000000000000000000000000000000000000000000000000ea2e640cf9cf85178466ebb2f721ea6b3ec88def0a8c3d3f7d31e775eed053477b2d9ad83603f6d16ce3a070609e9ad72bcf844975f740bddbafde0a0de6dc063ab0c01fcafe365a9698e9b09b902d7940c7696163aba2944ee581921fb0048e",
+    "record": "ProposeZone"
+  },
+  {
+    "fields": [
+      {
+        "name": "slot",
+        "segment": 0
+      },
+      {
+        "name": "tx_count",
+        "segment": 0
+      },
+      {
+        "name": "zc_count",
+        "segment": 0
+      },
+      {
+        "name": "pc_count",
+        "segment": 0
+      },
+      {
+        "name": "parent",
+        "segment": 1
+      },
+      {
+        "name": "seed",
+        "segment": 2
+      },
+      {
+        "name": "proposer",
+        "segment": 3
+      },
+      {
+        "name": "txs_root",
+        "segment": 4
+      },
+      {
+        "name": "zones_root",
+        "segment": 5
+      },
+      {
+        "name": "proofs_root",
+        "segment": 6
+      },
+      {
+        "name": "state_root",
+        "segment": 7
+      }
+    ],
+    "hex": "0a0100000000000000260000004b007000950000000000000000000000000000fe07a98784cd1850eae35ede546d7028e6bf9569108995fc410868db775e5e6ac3751ea2572cb6b4f061af1127a67eaded2cfc191f2a18d69000bbe2e98b680acfd4fd3fbc7055cc7adae5671daa4698d48ffad26aa4b129699b18e4b3ef902c7b2d9ad83603f6d16ce3a070609e9ad72bcf844975f740bddbafde0a0de6dc06c05de23bfc9a474d4cb19960330725d05fd8960ebedae32eb1868990b29a9056fda940ba5250d10bd3c701ef3e627a7b0bd0fd5143c45a35981f247fa1db38123f4efaf51cd915ee9f21d9f383cd44234d8cc20b70dbe44d9cc1b9e9c51b5cd2",
+    "record": "BeaconBlockHeader"
+  },
+  {
+    "fields": [
+      {
+        "name": "params_len",
+        "segment": 0
+      },
+      {
+        "name": "task_id",
+        "segment": 1
+      },
+      {
+        "name": "layer",
+        "segment": 2
+      },
+      {
+        "name": "params_root",
+        "segment": 3
+      }
+    ],
+    "hex": "0b0100000026000000000000000000000000000000000000000000000000000073616d706c652d3200000000000000000000000000000000000000000000000073616d706c652d33000000000000000000000000000000000000000000000000d2ed8d75f801ae8a206c07ff9b104f0e005238dcd1cbaf844fd9f40d63174c56",
+    "record": "ZoneParams"
+  },
+  {
+    "fields": [
+      {
+        "name": "zone",
+        "segment": 0
+      },
+      {
+        "name": "from_slot",
+        "segment": 0
+      },
+      {
+        "name": "to_slot",
+        "segment": 0
+      },
+      {
+        "name": "params_hash",
+        "segment": 1
+      },
+      {
+        "name": "prev_state_root",
+        "segment": 2
+      },
+      {
+        "name": "state_root",
+        "segment": 3
+      },
+      {
+        "name": "inputs_commitment",
+        "segment": 4
+      },
+      {
+        "name": "outputs_root",
+        "segment": 5
+      }
+    ],
+    "hex": "0c0100000026000000000000004b000000000000007000000000000000000000d2ed8d75f801ae8a206c07ff9b104f0e005238dcd1cbaf844fd9f40d63174c56fe07a98784cd1850eae35ede546d7028e6bf9569108995fc410868db775e5e6ac3751ea2572cb6b4f061af1127a67eaded2cfc191f2a18d69000bbe2e98b680aea2e640cf9cf85178466ebb2f721ea6b3ec88def0a8c3d3f7d31e775eed053477b2d9ad83603f6d16ce3a070609e9ad72bcf844975f740bddbafde0a0de6dc06",
+    "record": "TransitionStatement"
+  },
+  {
+    "fields": [
+      {
+        "name": "slot",
+        "segment": 0
+      }
+    ],
+    "hex": "0d01000000000000002600000000000000000000000000000000000000000000",
+    "record": "SeedMsg"
+  },
+  {
+    "fields": [
+      {
+        "name": "stake",
+        "segment": 0
+      },
+      {
+        "name": "kind",
+        "segment": 0
+      },
+      {
+        "name": "nonce",
+        "segment": 0
+      },
+      {
+        "name": "node",
+        "segment": 1
+      }
+    ],
+    "hex": "100100000000000000264b00000000000000700000000000000000000000000072c7c940ef9c7328f45724751c1779874ff123e8fde6e35ab003342740e4530d",
+    "record": "Join"
+  },
+  {
+    "fields": [
+      {
+        "name": "nonce",
+        "segment": 0
+      },
+      {
+        "name": "node",
+        "segment": 1
+      }
+    ],
+    "hex": "110100000000000000260000000000000000000000000000000000000000000067531cce14f43f0dd0097c9f605fdfe893b82053f7b928da9a4c3d8ab82e43bb",
+    "record": "Leave"
+  },
+  {
+    "fields": [
+      {
+        "name": "beacon_slot",
+        "segment": 0
+      },
+      {
+        "name": "node",
+        "segment": 1
+      }
+    ],
+    "hex": "120100000000000000260000000000000000000000000000000000000000000067531cce14f43f0dd0097c9f605fdfe893b82053f7b928da9a4c3d8ab82e43bb",
+    "record": "Heartbeat"
+  },
+  {
+    "fields": [
+      {
+        "name": "amount",
+        "segment": 0
+      },
+      {
+        "name": "nonce",
+        "segment": 0
+      },
+      {
+        "name": "to",
+        "segment": 1
+      }
+    ],
+    "hex": "13010000000000000026000000000000004b00000000000000000000000000008fabcd2949c13fe85a169e2d6e558b95c404a5b42575d6d37b2ed8cbdaf3f42a",
+    "record": "Grant"
+  },
+  {
+    "fields": [
+      {
+        "name": "kind",
+        "segment": 0
+      },
+      {
+        "name": "zone",
+        "segment": 0
+      },
+      {
+        "name": "zone_slot",
+        "segment": 0
+      },
+      {
+        "name": "minter",
+        "segment": 1
+      },
+      {
+        "name": "reporter",
+        "segment": 2
+      },
+      {
+        "name": "evidence_root",
+        "segment": 3
+      }
+    ],
+    "hex": "1401260000004b0000000000000070000000000000000000000000000000000072c7c940ef9c7328f45724751c1779874ff123e8fde6e35ab003342740e4530d3937a028e74588213d87950216792b8d79fe8c10255d05d1f431f6ac1ff255ebc3751ea2572cb6b4f061af1127a67eaded2cfc191f2a18d69000bbe2e98b680a",
+    "record": "FaultEvidence"
+  }
+]

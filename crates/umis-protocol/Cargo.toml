@@ -1,0 +1,27 @@
+[package]
+name = "umis-protocol"
+description = "Sans-IO simunation node: beacon chain, zone engine, consensus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+umis-core.workspace = true
+umis-task.workspace = true
+umis-proof.workspace = true
+borsh.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# Parallel proof verification natively (warms the memo; results are the same).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = "1.12"
+
+[dev-dependencies]
+task-water3d.workspace = true
+
+[lints]
+workspace = true

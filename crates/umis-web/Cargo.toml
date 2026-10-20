@@ -1,0 +1,41 @@
+[package]
+name = "umis-web"
+description = "Browser (wasm) simunation node"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+umis-core.workspace = true
+umis-task.workspace = true
+task-water3d = { workspace = true, features = ["stark"] }
+umis-proof.workspace = true
+umis-protocol.workspace = true
+umis-net.workspace = true
+umis-node.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+futures-timer.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+hex.workspace = true
+borsh.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.108"
+wasm-bindgen-futures = "=0.4.58"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["console", "Window", "Storage"] }
+serde-wasm-bindgen = "0.6"
+console_error_panic_hook = "0.1"
+tracing-wasm = "0.2"
+futures-timer = { workspace = true, features = ["wasm-bindgen"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
+
+[lints]
+workspace = true

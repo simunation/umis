@@ -1,0 +1,21 @@
+[package]
+name = "umis-task"
+description = "ZoneTask trait, registry, ports/links, layers/locations/couplings, fixed point"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+umis-core.workspace = true
+borsh.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

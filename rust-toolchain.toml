@@ -1,0 +1,6 @@
+[toolchain]
+# The workspace needs stable >= 1.88 (edition 2024); see `rust-version` in Cargo.toml.
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

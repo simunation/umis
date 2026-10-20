@@ -1,0 +1,7 @@
+[target.wasm32-unknown-unknown]
+# getrandom 0.3/0.4 needs an explicit backend on wasm32-unknown-unknown.
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+runner = "wasm-bindgen-test-runner"
+
+[alias]
+xcheck = "check --workspace --all-targets"

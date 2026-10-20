@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>simunation</title>
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+  <header>
+    <h1>simunation</h1>
+    <span id="genesis" class="muted"></span>
+    <label>bootstrap <input id="boot" size="28"></label>
+    <button id="add-node">Add node</button>
+    <label><input type="checkbox" id="auto-join" checked> auto join</label>
+    <span id="global" class="muted"></span>
+  </header>
+  <main>
+    <section id="nodes" aria-label="nodes"></section>
+    <section id="center">
+      <div id="view-bar">
+        <label>layer <select id="layer"><option value="water">water</option></select></label>
+        <label>show <select id="channel"><option value="both">current + dye</option><option value="vel">current</option><option value="dye">dye</option></select></label>
+        <span class="muted">drag to rotate · wheel to zoom · click a ghost block to create a zone</span>
+      </div>
+      <div id="view3d"></div>
+      <div id="lattice"></div>
+    </section>
+    <section id="side">
+      <h2>Proposals</h2>
+      <div id="proposals"></div>
+      <h2>Details</h2>
+      <pre id="details" class="muted">click a lattice cell</pre>
+    </section>
+  </main>
+  <dialog id="create-zone">
+    <form method="dialog">
+      <h3>Create zone at <span id="cz-point"></span></h3>
+      <label>slot length S<sub>new</sub> (ticks) <select id="cz-slot"><option>4</option><option>8</option><option selected>16</option><option>32</option></select></label>
+      <fieldset id="cz-founders"><legend>founders (nodes in this page)</legend></fieldset>
+      <menu><button value="cancel">Cancel</button><button id="cz-submit" value="ok">Propose</button></menu>
+    </form>
+  </dialog>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

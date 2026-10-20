@@ -1,0 +1,87 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/umis-core",
+    "crates/umis-task",
+    "crates/task-water3d",
+    "crates/umis-proof",
+    "crates/umis-stark",
+    "crates/umis-protocol",
+    "crates/umis-simnet",
+    "crates/umis-net",
+    "crates/umis-node",
+    "crates/umis-cli",
+    "crates/umis-web",
+]
+
+exclude = ["vendor"]
+
+[patch.crates-io]
+# Larger per-channel read buffer for browser WebRTC (see vendor/README.md).
+libp2p-webrtc-websys = { path = "vendor/libp2p-webrtc-websys" }
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/nugaon/simunation"
+
+[workspace.dependencies]
+umis-core = { path = "crates/umis-core" }
+umis-task = { path = "crates/umis-task" }
+task-water3d = { path = "crates/task-water3d" }
+umis-proof = { path = "crates/umis-proof" }
+umis-stark = { path = "crates/umis-stark" }
+umis-protocol = { path = "crates/umis-protocol" }
+umis-simnet = { path = "crates/umis-simnet" }
+umis-net = { path = "crates/umis-net" }
+umis-node = { path = "crates/umis-node" }
+
+anyhow = "1"
+thiserror = "2"
+borsh = { version = "1.5", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "fast", "zeroize"] }
+rand = { version = "0.10", default-features = false }
+rand_chacha = { version = "0.10", default-features = false }
+rand_core = { version = "0.10", default-features = false }
+proptest = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+futures = "0.3"
+futures-timer = "3"
+web-time = "1.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "signal", "fs"] }
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+debug = 1
+
+# The simulation and the provers are hot loops; keep tests usable.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.task-water3d]
+opt-level = 3
+
+# SimNet runs thousands of protocol steps per test.
+[profile.dev.package.umis-core]
+opt-level = 2
+[profile.dev.package.umis-protocol]
+opt-level = 2
+[profile.dev.package.umis-simnet]
+opt-level = 2
+
+[workspace.lints.clippy]
+# `x % n == 0` reads closer to the plan's formulas than `is_multiple_of`.
+manual_is_multiple_of = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"
+chunks_exact_to_as_chunks = "allow"
+large_enum_variant = "allow"
+result_large_err = "allow"
+needless_range_loop = "allow"

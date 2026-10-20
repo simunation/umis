@@ -1,0 +1,58 @@
+[package]
+name = "umis-net"
+description = "libp2p adapter for simunation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+futures.workspace = true
+futures-timer.workspace = true
+web-time.workspace = true
+tracing.workspace = true
+tiny-keccak.workspace = true
+hex.workspace = true
+serde.workspace = true
+libp2p = { version = "0.57.1", default-features = false, features = [
+    "ed25519",
+    "noise",
+    "yamux",
+    "relay",
+    "rendezvous",
+    "identify",
+    "ping",
+    "gossipsub",
+    "request-response",
+    "dcutr",
+    "macros",
+    "serde",
+] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+libp2p = { version = "0.57.1", default-features = false, features = [
+    "tokio",
+    "quic",
+    "tcp",
+    "dns",
+    "websocket",
+    "autonat",
+] }
+libp2p-webrtc = { version = "=0.10.0-alpha", features = ["tokio", "pem"] }
+# Both ring and aws-lc-rs end up enabled; the process provider is picked explicitly.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio.workspace = true
+rand = { workspace = true, features = ["std", "thread_rng"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+libp2p = { version = "0.57.1", default-features = false, features = ["webrtc-websys", "websocket-websys"] }
+futures-timer = { workspace = true, features = ["wasm-bindgen"] }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,27 @@
+[package]
+name = "umis-simnet"
+description = "Deterministic multi-node simulation harness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "umis-simnet"
+path = "src/main.rs"
+
+[dependencies]
+umis-core.workspace = true
+umis-task.workspace = true
+umis-proof.workspace = true
+umis-protocol.workspace = true
+task-water3d = { workspace = true, features = ["stark"] }
+borsh.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

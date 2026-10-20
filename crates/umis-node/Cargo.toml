@@ -1,0 +1,28 @@
+[package]
+name = "umis-node"
+description = "Runtime driving the protocol with network, clock and compute"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+umis-core.workspace = true
+umis-task.workspace = true
+umis-protocol.workspace = true
+umis-proof.workspace = true
+umis-net.workspace = true
+borsh.workspace = true
+futures.workspace = true
+futures-timer.workspace = true
+web-time.workspace = true
+tracing.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = "1.12"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+futures-timer = { workspace = true, features = ["wasm-bindgen"] }
+
+[lints]
+workspace = true

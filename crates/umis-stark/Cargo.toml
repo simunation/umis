@@ -1,0 +1,36 @@
+[package]
+name = "umis-stark"
+description = "Shared Plonky3 configuration and LogUp helpers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+p3-air = "=0.8.0"
+p3-batch-stark = "=0.8.0"
+p3-challenger = "=0.8.0"
+p3-commit = "=0.8.0"
+p3-dft = "=0.8.0"
+p3-field = "=0.8.0"
+p3-fri = "=0.8.0"
+p3-goldilocks = "=0.8.0"
+p3-koala-bear = "=0.8.0"
+p3-lookup = "=0.8.0"
+p3-matrix = "=0.8.0"
+p3-merkle-tree = "=0.8.0"
+p3-poseidon2 = "=0.8.0"
+p3-symmetric = "=0.8.0"
+p3-uni-stark = "=0.8.0"
+postcard = { version = "1.1", default-features = false, features = ["alloc"] }
+
+# Multi-threaded proving natively; wasm32 stays single-threaded (no rayon pulled in).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+p3-maybe-rayon = { version = "=0.8.0", features = ["parallel"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.58"
+web-time.workspace = true
+
+[lints]
+workspace = true

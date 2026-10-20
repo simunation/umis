@@ -624,6 +624,7 @@ pub trait ZoneTask: Send + Sync + 'static {
   - Config: Poseidon2 sponge/compression MMCS, `TwoAdicFriPcs`, `DuplexChallenger`. FRI starts from the `new_benchmark` preset (log_blowup 1, 100 queries, 16 PoW bits).
   - It produces validity proofs only. `HidingFriPcs` exists if a future private task needs hiding.
   - **The field is decided by the 7a benchmark.** On native, KoalaBear/BabyBear have AVX2/NEON packing. In wasm, only Goldilocks has a simd128 path, and its 64-bit range also gives the fixed-point values headroom. Genesis pins `stark_config_id`.
+    - *Decided (7a): KoalaBear.* For the toy AIR (50 columns), native proving is within ~10% for both fields. In wasm, KoalaBear proves 1.5–1.8× faster (617 ms vs 946 ms at $2^{14}$ rows; 2.06 s vs 3.78 s at $2^{16}$), and its proofs are smaller. The water stencil fits the 31-bit range ($|q| \le 2^{15}$, $\sum w \le 2^s$). `stark_config_id` is `koalabear` (benchmark FRI) or `koalabear-test`.
   - Keep `parallel` off on wasm, on for native.
 - **7a, toy AIR spike:**
   - A 1D stencil in `p3-batch-stark` with a local LogUp memory bus, a range-check lookup, and periodic columns carrying public state.
@@ -648,6 +649,9 @@ pub trait ZoneTask: Send + Sync + 'static {
   - $L$ is the proof deadline: a ProofCommitment must reach the beacon chain within $L$ beacon slots of its ZoneCommitment;
   - beacon validators verify proofs before accepting a ProofCommitment;
   - browsers prove in a dedicated Web Worker; native nodes use `spawn_blocking` (Plonky3 `parallel` feature on native only).
+    - *As built:* native nodes prove on a dedicated 2-thread pool (`UMIS_PROVER_THREADS`). Proving on all cores slowed every node's event loop, rank-0 zone blocks then missed the fallback window, and the resulting forks caused cross-link rollbacks. Browsers use a pool of up to 4 workers shared by a page's nodes.
+    - The node runs one job at a time and queues the rest. Jobs for blocks in pending commitments go first (they have the deadline $L$), then the zone's best chain, earliest slot first. Jobs whose block went stale are dropped.
+    - Measured per slot (benchmark FRI): $n_{loc}=16$ proves in 397 ms natively on 2 threads and 682 ms in single-threaded wasm, verifies in 11 ms, and the proof is 261 KB. There is no aggregation: beacon validators verify every slot proof, in parallel natively, memoized.
 
 ## 5. Networking (umis-net, libp2p 0.57.x)
 
@@ -714,7 +718,7 @@ pub trait ZoneTask: Send + Sync + 'static {
 - **M7, Plonky3:**
   - 7a: toy AIR native and in wasm, plus benchmarks;
   - 7b: the water3d AIR, helper proof jobs, $L \ge 1$, a beacon-side verifier and the worker prover;
-  - 7c: switch the devnet genesis to the `plonky3` backend.
+  - 7c: switch the devnet genesis to the `plonky3` backend (done: `umis-cli genesis` defaults to `plonky3`; SimNet keeps `mock` except for its `stark` scenario).
 - **M8, hardening:** metrics and `Status`, README and architecture doc, a demo script, and optionally `webrtc-b2b`.
 
 ## 8. Verification
