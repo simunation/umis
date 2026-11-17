@@ -674,6 +674,7 @@ mod tests {
 
         fn public<'a>(&'a self, next: &'a [u8], inputs: &'a BTreeMap<PortId, Bytes>) -> PublicData<'a> {
             PublicData {
+                task_id: Some(crate::TASK_ID),
                 params: Some(&self.params),
                 genesis_seed: Some(self.seed),
                 prev_state: Some(&self.prev),

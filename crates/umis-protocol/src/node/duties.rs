@@ -291,6 +291,29 @@ impl Node {
 
     /// Publishes ready shares; hands jobs to the runtime.
     pub(super) fn dispatch_proofs(&mut self, z: ZoneId, outs: Vec<crate::zone::ProveOut>, out: &mut Vec<Action>) {
+        // Batching tasks: the slot jobs of one dispatch become one container job.
+        let batching = self.head_state().zones.get(&z).is_some_and(|zz| self.ctx.backend.batches(&zz.task_id));
+        let outs = if batching {
+            let (jobs, mut rest): (Vec<_>, Vec<_>) =
+                outs.into_iter().partition(|o| matches!(o, crate::zone::ProveOut::Job(_)));
+            let jobs: Vec<umis_proof::ProveJob> = jobs
+                .into_iter()
+                .map(|o| match o {
+                    crate::zone::ProveOut::Job(j) => *j,
+                    crate::zone::ProveOut::Share(_) => unreachable!("partitioned"),
+                })
+                .collect();
+            if jobs.len() >= 2 {
+                tracing::debug!(zone = z, members = jobs.len(), "batched proof job");
+                self.next_job += 1;
+                rest.push(crate::zone::ProveOut::Job(Box::new(umis_proof::ProveJob::batch(self.next_job, jobs))));
+            } else {
+                rest.extend(jobs.into_iter().map(|j| crate::zone::ProveOut::Job(Box::new(j))));
+            }
+            rest
+        } else {
+            outs
+        };
         for o in outs {
             match o {
                 crate::zone::ProveOut::Share(s) => {
@@ -337,6 +360,9 @@ impl Node {
                 queue.push((z, j));
             } else {
                 eng.proving.remove(&(h, j.stmt.from_slot));
+                for m in &j.members {
+                    eng.proving.remove(&(m.block_hash, m.stmt.from_slot));
+                }
                 self.stats.jobs_dropped += 1;
             }
         }
@@ -356,17 +382,32 @@ impl Node {
         let Some((z, job)) = self.jobs.remove(&id) else { return };
         self.pump_jobs(out);
         let Some(eng) = self.engines.get_mut(&z) else { return };
-        match result {
-            Ok(proof) => {
-                self.stats.proved += 1;
-                let s = eng.job_done(&job, proof);
-                let g = Gossip::ProofShare(Box::new(s));
-                self.publish(Topic::ZoneProof(z), &g, out);
-                self.publish(Topic::ZoneOut(z), &g, out);
+        let members: Vec<umis_proof::ProveJob> =
+            if job.members.is_empty() { vec![job.clone()] } else { job.members.clone() };
+        let proofs: Result<Vec<Bytes>, String> = result.and_then(|p| {
+            if job.members.is_empty() {
+                Ok(vec![p])
+            } else {
+                borsh::from_slice::<Vec<Bytes>>(&p)
+                    .map_err(|e| e.to_string())
+                    .and_then(|v| if v.len() == members.len() { Ok(v) } else { Err("batch result size".into()) })
+            }
+        });
+        match proofs {
+            Ok(proofs) => {
+                let shares: Vec<_> = members.iter().zip(proofs).map(|(m, proof)| eng.job_done(m, proof)).collect();
+                for s in shares {
+                    self.stats.proved += 1;
+                    let g = Gossip::ProofShare(Box::new(s));
+                    self.publish(Topic::ZoneProof(z), &g, out);
+                    self.publish(Topic::ZoneOut(z), &g, out);
+                }
             }
             Err(e) => {
-                eng.proving.remove(&(job.block_hash, job.stmt.from_slot));
-                tracing::warn!(zone = z, slot = job.stmt.from_slot, "proving failed: {e}");
+                for m in &members {
+                    eng.proving.remove(&(m.block_hash, m.stmt.from_slot));
+                }
+                tracing::warn!(zone = z, slot = job.stmt.from_slot, members = members.len(), "proving failed: {e}");
             }
         }
     }
@@ -636,7 +677,10 @@ impl Node {
             if !mine && now < t_next + slot_ms / 4 {
                 continue;
             }
-            let self_prove = now >= t_next + slot_ms / 8;
+            // Batching tasks: the committer proves the whole commitment in one
+            // batch as soon as it exists; others back it up after `slot / 4`.
+            let batching = self.head_state().zones.get(&z).is_some_and(|zz| self.ctx.backend.batches(&zz.task_id));
+            let self_prove = now >= t_next + slot_ms / 8 || (batching && mine);
             let eng = self.engines.get_mut(&z).expect("engine");
             if let Some(pc) = eng.build_proof_commitment(&self.ctx, &self.chain, &self.cfg.key, &zc, self_prove) {
                 eng.sent_proof.insert(ce);
@@ -649,7 +693,7 @@ impl Node {
                 );
                 self.pc_pool.insert(key, pc.clone());
                 self.publish(Topic::Commit, &Gossip::ProofCommit(Box::new(pc)), out);
-            } else if self_prove && self.ctx.backend.is_async() && mine {
+            } else if self_prove && self.ctx.backend.is_async() && (mine || batching) {
                 // Missing shares: prove them ourselves (jobs run off the loop).
                 let mut outs = Vec::new();
                 for cb in &zc.blocks {

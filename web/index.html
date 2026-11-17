@@ -20,10 +20,16 @@
     <section id="center">
       <div id="view-bar">
         <label>layer <select id="layer"><option value="water">water</option></select></label>
-        <label>show <select id="channel"><option value="both">current + dye</option><option value="vel">current</option><option value="dye">dye</option></select></label>
-        <span class="muted">drag to rotate · wheel to zoom · click a ghost block to create a zone</span>
+        <label class="water-only">show <select id="channel"><option value="both">current + dye</option><option value="vel">current</option><option value="dye">dye</option></select></label>
+        <label class="life-only" hidden><input type="checkbox" id="trails" checked> trails</label>
+        <label class="life-only" hidden><input type="checkbox" id="labels" checked> labels</label>
+        <button class="life-only secondary" id="fit" hidden>Fit</button>
+        <span class="muted water-only">drag to rotate · wheel to zoom · click a ghost block to create a zone</span>
+        <span class="muted life-only" hidden>drag to pan · wheel to zoom · click a zone for details, a dashed tile to create one</span>
       </div>
-      <div id="view3d"></div>
+      <div id="view3d" class="water-only"></div>
+      <div id="view2d" class="life-only" hidden></div>
+      <div id="life-stats" class="life-only" hidden></div>
       <div id="lattice"></div>
     </section>
     <section id="side">

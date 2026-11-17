@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 umis-core.workspace = true
 umis-task.workspace = true
 task-water3d = { workspace = true, features = ["stark"] }
+umis-tasks.workspace = true
 umis-proof.workspace = true
 umis-protocol.workspace = true
 umis-net.workspace = true

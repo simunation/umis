@@ -38,9 +38,7 @@ enum Cmd {
 
 /// All tasks this build knows.
 pub fn registry() -> umis_task::TaskRegistry {
-    let mut r = umis_task::TaskRegistry::new();
-    task_water3d::register(&mut r);
-    r
+    umis_tasks::registry()
 }
 
 #[tokio::main]

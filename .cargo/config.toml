@@ -3,5 +3,11 @@
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
 runner = "wasm-bindgen-test-runner"
 
+# Native x86_64: AVX2/FMA/BMI2 (x86-64-v3, Haswell and later). Plonky3 picks its
+# packed KoalaBear/Poseidon2 kernels by target feature; without AVX2 the prover
+# runs scalar and is about 3x slower (life2d n=256: 168 ms vs 50 ms).
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=x86-64-v3"]
+
 [alias]
 xcheck = "check --workspace --all-targets"

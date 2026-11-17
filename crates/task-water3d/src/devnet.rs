@@ -61,7 +61,7 @@ pub fn devnet_genesis(o: DevnetOptions) -> Genesis {
         genesis_time_ms: o.genesis_time_ms,
         seed: o.seed,
         params: o.params,
-        topology: TopologySpec::Lattice3d { bounds: LATTICE_BOUNDS },
+        topology: TopologySpec::Lattice3d { bounds: LATTICE_BOUNDS, diagonal_layers: vec![] },
         layers: vec![crate::LAYER.into()],
         couplings: vec![],
         proof_backend: "mock".into(),

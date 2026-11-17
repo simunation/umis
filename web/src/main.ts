@@ -10,15 +10,30 @@ import { Bootstrap, LatticeView, RenderGrid, Snapshot, short } from './api';
 import { renderLattice } from './lattice';
 import { Nodes, loadWasm } from './nodes';
 import { genesisId } from './pkg/umis_web.js';
+import { View2d, ZoneTile } from './view2d';
 import { View3d } from './view3d';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const params = new URLSearchParams(location.search);
 
+interface LifeZone {
+  zone: number;
+  point: [number, number, number];
+  born: boolean;
+  gen: number;
+  k: number;
+  status: string | null;
+  /** Slot the shown state is at, and the zone's slot length in ticks. */
+  nextSlot: number;
+  slotTicks: number;
+  rolledBack: boolean;
+}
 interface PageState {
   ready: boolean;
   nodes: { index: number; nodeId: string; snap: Snapshot | null }[];
   bootstrap: Snapshot | null;
+  /** Life genesis only: every followed zone's generation and commit status (test hook). */
+  life?: LifeZone[];
   error?: string;
 }
 declare global {
@@ -38,9 +53,23 @@ async function main() {
   const genesis = JSON.parse(genesisJson);
   await loadWasm();
   const nodes = new Nodes(boot, genesisJson, addrs, $('nodes'));
-  const view = new View3d($('view3d'));
-  view.nLoc = genesis.zones[0]?.params?.n_loc ?? 16;
-  $<HTMLSelectElement>('channel').onchange = (e) => (view.channel = (e.target as HTMLSelectElement).value as View3d['channel']);
+  const layers: string[] = genesis.layers ?? ['water'];
+  const life = layers[0] === 'life';
+  $<HTMLSelectElement>('layer').innerHTML = layers.map((l) => `<option value="${l}">${l}</option>`).join('');
+  document.querySelectorAll<HTMLElement>('.water-only').forEach((e) => (e.hidden = life));
+  document.querySelectorAll<HTMLElement>('.life-only').forEach((e) => (e.hidden = !life));
+  const view = life ? null : new View3d($('view3d'));
+  const view2 = life ? new View2d($('view2d')) : null;
+  if (view) {
+    view.nLoc = genesis.zones[0]?.params?.n_loc ?? 16;
+    $<HTMLSelectElement>('channel').onchange = (e) => (view.channel = (e.target as HTMLSelectElement).value as View3d['channel']);
+  }
+  if (view2) {
+    view2.zoneSize = genesis.zones[0]?.params?.n ?? 64;
+    $<HTMLInputElement>('trails').onchange = (e) => ((view2.showTrails = (e.target as HTMLInputElement).checked), view2.draw());
+    $<HTMLInputElement>('labels').onchange = (e) => ((view2.showLabels = (e.target as HTMLInputElement).checked), view2.draw());
+    $('fit').onclick = () => view2.fit();
+  }
 
   const autoJoin = () => $<HTMLInputElement>('auto-join').checked;
   $('add-node').onclick = () => nodes.add(autoJoin());
@@ -49,9 +78,9 @@ async function main() {
   // Create-zone dialog, opened by clicking a ghost block.
   const dialog = $<HTMLDialogElement>('create-zone');
   let target: [number, number, number] = [0, 0, 0];
-  view.onGhostClick = (p) => {
+  const openCreate = (p: [number, number, number]) => {
     target = p;
-    $('cz-point').textContent = `(${p.join(', ')}) water`;
+    $('cz-point').textContent = `(${p.join(', ')}) ${layers[0]}`;
     $('cz-founders').innerHTML =
       '<legend>founders (nodes in this page)</legend>' +
       nodes.list
@@ -60,6 +89,25 @@ async function main() {
         .join('');
     dialog.showModal();
   };
+  if (view) view.onGhostClick = openCreate;
+  if (view2) {
+    view2.onGhostClick = openCreate;
+    view2.onZoneClick = (z) => {
+      const tile = lastTiles.find((t) => t.zone === z);
+      const zv = window.simu.bootstrap?.zones.find((x) => x.zone === z);
+      const m = (tile?.grid?.meta ?? {}) as Record<string, unknown>;
+      $('details').textContent = [
+        `life zone ${z} at (${zv?.point.join(', ')})`,
+        `S_z           ${zv?.slot_ticks} ticks · ${zv?.members} members`,
+        `generation    ${m.gen ?? '—'}  (k = ${m.k ?? '—'} per slot, born at ${m.birth ?? '—'})`,
+        `population    ${m.population ?? '—'}`,
+        `next slot     ${m.next_slot ?? '—'}`,
+        `tip           ${zv?.tip ? `slot ${zv.tip[0]} · ${zv.tip[2]}` : '—'}`,
+        `last commit   ${zv?.last_commit ? `slot ${zv.last_commit[0]} · ${zv.last_commit[2]}` : '—'}`,
+        `status        ${tile?.status ?? '—'}${tile?.rolledBack ? ' (rolled back recently)' : ''}`,
+      ].join('\n');
+    };
+  }
   $('cz-submit').onclick = () => {
     const picked = [...$('cz-founders').querySelectorAll<HTMLInputElement>('input:checked')].map((i) => Number(i.value));
     const founders = nodes.list.filter((n) => picked.includes(n.index));
@@ -70,7 +118,7 @@ async function main() {
     }
     const slot = Number($<HTMLSelectElement>('cz-slot').value);
     const id = proposer.node.proposeZone(new Int32Array(target), slot, founders.map((f) => f.node.secretHex));
-    $('details').textContent = `proposal ${id}\nat (${target.join(', ')}) water, S_new = ${slot}`;
+    $('details').textContent = `proposal ${id}\nat (${target.join(', ')}) ${layers[0]}, S_new = ${slot}`;
   };
 
   // Test hook (and console helper): propose a zone from nodes of this page.
@@ -84,6 +132,7 @@ async function main() {
   };
 
   let lattice: LatticeView | null = null;
+  let lastTiles: ZoneTile[] = [];
   const refresh = async () => {
     await nodes.tick();
     try {
@@ -104,6 +153,34 @@ async function main() {
   const redraw = async () => {
     const s = window.simu.bootstrap;
     if (!s) return;
+    if (view2) {
+      const zs = s.zones.filter((z) => z.layer === 'life');
+      const grids = await Promise.all(zs.map((z) => boot.zone(z.zone).catch(() => null)));
+      const status = new Map<number, string>();
+      for (const b of lattice?.blocks ?? []) for (const c of b.commits) status.set(c.zone, c.status);
+      const head = s.head_slot ?? 0;
+      const rolled = new Set((lattice?.rollbacks ?? []).filter((r) => r.e_record + 3 >= head).map((r) => r.zone));
+      lastTiles = zs.map((z, i) => ({ zone: z.zone, point: z.point, grid: grids[i], status: status.get(z.zone) ?? null, rolledBack: rolled.has(z.zone) }));
+      view2.setGhosts(lattice?.free_points ?? []);
+      view2.setTiles(lastTiles);
+      renderLifeStats($('life-stats'), lastTiles);
+      window.simu.life = lastTiles.map((t, i) => {
+        const m = (t.grid?.meta ?? {}) as { born?: boolean; gen?: number; k?: number; next_slot?: number };
+        return {
+          zone: t.zone,
+          point: t.point,
+          born: !!m.born,
+          gen: m.gen ?? 0,
+          k: m.k ?? 0,
+          status: t.status,
+          nextSlot: m.next_slot ?? 0,
+          slotTicks: zs[i].slot_ticks,
+          rolledBack: t.rolledBack,
+        };
+      });
+      return;
+    }
+    if (!view) return;
     const grids = (await Promise.all(s.zones.filter((z) => z.layer === $<HTMLSelectElement>('layer').value).map((z) => boot.zone(z.zone).catch(() => null)))).filter(
       (g): g is RenderGrid => !!g,
     );
@@ -116,10 +193,45 @@ async function main() {
   await redraw();
 }
 
+/** Generation spread and the neighbour invariant (adjacent born zones are at
+ * most k generations apart, see `task_life2d`). */
+function renderLifeStats(el: HTMLElement, tiles: ZoneTile[]) {
+  type M = { born: boolean; gen: number; k: number; population: number };
+  const born = tiles.filter((t) => (t.grid?.meta as M | undefined)?.born);
+  const meta = (t: ZoneTile) => t.grid!.meta as M;
+  if (!born.length) {
+    el.innerHTML = '<span class="muted">waiting for zone states…</span>';
+    return;
+  }
+  const gens = born.map((t) => meta(t).gen);
+  const k = meta(born[0]).k;
+  let pairs = 0;
+  let bad = 0;
+  // Right after a rollback the bootstrap's zone views mix old and new
+  // branches, so recently rolled-back zones are left out of the check.
+  const settled = born.filter((t) => !t.rolledBack);
+  for (const a of settled)
+    for (const b of settled)
+      if (a.zone < b.zone && Math.max(Math.abs(a.point[0] - b.point[0]), Math.abs(a.point[1] - b.point[1])) === 1) {
+        pairs++;
+        if (Math.abs(meta(a).gen - meta(b).gen) > k) bad++;
+      }
+  const pop = born.reduce((s, t) => s + meta(t).population, 0);
+  const counts = new Map<string, number>();
+  for (const t of tiles) counts.set(t.status ?? 'none', (counts.get(t.status ?? 'none') ?? 0) + 1);
+  el.innerHTML = [
+    `<span><b>gen</b> ${Math.min(...gens)}–${Math.max(...gens)}</span>`,
+    `<span><b>k</b> ${k}</span>`,
+    `<span><b>population</b> ${pop}</span>`,
+    `<span class="${bad ? 'bad' : 'good'}" title="adjacent zones never more than k generations apart">${bad ? '✗' : '✓'} neighbours within k (${pairs} pairs)</span>`,
+    ...[...counts].map(([s, n]) => `<span class="chip st-${s}">${n} ${s}</span>`),
+  ].join('');
+}
+
 function renderProposals(s: Snapshot, nodes: Nodes) {
   const el = $('proposals');
   if (!s.proposals.length) {
-    el.innerHTML = '<div class="muted">none yet — click a ghost block in the 3D view</div>';
+    el.innerHTML = `<div class="muted">none yet — click a ${document.getElementById('view2d')?.hidden === false ? 'dashed tile in the board' : 'ghost block in the 3D view'}</div>`;
     return;
   }
   el.innerHTML = s.proposals

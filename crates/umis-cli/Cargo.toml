@@ -10,10 +10,16 @@ license.workspace = true
 name = "umis-cli"
 path = "src/main.rs"
 
+[features]
+# GPU-resident life2d prover (see umis-tasks).
+cuda = ["umis-tasks/cuda"]
+
 [dependencies]
 umis-core.workspace = true
 umis-task.workspace = true
 task-water3d = { workspace = true, features = ["stark"] }
+umis-tasks.workspace = true
+task-life2d.workspace = true
 umis-net.workspace = true
 umis-node.workspace = true
 umis-protocol.workspace = true

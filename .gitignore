@@ -8,3 +8,5 @@
 /.devnet
 *.log
 /web/spike/pkg
+/.demo
+/tmp

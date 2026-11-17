@@ -47,6 +47,7 @@ fn main() {
         let proof = b.prove(&stmt, &w, &SecretKey::from_label("x")).unwrap();
         let prove = t.elapsed();
         let pd = PublicData {
+            task_id: Some(task_water3d::TASK_ID),
             params: Some(&params),
             genesis_seed: Some(seed),
             prev_state: Some(&prev),

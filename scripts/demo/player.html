@@ -1,0 +1,337 @@
+<title>__TITLE__</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Space+Grotesk:wght@500;700&family=Inter:wght@400;600&display=swap">
+<style>
+/* Layout: a control-room console. Board first (the simulation), the beacon chain under it,
+   the nodes and the event log beside it on wide screens, below it on phones. Single dark
+   theme by choice: live cells glow in the colour of the node computing them. */
+:root {
+  --ink: #0a0e16;        /* page */
+  --panel: #111827;      /* surfaces */
+  --line: #233049;       /* rules, zone grid */
+  --text: #e2e8f4;
+  --muted: #8d99b0;
+  --ok: #6fdc8c;         /* proven, exact */
+  --warn: #f2b84b;       /* pending, rollback */
+  --bad: #ff6b6b;        /* crash */
+  --display: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --body: "Inter", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box }
+html, body { background: var(--ink); color: var(--text) }
+body { font: 14px/1.45 var(--body); padding-block: 14px 28px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)) }
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 14px }
+header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 16px }
+h1 { font: 700 clamp(20px, 4vw, 28px)/1.1 var(--display); margin: 0; letter-spacing: -0.01em; text-wrap: balance }
+.sub { color: var(--muted); font-size: 13px; margin-top: 4px }
+.badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+  border-radius: 999px; color: var(--ok); font: 600 12px var(--mono); background: color-mix(in srgb, var(--ok) 9%, transparent) }
+.badge.badx { color: var(--bad); border-color: var(--bad) }
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start }
+@media (max-width: 900px) { .main { grid-template-columns: minmax(0, 1fr) } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0 }
+.label { font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted) }
+#board { width: 100%; height: auto; display: block; border-radius: 6px; background: #05080e; touch-action: manipulation }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px }
+button { font: 600 13px var(--body); color: var(--text); background: #1a2336; border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 12px; cursor: pointer }
+button:hover { border-color: #3a4a6b } button:focus-visible, input:focus-visible { outline: 2px solid #4d9de0; outline-offset: 2px }
+button[aria-pressed="true"] { background: #24324d; border-color: #4d6aa0 }
+#play { min-width: 74px }
+#scrub { flex: 1 1 200px; accent-color: #4d9de0; min-width: 0 }
+.clock { font: 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap }
+.clock b { color: var(--text); font-weight: 600 }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px }
+@media (max-width: 520px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)) } }
+.stat { border-top: 1px solid var(--line); padding-top: 6px }
+.stat .v { font: 600 18px var(--mono); font-variant-numeric: tabular-nums }
+.stat .k { font-size: 12px; color: var(--muted) }
+#chain { width: 100%; height: auto; display: block; margin-top: 8px }
+.side { display: grid; gap: 14px }
+.nodes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px }
+@media (max-width: 900px) { .nodes { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)) } }
+.node { display: grid; grid-template-columns: 14px 1fr; gap: 2px 8px; padding: 7px 8px; border-radius: 8px; border: 1px solid transparent;
+  background: #0d1320; cursor: pointer; text-align: left; font: inherit; color: inherit }
+.node[aria-pressed="true"] { border-color: var(--sel, #4d9de0); background: #152037 }
+.node .dot { width: 12px; height: 12px; margin-top: 3px; background: var(--c) }
+.node .dot.member { border-radius: 50% }
+.node .dot.validator { transform: rotate(45deg) scale(0.86); border-radius: 2px }
+.node .nm { font: 600 13px var(--mono) }
+.tag { font: 600 10px var(--mono); padding: 1px 5px; border-radius: 4px; margin-left: 6px; letter-spacing: 0.04em; vertical-align: 1px }
+.tag.gpu { background: color-mix(in srgb, #7bd389 22%, transparent); color: #9ff0b1 }
+.tag.cpu { background: color-mix(in srgb, #8d99b0 22%, transparent); color: #c4ccda }
+.node .meta { grid-column: 2; font: 11px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums }
+.node.off { opacity: 0.45 } .node.off .nm { text-decoration: line-through }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; font-size: 12px; color: var(--muted) }
+.legend i { display: inline-block; width: 18px; height: 10px; vertical-align: -1px; margin-right: 5px; border-radius: 2px }
+.events { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; max-height: 300px; overflow-y: auto }
+.events li { display: grid; grid-template-columns: 52px 1fr; gap: 8px; font-size: 13px; padding: 4px 0; border-bottom: 1px solid #172033 }
+.events li.future { opacity: 0.32 }
+.events time { font: 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums }
+.events .crash { color: var(--bad) } .events .rollback { color: var(--warn) } .events .join, .events .restart { color: var(--ok) }
+.how { color: var(--muted); font-size: 13px; max-width: 75ch }
+.how p { margin: 6px 0 }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1 id="title">__TITLE__</h1>
+      <div class="sub" id="sub"></div>
+    </div>
+    <span class="badge" id="exact"></span>
+  </header>
+
+  <div class="main">
+    <section class="card" aria-label="Simulation">
+      <canvas id="board" width="1200" height="800" aria-label="The Game of Life world, zones coloured by the node simulating them"></canvas>
+      <div class="controls">
+        <button id="play" aria-label="Play or pause">Pause</button>
+        <input id="scrub" type="range" min="0" max="100" step="0.05" value="0" aria-label="Time">
+        <span class="clock" id="clock"></span>
+        <span role="group" aria-label="Speed" style="display:flex;gap:4px">
+          <button class="spd" data-s="1">1×</button><button class="spd" data-s="2">2×</button><button class="spd" data-s="4">4×</button><button class="spd" data-s="8">8×</button>
+        </span>
+      </div>
+      <div class="legend">
+        <span><i style="background:linear-gradient(90deg,#4d9de0,#f78154)"></i>live cells: colour of the node that simulated the zone's latest block</span>
+        <span><i style="border:2px dashed var(--warn);height:10px"></i>commitment waiting for its proof</span>
+        <span><i style="border:2px solid var(--ok)"></i>proven (prover's colour, ✓)</span>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="v" id="sGen">0</div><div class="k">generation (slowest zone)</div></div>
+        <div class="stat"><div class="v" id="sProven">0</div><div class="k">zone slots proven</div></div>
+        <div class="stat"><div class="v" id="sBeacon">0</div><div class="k">beacon blocks</div></div>
+        <div class="stat"><div class="v" id="sPop">0</div><div class="k">live cells</div></div>
+      </div>
+      <div style="margin-top:14px" class="label">Beacon chain — one block per 4 s slot, each a map of the zones</div>
+      <canvas id="chain" width="1200" height="150" aria-label="Recent beacon blocks with the zone commitments they carry"></canvas>
+    </section>
+
+    <aside class="side">
+      <section class="card" aria-label="Nodes">
+        <div class="label">Nodes on this desktop · tap to follow one</div>
+        <div class="nodes" id="nodes"></div>
+      </section>
+      <section class="card" aria-label="Events">
+        <div class="label">What happens</div>
+        <ul class="events" id="events"></ul>
+      </section>
+    </aside>
+  </div>
+
+  <section class="card how">
+    <div class="label">How to read it</div>
+    <p>The world is cut into zones of <span id="hN"></span> cells. Each zone is computed by its members, which take turns minting its blocks; full nodes (diamonds) also take turns. A zone advances one generation per slot, and only once all eight neighbours have published that generation, so the whole board is one exact Game of Life even though no machine holds it.</p>
+    <p>Every zone slot is proved with a STARK (Plonky3, FRI over KoalaBear): a zone's slots since the last beacon block are proved together as one batch proof, on an RTX A6000 (GPU tag) or on CPU cores. Each beacon block carries the zones' commitments; a commitment turns from dashed to solid when its proof lands on the chain and verifies.</p>
+    <p>Recorded live from the nodes on one desktop: each zone's generation is read from its members and the validators; boards sampled from the network were checked cell by cell against one global Game of Life computed from the same genesis (the badge above). After a rollback, nodes briefly hold different views while they re-sync; the board then shows each zone at the generation its neighbours allow, as the canonical chain must.</p>
+    <p>Edge cases in this run: gliders crossing zone corners (where four zones meet), a glider gun whose stream crosses edges, spaceships leaving the world through its dead border, methuselahs on junctions, a crashed and restarted prover, a member that joins late, and the network rolling back and recomputing together.</p>
+  </section>
+</div>
+
+<script>
+const D = /*__DATA__*/null;
+const $ = (id) => document.getElementById(id);
+const fmt = (x) => x.toLocaleString('en-US');
+const hex = (c) => [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)];
+const nodes = D.nodes.map((n) => ({ ...n, rgb: hex(n.color) }));
+const NZ = D.zones.length, n = D.n, W = D.w, H = D.h, FB = Math.ceil(W * H / 8);
+let board = null; // decoded frames
+
+$('sub').textContent = `${NZ} zones of ${n}×${n} cells · 1 generation per slot · ${nodes.length} nodes (${nodes.filter(x => x.prover === 'gpu').length} on the GPU) · ${Math.round(D.duration)} s recorded`;
+$('hN').textContent = `${n}×${n}`;
+const ex = $('exact');
+ex.textContent = `exact: ${D.verify.matched}/${D.verify.checked} live boards = global Life`;
+if (D.verify.matched !== D.verify.checked) ex.classList.add('badx');
+
+// --- time lookups
+const last = (arr, t, key) => { let lo = 0, hi = arr.length - 1, r = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (key(arr[m]) <= t) { r = m; lo = m + 1 } else hi = m - 1 } return r };
+const slotT = (s) => (s + 1) * D.slotTicks * D.tick;
+function genAt(z, t) { const a = D.zgen[z] || []; const i = last(a, t, (x) => x[0]); return i < 0 ? 0 : Math.min(a[i][1], D.frames - 1) }
+function minterAt(z, t) { const a = D.blocks[z] || []; const i = last(a, t, (x) => slotT(x[0])); return i < 0 ? -1 : a[i][1] }
+function commitAt(z, t) {
+  const a = D.commits[z] || []; const i = last(a, t, (c) => c.inc * D.bslot + D.bslot); if (i < 0) return null;
+  const c = a[i]; const proven = c.pat !== null && (c.pat * D.bslot + D.bslot) <= t; return { c, proven };
+}
+function statusAt(t) { const i = last(D.status, t, (r) => r[0]); return i < 0 ? null : D.status[i] }
+
+// --- board drawing
+const cv = $('board'), cx = cv.getContext('2d');
+const off = document.createElement('canvas'); off.width = W; off.height = H;
+const ox = off.getContext('2d'); const img = ox.createImageData(W, H);
+let sel = -1;
+function sizeBoard() {
+  const r = cv.getBoundingClientRect(), dpr = Math.min(window.devicePixelRatio || 1, 3);
+  const cw = Math.max(320, Math.round(r.width * dpr)); cv.width = cw; cv.height = Math.round(cw * H / W);
+  // beacon lane: as many blocks as fit at ~84 css px each, zone maps square
+  const ch = $('chain'), cw2 = ch.getBoundingClientRect().width;
+  SHOW = Math.max(4, Math.min(14, Math.floor(cw2 / 84)));
+  const bwc = (cw2 - 8 * (SHOW + 1)) / SHOW, bhc = Math.min(bwc * D.ry / D.rx + 22, 150);
+  ch.width = Math.round(cw2 * dpr); ch.height = Math.round((bhc + 22) * dpr);
+}
+let SHOW = 8;
+function bit(f, i) { return (board[f * FB + (i >> 3)] >> (i & 7)) & 1 }
+function drawBoard(t) {
+  const px = img.data; px.fill(0);
+  let pop = 0;
+  const zinfo = [];
+  for (const z of D.zones) {
+    const g = genAt(z.id, t), m = minterAt(z.id, t), cm = commitAt(z.id, t);
+    zinfo.push({ z, g, m, cm });
+    const col = m >= 0 ? nodes[m].rgb : [180, 190, 210];
+    const dim = sel >= 0 && m !== sel && !(cm && (cm.c.pv === sel || cm.c.by === sel));
+    const k = dim ? 0.28 : 1;
+    const x0 = z.p[0] * n, y0 = z.p[1] * n;
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      const i = (y0 + y) * W + x0 + x, o = i * 4;
+      if (bit(g, i)) {
+        pop++;
+        const born = g > 0 && !bit(g - 1, i);
+        // just born: a pale tint of the same colour
+        const f = born ? 0.55 : 0;
+        px[o] = (col[0] + (255 - col[0]) * f) * k; px[o + 1] = (col[1] + (255 - col[1]) * f) * k; px[o + 2] = (col[2] + (255 - col[2]) * f) * k; px[o + 3] = 255;
+      } else { const b = dim ? 6 : 12; px[o] = b; px[o + 1] = b + 3; px[o + 2] = b + 8; px[o + 3] = 255 }
+    }
+  }
+  ox.putImageData(img, 0, 0);
+  cx.imageSmoothingEnabled = false; cx.fillStyle = '#05080e'; cx.fillRect(0, 0, cv.width, cv.height);
+  cx.drawImage(off, 0, 0, cv.width, cv.height);
+  const s = cv.width / W, dpr = cv.width / cv.getBoundingClientRect().width;
+  // zone frames and labels
+  for (const { z, g, m, cm } of zinfo) {
+    const x = z.p[0] * n * s, y = z.p[1] * n * s, wz = n * s;
+    cx.lineWidth = Math.max(1.5, 2 * dpr);
+    if (cm) {
+      const who = cm.proven ? cm.c.pv : cm.c.by; cx.strokeStyle = who >= 0 ? nodes[who].color : '#f2b84b';
+      cx.setLineDash(cm.proven ? [] : [6 * dpr, 5 * dpr]); cx.lineDashOffset = cm.proven ? 0 : -t * 20 * dpr;
+    } else { cx.strokeStyle = '#2a3856'; cx.setLineDash([]) }
+    const ins = cx.lineWidth * 1.2;
+    cx.strokeRect(x + ins, y + ins, wz - 2 * ins, wz - 2 * ins);
+    cx.setLineDash([]);
+    const fs = Math.min(15 * dpr, wz / 8);
+    cx.font = `600 ${fs}px "IBM Plex Mono", monospace`; cx.textBaseline = 'top';
+    let lab = `z${z.id} · gen ${g}`;
+    if (cx.measureText(lab).width > wz * 0.8) lab = `z${z.id}·${g}`;
+    if (cx.measureText(lab).width > wz * 0.8) lab = `${g}`;
+    const two = wz > fs * 9;
+    let lw = cx.measureText(lab).width;
+    if (two) { cx.font = `${fs * 0.82}px "IBM Plex Mono", monospace`; lw = Math.max(lw, cx.measureText(`sim ${m >= 0 ? nodes[m].name : ''}  proof ${cm ? 'm00 ✓' : ''}`).width); cx.font = `600 ${fs}px "IBM Plex Mono", monospace` }
+    cx.fillStyle = 'rgba(5,8,14,0.8)'; cx.fillRect(x + ins * 2, y + ins * 2, lw + fs * 0.8, fs * (two ? 2.45 : 1.35));
+    cx.fillStyle = '#e2e8f4'; cx.fillText(lab, x + ins * 2 + fs * 0.4, y + ins * 2 + fs * 0.18);
+    if (wz > fs * 9) {
+      let line = '', cxp = x + ins * 2 + fs * 0.4; const yy = y + ins * 2 + fs * 1.3;
+      cx.font = `${fs * 0.82}px "IBM Plex Mono", monospace`;
+      const put = (txt, c) => { cx.fillStyle = c; cx.fillText(txt, cxp, yy); cxp += cx.measureText(txt).width };
+      if (m >= 0) { put('sim ', '#8d99b0'); put(nodes[m].name, nodes[m].color) }
+      if (cm) { put('  proof ', '#8d99b0'); const who = cm.proven ? cm.c.pv : cm.c.by; put(who >= 0 ? nodes[who].name : '?', who >= 0 ? nodes[who].color : '#f2b84b'); put(cm.proven ? ' ✓' : ' …', cm.proven ? '#6fdc8c' : '#f2b84b') }
+    }
+  }
+  return { pop, zinfo };
+}
+
+// --- beacon chain lane
+function drawChain(t) {
+  const ch = $('chain'), c = ch.getContext('2d'), Wc = ch.width, Hc = ch.height, dpr = Wc / ch.getBoundingClientRect().width;
+  c.fillStyle = '#111827'; c.fillRect(0, 0, Wc, Hc);
+  const cur = Math.floor(t / D.bslot), show = SHOW;
+  const gap = 8 * dpr, bw = (Wc - gap * (show + 1)) / show, bh = Hc - 22 * dpr;
+  const byBlock = {};
+  for (const z of D.zones) for (const cm of (D.commits[z.id] || [])) (byBlock[cm.inc] ||= []).push({ z, cm });
+  for (let k = 0; k < show; k++) {
+    const slot = cur - (show - 1 - k); if (slot < 0) continue;
+    const x = gap + k * (bw + gap), y = 4 * dpr;
+    const blk = D.beacon.find((b) => b[0] === slot);
+    const building = slot === cur;
+    c.fillStyle = '#0d1320'; c.fillRect(x, y, bw, bh);
+    c.strokeStyle = building ? '#4d9de0' : '#233049'; c.lineWidth = building ? 2 * dpr : 1 * dpr; c.strokeRect(x, y, bw, bh);
+    if (blk && !building && blk[1] >= 0) { c.fillStyle = nodes[blk[1]].color; c.fillRect(x, y, bw, 5 * dpr) }
+    // zone mini-map
+    const pad = 8 * dpr, cw = (bw - 2 * pad) / D.rx, chh = (bh - 2 * pad - 6 * dpr) / D.ry, cs = Math.min(cw, chh);
+    const mx = x + (bw - cs * D.rx) / 2, my = y + 6 * dpr + (bh - 6 * dpr - cs * D.ry) / 2;
+    for (const z of D.zones) {
+      const zx = mx + z.p[0] * cs, zy = my + z.p[1] * cs;
+      const it = !building && (byBlock[slot] || []).find((e) => e.z.id === z.id);
+      c.lineWidth = 1.5 * dpr;
+      if (it) {
+        const proven = it.cm.pat !== null && (it.cm.pat * D.bslot + D.bslot) <= t;
+        if (proven && it.cm.pv >= 0) { c.fillStyle = nodes[it.cm.pv].color; c.fillRect(zx + 1.5 * dpr, zy + 1.5 * dpr, cs - 3 * dpr, cs - 3 * dpr) }
+        else { c.setLineDash([3 * dpr, 2 * dpr]); c.strokeStyle = it.cm.by >= 0 ? nodes[it.cm.by].color : '#f2b84b'; c.strokeRect(zx + 2 * dpr, zy + 2 * dpr, cs - 4 * dpr, cs - 4 * dpr); c.setLineDash([]) }
+      } else { c.strokeStyle = '#1c2740'; c.strokeRect(zx + 2 * dpr, zy + 2 * dpr, cs - 4 * dpr, cs - 4 * dpr) }
+    }
+    c.fillStyle = building ? '#4d9de0' : '#8d99b0'; c.font = `${11 * dpr}px "IBM Plex Mono", monospace`; c.textBaseline = 'top';
+    c.fillText(building && bw > 80 * dpr ? `#${slot} building` : `#${slot}`, x, y + bh + 4 * dpr);
+  }
+}
+
+// --- nodes and events
+const nodesEl = $('nodes');
+nodes.forEach((nd, i) => {
+  const b = document.createElement('button'); b.className = 'node'; b.style.setProperty('--c', nd.color); b.style.setProperty('--sel', nd.color);
+  b.setAttribute('aria-pressed', 'false');
+  b.innerHTML = `<span class="dot ${nd.role}"></span><span class="nm">${nd.name}<span class="tag ${nd.prover}">${nd.prover.toUpperCase()}</span></span><span class="meta"></span>`;
+  b.onclick = () => { sel = sel === i ? -1 : i; [...nodesEl.children].forEach((e, j) => e.setAttribute('aria-pressed', String(j === sel))); render(true) };
+  nodesEl.appendChild(b);
+});
+const evs = [...D.events];
+const rbSeen = new Set();
+for (const r of D.rollbacks) { if (rbSeen.has(r.t)) continue; rbSeen.add(r.t);
+  const at = D.rollbacks.filter((x) => x.t === r.t), cross = at.filter((x) => x.reason !== 'Synchronized');
+  const why = { CrossLink: 'an input link between zones no longer matches what was committed', MissingProof: 'a proof did not arrive in time', Fault: 'a faulty block was reported' }[cross[0]?.reason] || 'recovery';
+  const who = at.length === NZ ? 'all zones' : at.map((x) => 'z' + x.zone).join(', ');
+  evs.push({ t: r.t, kind: 'rollback', text: `${who} roll back to the last committed checkpoint and recompute together: ${why}` }) }
+evs.push({ t: 0, kind: 'start', text: 'genesis: every zone at generation 0' });
+evs.sort((a, b) => a.t - b.t);
+const evEl = $('events');
+for (const e of evs) { const li = document.createElement('li'); li.innerHTML = `<time>${e.t.toFixed(0)} s</time><span class="${e.kind}">${e.text}</span>`; li.dataset.t = e.t; evEl.appendChild(li) }
+
+function updateSide(t) {
+  const st = statusAt(t);
+  nodes.forEach((nd, i) => {
+    const el = nodesEl.children[i], s = st ? st[i + 1] : null, meta = el.querySelector('.meta');
+    const joined = t >= nd.from - 0.5 || nd.from === 0;
+    const alive = s ? s[0] === 1 : false;
+    el.classList.toggle('off', !alive);
+    if (!joined) meta.textContent = `joins at ${Math.round(nd.from)} s`;
+    else if (!alive) meta.textContent = 'offline';
+    else if (nd.role !== 'validator' && s[3] == null) meta.textContent = 'joining a zone…';
+    else meta.textContent = `${nd.role === 'validator' ? 'full node' : 'zone ' + s[3]} · ${s[1]} blk · ${s[2]} prf`;
+  });
+  for (const li of evEl.children) li.classList.toggle('future', +li.dataset.t > t);
+}
+
+let t = 0, playing = true, speed = 2, lastFrame = 0, lastSide = -1;
+function render(force) {
+  const { pop, zinfo } = drawBoard(t); drawChain(t);
+  $('clock').innerHTML = `<b>${t.toFixed(1)} s</b> · slot ${Math.floor(t / D.bslot)}`;
+  $('sGen').textContent = fmt(Math.min(...zinfo.map((z) => z.g)));
+  let proven = 0; for (const z of D.zones) for (const c of (D.commits[z.id] || [])) if (c.pat !== null && c.pat * D.bslot + D.bslot <= t && c.s0 !== null) proven += c.s1 - c.s0 + 1;
+  $('sProven').textContent = fmt(proven);
+  $('sBeacon').textContent = fmt(D.beacon.filter((b) => (b[0] + 1) * D.bslot <= t).length);
+  $('sPop').textContent = fmt(pop);
+  $('scrub').value = t;
+  if (force || Math.floor(t) !== lastSide) { updateSide(t); lastSide = Math.floor(t) }
+}
+function loop(ts) {
+  const dt = lastFrame ? (ts - lastFrame) / 1000 : 0; lastFrame = ts;
+  if (playing) { t += dt * speed; if (t > D.duration) t = 0; render() }
+  requestAnimationFrame(loop);
+}
+$('play').onclick = () => { playing = !playing; $('play').textContent = playing ? 'Pause' : 'Play' };
+$('scrub').max = D.duration;
+$('scrub').oninput = (e) => { t = +e.target.value; render(true) };
+document.querySelectorAll('.spd').forEach((b) => { b.setAttribute('aria-pressed', String(+b.dataset.s === speed)); b.onclick = () => { speed = +b.dataset.s; document.querySelectorAll('.spd').forEach((x) => x.setAttribute('aria-pressed', String(x === b))) } });
+window.addEventListener('resize', () => { sizeBoard(); render(true) });
+
+(async () => {
+  const bin = Uint8Array.from(atob(D.board), (c) => c.charCodeAt(0));
+  const ds = new Response(new Blob([bin]).stream().pipeThrough(new DecompressionStream('deflate')));
+  board = new Uint8Array(await ds.arrayBuffer());
+  const m = /^#t(\d+)$/.exec(location.hash);
+  sizeBoard(); t = m ? Math.min(+m[1], D.duration) : Math.min(12, D.duration * 0.1); render(true); requestAnimationFrame(loop);
+})();
+</script>

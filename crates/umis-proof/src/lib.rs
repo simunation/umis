@@ -42,6 +42,8 @@ pub struct Witness<'a> {
 /// from the states and halos and checks them against the statement's roots.
 #[derive(Default, Clone, Copy)]
 pub struct PublicData<'a> {
+    /// The zone's task id (lets a [`MultiBackend`] pick the task's prover).
+    pub task_id: Option<&'a str>,
     pub params: Option<&'a [u8]>,
     pub genesis_seed: Option<Hash>,
     pub prev_state: Option<&'a [u8]>,
@@ -72,6 +74,18 @@ pub struct ProveJob {
     /// State at the start of the slot.
     pub prev_state: Bytes,
     pub inputs: BTreeMap<PortId, Bytes>,
+    /// Non-empty: a container job proving these slot jobs together (one batch
+    /// proof, [`ProofBackend::prove_batch`]); its result is `borsh(Vec<Bytes>)`,
+    /// one proof per member in order, and its own statement fields are unused.
+    pub members: Vec<ProveJob>,
+}
+
+impl ProveJob {
+    /// Bundles slot jobs (of one zone and task) into a container job.
+    pub fn batch(id: u64, members: Vec<ProveJob>) -> ProveJob {
+        let first = members.first().expect("members").clone();
+        ProveJob { id, members, ..ProveJob { members: Vec::new(), ..first } }
+    }
 }
 
 /// Runs a job: instantiates the task and proves.
@@ -93,14 +107,25 @@ pub fn run_job_on(
     key: &SecretKey,
     job: &ProveJob,
 ) -> Result<Bytes, ProofError> {
-    let w = Witness {
-        instance: inst,
-        params: &job.params,
-        genesis_seed: job.genesis_seed,
-        prev_state: &job.prev_state,
-        inputs: &job.inputs,
-    };
-    backend.prove(&job.stmt, &w, key)
+    fn witness<'a>(inst: &'a dyn ZoneInstance, j: &'a ProveJob) -> Witness<'a> {
+        Witness {
+            instance: inst,
+            params: &j.params,
+            genesis_seed: j.genesis_seed,
+            prev_state: &j.prev_state,
+            inputs: &j.inputs,
+        }
+    }
+    if job.members.is_empty() {
+        return backend.prove(&job.stmt, &witness(inst, job), key);
+    }
+    let items: Vec<(&TransitionStatement, Witness<'_>)> =
+        job.members.iter().map(|m| (&m.stmt, witness(inst, m))).collect();
+    let proofs = backend.prove_batch(&items, key)?;
+    if proofs.len() != job.members.len() {
+        return Err(ProofError::Prover("prove_batch returned the wrong number of proofs".into()));
+    }
+    Ok(borsh::to_vec(&proofs).expect("borsh"))
 }
 
 /// Runs jobs with a cache of prepared instances (per task, params and
@@ -155,6 +180,29 @@ pub trait ProofBackend: Send + Sync {
     /// Verifies the proof; returns the prover (for the mock backend, whose
     /// "proof" is a signature, callers check the prover is allowed).
     fn verify(&self, stmt: &TransitionStatement, public: &PublicData<'_>, proof: &[u8]) -> Result<NodeId, ProofError>;
+
+    /// Whether zones of `task_id` should be proved a commitment at a time
+    /// ([`Self::prove_batch`]) rather than one slot at a time.
+    fn batches(&self, _task_id: &str) -> bool {
+        false
+    }
+
+    /// Proves several slots (of one zone) together; one proof per item, in
+    /// order. A backend may return proofs that only verify as a group
+    /// ([`Self::verify_group`]). Default: one proof per item.
+    fn prove_batch(
+        &self,
+        items: &[(&TransitionStatement, Witness<'_>)],
+        prover: &SecretKey,
+    ) -> Result<Vec<Bytes>, ProofError> {
+        items.iter().map(|(s, w)| self.prove(s, w, prover)).collect()
+    }
+
+    /// Verifies the proofs of one proof commitment together (batched proofs
+    /// reference each other inside a group). Default: one at a time.
+    fn verify_group(&self, items: &[(&TransitionStatement, PublicData<'_>, &[u8])]) -> Vec<Result<NodeId, ProofError>> {
+        items.iter().map(|(s, pd, p)| self.verify(s, pd, p)).collect()
+    }
 }
 
 /// The mock proof: the prover's signature over the statement's address.
@@ -192,6 +240,94 @@ impl ProofBackend for MockBackend {
         } else {
             Err(ProofError::Invalid("bad mock signature".into()))
         }
+    }
+}
+
+/// One proof system for several tasks: every task has its own AIR and prover,
+/// all under one genesis `proof_backend` id. Proving dispatches on the
+/// witness instance's task id, verification on [`PublicData::task_id`].
+pub struct MultiBackend {
+    id: &'static str,
+    by_task: BTreeMap<String, std::sync::Arc<dyn ProofBackend>>,
+}
+
+impl MultiBackend {
+    pub fn new(id: &'static str) -> Self {
+        Self { id, by_task: BTreeMap::new() }
+    }
+
+    pub fn with(mut self, task_id: &str, b: std::sync::Arc<dyn ProofBackend>) -> Self {
+        self.by_task.insert(task_id.to_string(), b);
+        self
+    }
+
+    fn get(&self, task_id: Option<&str>) -> Result<&std::sync::Arc<dyn ProofBackend>, ProofError> {
+        let t = task_id.ok_or_else(|| ProofError::Invalid("no task id for a multi-task backend".into()))?;
+        self.by_task.get(t).ok_or_else(|| ProofError::Invalid(format!("no {} prover for task {t}", self.id)))
+    }
+}
+
+impl ProofBackend for MultiBackend {
+    fn id(&self) -> &'static str {
+        self.id
+    }
+
+    fn is_async(&self) -> bool {
+        self.by_task.values().any(|b| b.is_async())
+    }
+
+    fn identifies_prover(&self) -> bool {
+        self.by_task.values().any(|b| b.identifies_prover())
+    }
+
+    fn prove(&self, stmt: &TransitionStatement, w: &Witness<'_>, prover: &SecretKey) -> Result<Bytes, ProofError> {
+        self.get(Some(w.instance.task_id())).map_err(|e| ProofError::Prover(e.to_string()))?.prove(stmt, w, prover)
+    }
+
+    fn verify(&self, stmt: &TransitionStatement, public: &PublicData<'_>, proof: &[u8]) -> Result<NodeId, ProofError> {
+        self.get(public.task_id)?.verify(stmt, public, proof)
+    }
+
+    fn batches(&self, task_id: &str) -> bool {
+        self.by_task.get(task_id).is_some_and(|b| b.batches(task_id))
+    }
+
+    fn prove_batch(
+        &self,
+        items: &[(&TransitionStatement, Witness<'_>)],
+        prover: &SecretKey,
+    ) -> Result<Vec<Bytes>, ProofError> {
+        let Some((_, w)) = items.first() else { return Ok(Vec::new()) };
+        let task = w.instance.task_id();
+        if items.iter().any(|(_, w)| w.instance.task_id() != task) {
+            return Err(ProofError::Prover("a batch must be of one task".into()));
+        }
+        self.get(Some(task)).map_err(|e| ProofError::Prover(e.to_string()))?.prove_batch(items, prover)
+    }
+
+    fn verify_group(&self, items: &[(&TransitionStatement, PublicData<'_>, &[u8])]) -> Vec<Result<NodeId, ProofError>> {
+        // Group by task, keep the caller's order in the results.
+        let mut out: Vec<Option<Result<NodeId, ProofError>>> = (0..items.len()).map(|_| None).collect();
+        let mut by_task: BTreeMap<Option<&str>, Vec<usize>> = BTreeMap::new();
+        for (i, (_, pd, _)) in items.iter().enumerate() {
+            by_task.entry(pd.task_id).or_default().push(i);
+        }
+        for (task, idx) in by_task {
+            match self.get(task) {
+                Ok(b) => {
+                    let sub: Vec<_> = idx.iter().map(|&i| items[i]).collect();
+                    for (i, r) in idx.into_iter().zip(b.verify_group(&sub)) {
+                        out[i] = Some(r);
+                    }
+                }
+                Err(e) => {
+                    for i in idx {
+                        out[i] = Some(Err(e.clone()));
+                    }
+                }
+            }
+        }
+        out.into_iter().map(|r| r.expect("every item")).collect()
     }
 }
 

@@ -25,7 +25,29 @@ pub enum Scenario {
     ZoneLayers,
     ZoneSparse,
     Stark,
+    LifeBasic,
+    LifeMixed,
+    LifeCreate,
+    LifeFaults,
+    LifeChurn,
+    LifePartition,
+    LifeStark,
+    LifeStarkKeccak,
+    LifeSlow,
 }
+
+/// The Game of Life scenarios (globally exact zones, see `task_life2d`).
+pub const LIFE: [&str; 9] = [
+    "life",
+    "life-mixed",
+    "life-create",
+    "life-faults",
+    "life-churn",
+    "life-partition",
+    "life-stark",
+    "life-stark-keccak",
+    "life-slow",
+];
 
 pub const ALL: [&str; 11] = [
     "basic",
@@ -56,6 +78,15 @@ impl std::str::FromStr for Scenario {
             "zone-layers" => Scenario::ZoneLayers,
             "zone-sparse" => Scenario::ZoneSparse,
             "stark" => Scenario::Stark,
+            "life" => Scenario::LifeBasic,
+            "life-mixed" => Scenario::LifeMixed,
+            "life-create" => Scenario::LifeCreate,
+            "life-faults" => Scenario::LifeFaults,
+            "life-churn" => Scenario::LifeChurn,
+            "life-partition" => Scenario::LifePartition,
+            "life-stark" => Scenario::LifeStark,
+            "life-stark-keccak" => Scenario::LifeStarkKeccak,
+            "life-slow" => Scenario::LifeSlow,
             _ => return Err(format!("unknown scenario {s}")),
         })
     }
@@ -81,7 +112,114 @@ pub fn run(s: Scenario, seed: u64, slots: u64) -> Outcome {
         Scenario::ZoneLayers => zone_layers(cfg, slots.max(50)),
         Scenario::ZoneSparse => zone_sparse(cfg, slots.max(50)),
         Scenario::Stark => stark(cfg, slots.clamp(20, 40)),
+        Scenario::LifeBasic => life_checked(basic(SimConfig::life(seed), slots), true),
+        Scenario::LifeMixed => {
+            let cfg = SimConfig { slot_ticks: vec![4, 8, 4, 16], ..SimConfig::life(seed) };
+            life_checked(basic(cfg, slots), false)
+        }
+        Scenario::LifeCreate => life_checked(life_create(SimConfig::life(seed), slots.max(50)), false),
+        Scenario::LifeFaults => life_checked(faults(SimConfig::life(seed), slots.max(60)), false),
+        Scenario::LifeChurn => life_checked(churn(SimConfig::life(seed), slots.max(60)), false),
+        Scenario::LifePartition => life_checked(partition(SimConfig::life(seed), slots.max(60)), false),
+        Scenario::LifeStark => life_checked(stark(SimConfig::life(seed), slots.clamp(20, 40)), false),
+        Scenario::LifeStarkKeccak => {
+            let mut cfg = SimConfig::life(seed);
+            cfg.stark_config = Some("koalabear-keccak-test".into());
+            life_checked(stark(cfg, slots.clamp(20, 40)), false)
+        }
+        Scenario::LifeSlow => life_checked(life_slow(SimConfig::life(seed), slots.max(40)), false),
     }
+}
+
+/// Generation of every life zone's best-known committed state.
+pub fn life_generations(sim: &Sim) -> BTreeMap<u32, (u64, u64)> {
+    let a = sim.node(sim.archive);
+    let head = a.chain.head_state();
+    let mut out = BTreeMap::new();
+    for (z, zone) in head.zones.iter().filter(|(_, z)| z.task_id == task_life2d::TASK_ID) {
+        let Ok(p) = borsh::from_slice::<task_life2d::Life2dParams>(&zone.params) else { continue };
+        let Some(c) = head.commits.get(z).and_then(|v| v.iter().rev().find(|c| c.status != CommitStatus::Invalid))
+        else {
+            continue;
+        };
+        let Some(bs) = c.blocks.last() else { continue };
+        let Some(st) = a.engines.get(z).and_then(|e| e.get(&bs.hash)).and_then(|e| e.state.clone()) else { continue };
+        if let Some(s) = task_life2d::decode_state(&p, &st) {
+            out.insert(*z, (s.generation, c.to_slot));
+        }
+    }
+    out
+}
+
+/// Adds the life checks: the oracle already compares settled states with the
+/// global Game of Life; `lockstep` also requires every zone to have advanced
+/// on every slot after the first (an all-honest network loses no generation).
+fn life_checked(mut o: Outcome, lockstep: bool) -> Outcome {
+    let gens = life_generations(&o.sim);
+    if gens.is_empty() {
+        o.report.violations.push("life: no committed life state".into());
+    }
+    let head = o.sim.node(o.sim.archive).chain.head_state().clone();
+    for (z, (g, to_slot)) in &gens {
+        let zone = &head.zones[z];
+        let p: task_life2d::Life2dParams = borsh::from_slice(&zone.params).expect("params");
+        let ideal = to_slot.saturating_sub(zone.j_start) * p.gens as u64;
+        if lockstep && *g != ideal {
+            o.report.violations.push(format!("life zone {z}: generation {g} after slot {to_slot}, expected {ideal}"));
+        }
+        if *g == 0 && zone.j_start == 0 {
+            o.report.violations.push(format!("life zone {z} never advanced"));
+        }
+    }
+    o
+}
+
+/// Zone 1's first outputs reach everyone a slot late: its neighbours cannot
+/// mint slot 1 (a strict task waits for the input) and their next block spans
+/// slots 1..j. Such a multi-slot block holds the inputs it had, but must still
+/// take a link's first input, or the zones would wait forever.
+pub fn life_slow(cfg: SimConfig, slots: u64) -> Outcome {
+    let mut sim = Sim::new(cfg);
+    let z1 = sim.node(0).chain.head_state().zones[&1].clone();
+    let slot_ms = z1.slot_ticks * sim.ctx.p.tick_ms;
+    let until_ms = sim.ctx.zone_slot_start(z1.slot_ticks, 1);
+    for i in 0..sim.net.nodes.len() {
+        let from = sim.node(i).me;
+        sim.net.delays.push(DelayRule { from, topic: Topic::ZoneOut(1), extra_ms: 2 * slot_ms, until_ms });
+    }
+    sim.run_to_slot(slots);
+    let report = oracle::check(&sim, 3, slots.saturating_sub(2), 3);
+    finish(sim, report)
+}
+
+/// A zone created next to the genesis square (linked to zone 1 by an edge and
+/// to zone 3 by a corner) is born dead at its neighbours' generation and joins
+/// the exact world.
+pub fn life_create(cfg: SimConfig, slots: u64) -> Outcome {
+    let mut sim = Sim::new(cfg);
+    sim.run_to_slot(8);
+    let z1 = members_of(&sim, 1);
+    let id = propose(&mut sim, z1[0], &[z1[1]], [2, 0, 0], task_life2d::LAYER, 4);
+    sim.run_to_slot(slots);
+    let mut report = oracle::check(&sim, 3, slots.saturating_sub(2), 6);
+    match proposal_status(&sim, &id) {
+        Some(ProposalStatus::Accepted { zone, .. }) => {
+            check_created(&sim, &mut report, zone, 1);
+            let head = sim.node(sim.archive).chain.head_state().clone();
+            if head.zones[&zone].inputs.len() != 2 {
+                report.violations.push(format!(
+                    "created life zone has {} input links, expected 2 (edge + corner)",
+                    head.zones[&zone].inputs.len()
+                ));
+            }
+            match life_generations(&sim).get(&zone) {
+                Some((g, _)) if *g > 0 => {}
+                g => report.violations.push(format!("created life zone not born and advancing: {g:?}")),
+            }
+        }
+        s => report.violations.push(format!("proposal not accepted: {s:?}")),
+    }
+    finish(sim, report)
 }
 
 fn finish(sim: Sim, report: Report) -> Outcome {
@@ -309,7 +447,10 @@ pub fn propose(
     layer: &str,
     slot_ticks: u64,
 ) -> Hash {
-    let (task_id, params) = if layer == probe::PROBE_LAYER {
+    let (task_id, params) = if layer == task_life2d::LAYER {
+        let p = task_life2d::devnet::zone_params_like(&sim.genesis, point, slot_ticks).expect("a life genesis");
+        (task_life2d::TASK_ID, borsh::to_vec(&p).expect("borsh"))
+    } else if layer == probe::PROBE_LAYER {
         let p = probe::ProbeParams { point, n_loc: sim.cfg.n_loc, slot_ticks: slot_ticks as u32 };
         (probe::PROBE_TASK, borsh::to_vec(&p).expect("borsh"))
     } else {
@@ -495,7 +636,7 @@ pub fn zone_sparse(mut cfg: SimConfig, slots: u64) -> Outcome {
     finish(sim, report)
 }
 
-/// Real Plonky3 proofs (test FRI preset) with proof lag L = 1: helpers prove
+/// Real Plonky3 proofs (test FRI preset; water3d or life2d AIR by zone task) with proof lag L = 1: helpers prove
 /// off the event loop, proof commitments follow their zone commitments one
 /// beacon slot later, and beacon validators verify every STARK.
 pub fn stark(mut cfg: SimConfig, slots: u64) -> Outcome {

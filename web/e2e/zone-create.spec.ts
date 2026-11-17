@@ -16,6 +16,8 @@ type PageState = { ready: boolean; nodes: { index: number; snap: Snap | null }[]
 test('a browser-founded zone activates and runs', async ({ page }) => {
   page.on('pageerror', (e) => { if (!e.message.includes('closure invoked')) console.log('pageerror', e.message); });
   await page.goto('/?n=5');
+  const genesis = await (await page.request.get('/genesis.json')).json();
+  test.skip((genesis.layers ?? ['water'])[0] !== 'water', 'founds a zone above a water zone (life: life.spec.ts)');
   const state = () => page.evaluate(() => (window as unknown as { simu: PageState }).simu);
   // wait until every node is a member, then pick a zone with two of them
   let pick: { founder: number; zone: number } | null = null;

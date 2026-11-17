@@ -377,6 +377,17 @@ impl ZoneEngine {
             }
             last.insert(r.link_id, (r.clone(), att.clone()));
         }
+        // Strict tasks: no link may fall back to the empty boundary once its
+        // producer has a causal block.
+        let inst = ctx
+            .instance(&zone.task_id, &zone.params, &zone.params_hash)
+            .map_err(|e| Verdict::Retry(format!("instance: {e}")))?;
+        if inst.strict_inputs()
+            && let Some(l) =
+                missing_strict_input(head, &zone, &links, h.from_slot, |id| b.inputs.iter().any(|r| r.link_id == id))
+        {
+            return bad(format!("strict task: no input on link {l} although its producer has a causal block"));
+        }
         // Votes.
         if h.vote_count as usize != b.votes.len() || exec::votes_root(&b.votes) != h.votes_root {
             return bad("votes_root".into());
@@ -393,9 +404,6 @@ impl ZoneEngine {
         // Re-execution.
         let (state, slot_roots) = if reexecute {
             let Some(pstate) = parent.state.as_ref() else { return Err(Verdict::Retry("parent state unknown".into())) };
-            let inst = ctx
-                .instance(&zone.task_id, &zone.params, &zone.params_hash)
-                .map_err(|e| Verdict::Retry(format!("instance: {e}")))?;
             match exec::reexecute_block(inst.as_ref(), pstate, b) {
                 Ok(ex) if exec::matches_header(&ex, h) => (Some(Arc::new(ex.state)), ex.slots),
                 _ => {
@@ -459,7 +467,12 @@ impl ZoneEngine {
         let mut chosen: Vec<Candidate> = Vec::new();
         for l in &links {
             let last = tip.last_inputs.get(&l.link_id);
-            let pick = if from < j || variant == MintVariant::HoldInputs {
+            // A multi-slot block holds each link's last input; a link without
+            // one may still take its first causal input (validate allows it,
+            // and a strict task cannot advance without it: without this a
+            // zone whose first mint found no producer block yet would wait
+            // forever).
+            let pick = if (from < j && last.is_some()) || variant == MintVariant::HoldInputs {
                 last.cloned()
             } else {
                 let pz = head.zones.get(&l.from_zone)?;
@@ -511,6 +524,12 @@ impl ZoneEngine {
             }
         }
         let inst = ctx.instance(&zone.task_id, &zone.params, &zone.params_hash).ok()?;
+        if inst.strict_inputs()
+            && missing_strict_input(&head, &zone, &links, from, |id| chosen.iter().any(|c| c.0.link_id == id)).is_some()
+        {
+            // Wait for the producer's block: a strict task never guesses a neighbour.
+            return None;
+        }
         let input_refs: Vec<InputRef> = chosen.iter().map(|c| c.0.clone()).collect();
         let attachments: Vec<InputAttachment> = chosen.iter().map(|c| c.1.clone()).collect();
         let pstate = tip.state.clone()?;
@@ -612,7 +631,11 @@ impl ZoneEngine {
         let mut out = Vec::new();
         let mut prev = e.prev_root;
         for sr in &e.slot_roots {
-            let mine = all || ranks::priority_prover(&a, self.z, sr.0, &b.header().minter) == Some(key.node_id());
+            // Batching tasks are proved a commitment at a time by its committer
+            // (`all`), not slot by slot by priority provers.
+            let mine = all
+                || (!ctx.backend.batches(&zone.task_id)
+                    && ranks::priority_prover(&a, self.z, sr.0, &b.header().minter) == Some(key.node_id()));
             let stmt = exec::slot_statement(b.header(), prev, *sr);
             prev = sr.1;
             let wanted = mine && !self.shares.contains_key(&(e.hash, sr.0)) && !self.proving.contains(&(e.hash, sr.0));
@@ -629,6 +652,7 @@ impl ZoneEngine {
                         genesis_seed: ctx.genesis.seed,
                         prev_state: state.clone(),
                         inputs: inputs.clone(),
+                        members: Vec::new(),
                     })));
                 } else {
                     let w = umis_proof::Witness {
@@ -871,6 +895,7 @@ impl ZoneEngine {
             return None;
         }
         Some(umis_proof::PublicData {
+            task_id: Some(&zone.task_id),
             params: Some(&zone.params),
             genesis_seed: Some(ctx.genesis.seed),
             prev_state: Some(self.entries.get(&e.parent)?.state.as_ref()?),
@@ -950,6 +975,23 @@ enum Verdict {
 }
 
 /// Whether `r` is a newly consumed input (not the held last value).
+/// For a strict task: the first link without an input although its producer
+/// already has a causal block for consumer slot `from` (its first slot ends
+/// by the consumer slot's start, `(j_start_p + 1)·S_p ≤ from·S_c`).
+pub fn missing_strict_input(
+    head: &BeaconState,
+    zone: &crate::beacon::ZoneEntry,
+    links: &[crate::beacon::state::LinkIn],
+    from: u64,
+    present: impl Fn(u32) -> bool,
+) -> Option<u32> {
+    links.iter().find_map(|l| {
+        let pz = head.zones.get(&l.from_zone)?;
+        let causal = (pz.j_start + 1) * pz.slot_ticks <= from * zone.slot_ticks;
+        (causal && !present(l.link_id)).then_some(l.link_id)
+    })
+}
+
 fn from_new_input(last: &BTreeMap<u32, Candidate>, r: &InputRef) -> bool {
     last.get(&r.link_id).is_none_or(|(prev, _)| prev != r)
 }

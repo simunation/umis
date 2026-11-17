@@ -26,18 +26,44 @@ pub struct GenesisArgs {
     pub keys_dir: PathBuf,
     #[arg(long, default_value = "genesis/devnet.json")]
     pub out: PathBuf,
+    /// Zone task: `water` (3D shallow water, 2×2 genesis zones) or `life`
+    /// (Game of Life, `--region` genesis zones).
+    #[arg(long, default_value = "water")]
+    pub task: String,
     /// Cells per zone axis.
     #[arg(long, default_value_t = 16)]
     pub n_loc: u32,
-    /// Zone slot lengths in ticks for the 4 genesis zones.
+    /// life: generations per zone slot (= halo width).
+    #[arg(long, default_value_t = 1)]
+    pub gens: u32,
+    /// life: genesis zones per axis, `rx,ry`.
+    #[arg(long, value_delimiter = ',', default_value = "2,2")]
+    pub region: Vec<i32>,
+    /// life: soup density of the genesis zones, percent.
+    #[arg(long, default_value_t = 30)]
+    pub density: u32,
+    /// life: STARK layout, vertical strips and board rows per trace row (default: 8 and 3
+    /// from 256 cells per axis, the fastest measured there; 4 and 2 below).
+    #[arg(long)]
+    pub strips: Option<u32>,
+    #[arg(long)]
+    pub rows_per_trace_row: Option<u32>,
+    /// life: genesis boards, `soup` or `showcase` (gliders through zone corners, a gun,
+    /// spaceships leaving the world, methuselahs on junctions).
+    #[arg(long, default_value = "soup")]
+    pub pattern: String,
+    /// Zone slot lengths in ticks of the genesis zones (water: 4 values;
+    /// life: cycled over the zones).
     #[arg(long, value_delimiter = ',', default_value = "4,8,4,16")]
     pub slot_ticks: Vec<u64>,
     /// Proof backend: plonky3 (STARK-proven zone slots, L = 1) or mock
     /// (signed statements, faults caught by re-execution, L = 0).
     #[arg(long, default_value = "plonky3")]
     pub proof_backend: String,
-    /// STARK configuration for plonky3: `koalabear` or `koalabear-test` (insecure, fast).
-    #[arg(long, default_value = "koalabear")]
+    /// STARK configuration for plonky3: `koalabear-keccak` (life2d with Keccak Merkle trees:
+    /// faster proving and ~2x faster verification; water3d keeps Poseidon2), `koalabear`
+    /// (Poseidon2 Merkle trees everywhere), or their `-test` variants (insecure, fast).
+    #[arg(long, default_value = "koalabear-keccak")]
     pub stark_config: String,
 }
 
@@ -58,15 +84,44 @@ pub fn genesis(a: GenesisArgs) -> anyhow::Result<()> {
         let k = keys::load_or_create_secret(&a.keys_dir.join(format!("node-{i}.key")))?;
         validators.push(GenesisValidator { node: k.node_id(), stake: 1000, kind: ValidatorKind::FullNode, zone: None });
     }
-    anyhow::ensure!(a.slot_ticks.len() == 4, "--slot-ticks needs 4 values");
-    let mut o = DevnetOptions::new(seed, a.time.unwrap_or_else(|| now_ms() + a.start_in * 1000), faucet.node_id());
-    o.validators = validators;
-    o.n_loc = a.n_loc;
-    o.slot_ticks = a.slot_ticks.clone();
+    let time = a.time.unwrap_or_else(|| now_ms() + a.start_in * 1000);
+    let mut params = umis_core::genesis::ChainParams::default();
     if a.proof_backend == "plonky3" {
-        o.params.proof_lag = 1;
+        params.proof_lag = 1;
     }
-    let mut g = devnet_genesis(o);
+    let mut g = match a.task.as_str() {
+        "water" => {
+            anyhow::ensure!(a.slot_ticks.len() == 4, "--slot-ticks needs 4 values");
+            let mut o = DevnetOptions::new(seed, time, faucet.node_id());
+            o.validators = validators;
+            o.n_loc = a.n_loc;
+            o.slot_ticks = a.slot_ticks.clone();
+            o.params = params;
+            devnet_genesis(o)
+        }
+        "life" => {
+            anyhow::ensure!(a.region.len() == 2, "--region needs rx,ry");
+            anyhow::ensure!(!a.slot_ticks.is_empty(), "--slot-ticks needs a value");
+            let mut o = task_life2d::devnet::LifeOptions::new(seed, time, faucet.node_id());
+            o.validators = validators;
+            o.n = a.n_loc;
+            o.gens = a.gens;
+            o.region = [a.region[0], a.region[1]];
+            o.density_pct = a.density;
+            let (strips, rpr) = if a.n_loc >= 256 { (8, 3) } else { (4, 2) };
+            o.strips = a.strips.unwrap_or(strips);
+            o.rows_per_trace_row = a.rows_per_trace_row.unwrap_or(rpr);
+            o.pattern = match a.pattern.as_str() {
+                "soup" => 0,
+                "showcase" => 1,
+                other => anyhow::bail!("--pattern soup|showcase, not {other}"),
+            };
+            o.slot_ticks = a.slot_ticks.clone();
+            o.params = params;
+            task_life2d::devnet::devnet_genesis(o)
+        }
+        other => anyhow::bail!("unknown --task {other} (water or life)"),
+    };
     g.proof_backend = a.proof_backend.clone();
     if a.proof_backend == "plonky3" {
         g.stark_config_id = Some(a.stark_config.clone());
@@ -129,6 +184,14 @@ pub fn sim(a: SimArgs) -> anyhow::Result<()> {
     for e in 0..a.beacon_slots {
         s.run_until((e + 1) * b)?;
         let mut line = format!("beacon slot {e:4}:");
+        if g.layers.first().map(String::as_str) == Some(task_life2d::LAYER) {
+            for z in s.zones.values() {
+                let r = z.inst.render(&z.state)?;
+                line += &format!(" z{} gen={:4} pop={:5}", z.id, r.meta["gen"], r.meta["population"]);
+            }
+            println!("{line}");
+            continue;
+        }
         for z in s.zones.values() {
             let vals: Vec<i32> =
                 z.state.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().expect("4 bytes"))).collect();

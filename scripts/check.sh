@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
 
 # Crates that must compile for the browser.
-WASM_CRATES=(umis-core umis-task task-water3d umis-proof umis-stark umis-protocol umis-net umis-node umis-web)
+WASM_CRATES=(umis-core umis-task task-water3d task-life2d umis-tasks umis-proof umis-stark umis-protocol umis-net umis-node umis-web)
 # `tests/wasm.rs` tests run under node via wasm-bindgen-test-runner: determinism
 # (golden trace, golden STARK proof) and the wasm prover.
 WASM_TESTS=("umis-core" "task-water3d --features stark" "umis-stark")

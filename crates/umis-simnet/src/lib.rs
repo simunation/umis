@@ -30,6 +30,10 @@ pub struct SimConfig {
     pub probe_layer: bool,
     /// `mock` or `plonky3` (with the fast, insecure test FRI preset).
     pub proof_backend: String,
+    /// The plonky3 `stark_config_id` (default `koalabear-test`).
+    pub stark_config: Option<String>,
+    /// Genesis task: `water` (water3d) or `life` (globally exact Game of Life).
+    pub task: String,
 }
 
 impl SimConfig {
@@ -44,7 +48,14 @@ impl SimConfig {
             model: NetModel::default(),
             probe_layer: false,
             proof_backend: "mock".into(),
+            stark_config: None,
+            task: "water".into(),
         }
+    }
+
+    /// A Game of Life world: 2×2 genesis zones of 16² cells, 2 generations per slot.
+    pub fn life(seed: u64) -> Self {
+        Self { n_loc: 16, slot_ticks: vec![4, 4, 4, 4], task: "life".into(), ..Self::new(seed) }
     }
 }
 
@@ -67,7 +78,7 @@ pub struct Sim {
 
 pub fn registry() -> umis_task::TaskRegistry {
     let mut r = umis_task::TaskRegistry::new();
-    task_water3d::register(&mut r);
+    umis_tasks::register_all(&mut r);
     r.register::<probe::Probe>();
     r
 }
@@ -100,12 +111,24 @@ impl Sim {
             }
         }
         let seed = umis_core::keccak256(&cfg.seed.to_be_bytes());
-        let mut o = DevnetOptions::new(seed, GENESIS_MS, faucet.node_id());
-        o.validators = validators;
-        o.n_loc = cfg.n_loc;
-        o.slot_ticks = cfg.slot_ticks.clone();
-        o.params.proof_lag = cfg.proof_lag;
-        let mut genesis = devnet_genesis(o);
+        let mut genesis = if cfg.task == "life" {
+            let mut o = task_life2d::devnet::LifeOptions::new(seed, GENESIS_MS, faucet.node_id());
+            o.validators = validators;
+            o.n = cfg.n_loc;
+            o.gens = 2;
+            o.strips = 1;
+            o.region = [2, (cfg.slot_ticks.len() as i32 + 1) / 2];
+            o.slot_ticks = cfg.slot_ticks.clone();
+            o.params.proof_lag = cfg.proof_lag;
+            task_life2d::devnet::devnet_genesis(o)
+        } else {
+            let mut o = DevnetOptions::new(seed, GENESIS_MS, faucet.node_id());
+            o.validators = validators;
+            o.n_loc = cfg.n_loc;
+            o.slot_ticks = cfg.slot_ticks.clone();
+            o.params.proof_lag = cfg.proof_lag;
+            devnet_genesis(o)
+        };
         if cfg.probe_layer {
             genesis.layers.push(probe::PROBE_LAYER.into());
             genesis.couplings.push(umis_core::genesis::CouplingSpec {
@@ -117,10 +140,10 @@ impl Sim {
         }
         genesis.proof_backend = cfg.proof_backend.clone();
         if cfg.proof_backend == task_water3d::air::BACKEND_ID {
-            genesis.stark_config_id = Some("koalabear-test".into());
+            genesis.stark_config_id = Some(cfg.stark_config.clone().unwrap_or_else(|| "koalabear-test".into()));
         }
         genesis.validate().expect("valid genesis");
-        let backend = task_water3d::air::backend_for(&genesis).expect("backend");
+        let backend = umis_tasks::backend_for(&genesis).expect("backend");
         let ctx = Arc::new(
             Ctx::new(genesis.clone(), registry(), backend).with_verifier(Arc::new(CachingVerifier::default())),
         );

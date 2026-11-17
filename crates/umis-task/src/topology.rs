@@ -65,26 +65,83 @@ pub trait Topology {
     fn in_bounds(&self, p: &Self::Point) -> bool;
     /// Neighbouring points (inside the bounds).
     fn adjacent(&self, p: &Self::Point) -> Vec<Self::Point>;
+    /// Neighbouring points for zones of `layer` (default: [`Self::adjacent`]).
+    fn adjacent_layer(&self, _layer: &LayerId, p: &Self::Point) -> Vec<Self::Point> {
+        self.adjacent(p)
+    }
     /// Ports linking same-layer zones on neighbouring points, `a → b`.
     fn neighbour_links(&self, layer: &LayerId, a: &Self::Point, b: &Self::Point) -> Vec<LinkSpec>;
 }
 
 /// The POC topology: integer points `0 ≤ p < bounds` per axis, face adjacency,
 /// and face ports `+x, −x, +y, −y, +z, −z` = port ids 0..5 for every layer.
+///
+/// Layers listed in `diagonal_layers` also link the four in-plane diagonal
+/// neighbours (same `z`), through the corner ports 6..9 ([`DIAG_DIRS`]). A
+/// Moore-neighbourhood cellular automaton needs them: a cell at a zone corner
+/// reads a cell of the diagonal zone.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct Lattice3d {
     pub bounds: [i32; 3],
+    #[serde(default)]
+    pub diagonal_layers: Vec<LayerId>,
+}
+
+impl Lattice3d {
+    /// Face adjacency only.
+    pub fn new(bounds: [i32; 3]) -> Self {
+        Self { bounds, diagonal_layers: Vec::new() }
+    }
+
+    pub fn from_spec(s: &umis_core::genesis::TopologySpec) -> Self {
+        let umis_core::genesis::TopologySpec::Lattice3d { bounds, diagonal_layers } = s;
+        Self { bounds: *bounds, diagonal_layers: diagonal_layers.iter().map(|l| LayerId::new(l)).collect() }
+    }
+
+    fn diagonal(&self, layer: &LayerId) -> bool {
+        self.diagonal_layers.contains(layer)
+    }
+
+    /// Neighbouring points of `p` for zones of `layer` (inside the bounds).
+    pub fn adjacent_in(&self, layer: &LayerId, p: &Point3) -> Vec<Point3> {
+        let mut out = self.adjacent(p);
+        if self.diagonal(layer) {
+            out.extend(DIAG_DIRS.iter().map(|d| [p[0] + d[0], p[1] + d[1], p[2] + d[2]]).filter(|q| self.in_bounds(q)));
+        }
+        out
+    }
 }
 
 /// Unit offsets of the face ports, in port order.
 pub const FACE_DIRS: [[i32; 3]; 6] = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+
+/// First corner port id.
+pub const DIAG_PORT0: PortId = 6;
+
+/// Unit offsets of the in-plane corner ports 6..9, in port order. Opposite
+/// corners differ in the lowest bit, like the faces.
+pub const DIAG_DIRS: [[i32; 3]; 4] = [[1, 1, 0], [-1, -1, 0], [1, -1, 0], [-1, 1, 0]];
 
 /// Face port pointing along `dir`.
 pub fn face_port(dir: [i32; 3]) -> Option<PortId> {
     FACE_DIRS.iter().position(|d| *d == dir).map(|i| i as PortId)
 }
 
-/// The facing port: `+x ↔ −x` etc.
+/// Corner port pointing along `dir` (in-plane diagonals only).
+pub fn diag_port(dir: [i32; 3]) -> Option<PortId> {
+    DIAG_DIRS.iter().position(|d| *d == dir).map(|i| DIAG_PORT0 + i as PortId)
+}
+
+/// Unit offset of a face or corner port.
+pub fn port_dir(p: PortId) -> Option<[i32; 3]> {
+    match p {
+        0..=5 => Some(FACE_DIRS[p as usize]),
+        6..=9 => Some(DIAG_DIRS[(p - DIAG_PORT0) as usize]),
+        _ => None,
+    }
+}
+
+/// The facing port: `+x ↔ −x`, `(+1,+1) ↔ (−1,−1)` etc.
 pub fn opposite_face(p: PortId) -> PortId {
     p ^ 1
 }
@@ -100,9 +157,14 @@ impl Topology for Lattice3d {
         FACE_DIRS.iter().map(|d| [p[0] + d[0], p[1] + d[1], p[2] + d[2]]).filter(|q| self.in_bounds(q)).collect()
     }
 
-    fn neighbour_links(&self, _layer: &LayerId, a: &Point3, b: &Point3) -> Vec<LinkSpec> {
+    fn adjacent_layer(&self, layer: &LayerId, p: &Point3) -> Vec<Point3> {
+        self.adjacent_in(layer, p)
+    }
+
+    fn neighbour_links(&self, layer: &LayerId, a: &Point3, b: &Point3) -> Vec<LinkSpec> {
         let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-        match face_port(d) {
+        let port = face_port(d).or_else(|| if self.diagonal(layer) { diag_port(d) } else { None });
+        match port {
             Some(p) => vec![LinkSpec { from_port: p, to_port: opposite_face(p) }],
             None => Vec::new(),
         }
@@ -151,8 +213,11 @@ pub fn candidate_neighbours<T: Topology>(
     layers: &[LayerId],
     loc: &Location<T::Point>,
 ) -> Vec<Location<T::Point>> {
-    let mut out: Vec<Location<T::Point>> =
-        t.adjacent(&loc.point).into_iter().map(|p| Location { point: p, layer: loc.layer.clone() }).collect();
+    let mut out: Vec<Location<T::Point>> = t
+        .adjacent_layer(&loc.layer, &loc.point)
+        .into_iter()
+        .map(|p| Location { point: p, layer: loc.layer.clone() })
+        .collect();
     for l in layers {
         if *l != loc.layer {
             out.push(Location { point: loc.point.clone(), layer: l.clone() });
@@ -171,7 +236,7 @@ mod tests {
 
     #[test]
     fn face_links() {
-        let t = Lattice3d { bounds: [8, 8, 2] };
+        let t = Lattice3d::new([8, 8, 2]);
         let a = loc([0, 0, 0], "water");
         let b = loc([1, 0, 0], "water");
         assert_eq!(links_between(&t, &[], &a, &b), vec![LinkSpec { from_port: 0, to_port: 1 }]);
@@ -182,8 +247,27 @@ mod tests {
     }
 
     #[test]
+    fn diagonal_links_only_for_listed_layers() {
+        let t = Lattice3d { bounds: [8, 8, 1], diagonal_layers: vec![LayerId::new("life")] };
+        let a = loc([1, 1, 0], "life");
+        let ne = loc([2, 2, 0], "life");
+        assert_eq!(links_between(&t, &[], &a, &ne), vec![LinkSpec { from_port: 6, to_port: 7 }]);
+        assert_eq!(links_between(&t, &[], &ne, &a), vec![LinkSpec { from_port: 7, to_port: 6 }]);
+        let se = loc([2, 0, 0], "life");
+        assert_eq!(links_between(&t, &[], &a, &se), vec![LinkSpec { from_port: 8, to_port: 9 }]);
+        assert!(links_between(&t, &[], &loc([1, 1, 0], "water"), &loc([2, 2, 0], "water")).is_empty());
+        assert_eq!(t.adjacent_in(&LayerId::new("life"), &[1, 1, 0]).len(), 8);
+        assert_eq!(t.adjacent_in(&LayerId::new("life"), &[0, 0, 0]).len(), 3);
+        assert_eq!(t.adjacent_in(&LayerId::new("water"), &[1, 1, 0]).len(), 4);
+        for p in 0..10 {
+            let d = port_dir(p).unwrap();
+            assert_eq!(port_dir(opposite_face(p)).unwrap(), [-d[0], -d[1], -d[2]]);
+        }
+    }
+
+    #[test]
     fn layers_and_couplings() {
-        let t = Lattice3d { bounds: [8, 8, 2] };
+        let t = Lattice3d::new([8, 8, 2]);
         let w = loc([1, 1, 0], "water");
         let a = loc([1, 1, 0], "atmosphere");
         assert!(!linked(&t, &[], &w, &a), "co-located layers are independent without a coupling");

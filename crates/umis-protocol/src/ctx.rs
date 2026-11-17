@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher, RandomState};
 use std::sync::{Arc, Mutex};
-use umis_core::genesis::{ChainParams, Genesis, TopologySpec};
+use umis_core::genesis::{ChainParams, Genesis};
 use umis_core::time::{TimeGrid, ZoneTiming};
 use umis_core::{Hash, NodeId, Signature};
 use umis_proof::ProofBackend;
@@ -72,12 +72,11 @@ pub struct Ctx {
 
 impl Ctx {
     pub fn new(genesis: Genesis, tasks: TaskRegistry, backend: Arc<dyn ProofBackend>) -> Self {
-        let TopologySpec::Lattice3d { bounds } = genesis.topology.clone();
         Self {
             genesis_hash: genesis.hash(),
             p: genesis.params.clone(),
             grid: genesis.time_grid(),
-            topo: Lattice3d { bounds },
+            topo: Lattice3d::from_spec(&genesis.topology),
             couplings: genesis
                 .couplings
                 .iter()
@@ -130,18 +129,39 @@ impl Ctx {
         a
     }
 
-    /// Verifies several proofs at once (in parallel natively) so the
-    /// sequential checks that follow hit the memo.
+    /// Verifies several proofs at once so the sequential checks that follow hit
+    /// the memo: one proof commitment's leaves of a batching task as a group
+    /// (batched proofs verify only together), others in parallel natively.
     pub fn warm_proofs(&self, items: &[(umis_core::records::TransitionStatement, umis_proof::PublicData<'_>, &[u8])]) {
-        #[cfg(not(target_arch = "wasm32"))]
-        if items.len() > 1 && self.backend.is_async() {
-            use rayon::prelude::*;
-            items.par_iter().for_each(|(s, pd, p)| {
-                let _ = self.verify_proof(s, pd, p);
-            });
+        use umis_core::SegRecord;
+        if items.is_empty() {
+            return;
         }
-        #[cfg(target_arch = "wasm32")]
-        let _ = items;
+        if items[0].1.task_id.is_some_and(|t| self.backend.batches(t)) {
+            let keys: Vec<(Hash, Hash)> = items.iter().map(|(s, _, p)| (s.address(), self.proof_address(p))).collect();
+            if keys.iter().all(|k| self.proofs.lock().expect("proof cache").contains_key(k)) {
+                return;
+            }
+            let group: Vec<_> = items.iter().map(|(s, pd, p)| (s, *pd, *p)).collect();
+            let results = self.backend.verify_group(&group);
+            let mut c = self.proofs.lock().expect("proof cache");
+            if c.len() > 100_000 {
+                c.clear();
+            }
+            for (k, r) in keys.into_iter().zip(results) {
+                if let Ok(n) = r {
+                    c.insert(k, n);
+                }
+            }
+        } else {
+            #[cfg(not(target_arch = "wasm32"))]
+            if items.len() > 1 && self.backend.is_async() {
+                use rayon::prelude::*;
+                items.par_iter().for_each(|(s, pd, p)| {
+                    let _ = self.verify_proof(s, pd, p);
+                });
+            }
+        }
     }
 
     /// Verifies a transition proof (memoized).

@@ -320,6 +320,7 @@ impl ZoneTask for Water3d {
             origin: [o[0] * n as i32, o[1] * n as i32, o[2] * n as i32],
             channels: FIELDS as u32,
             data,
+            meta: serde_json::Value::Null,
         }
     }
 }

@@ -1027,6 +1027,7 @@ impl BeaconState {
                 return umis_proof::PublicData::default();
             }
             umis_proof::PublicData {
+                task_id: Some(&zone.task_id),
                 params: Some(&zone.params),
                 genesis_seed: Some(ctx.genesis.seed),
                 prev_state: Some(&pce.data.states[i]),

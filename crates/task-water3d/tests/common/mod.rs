@@ -18,7 +18,7 @@ pub fn genesis_seed() -> Hash {
 
 pub fn domain(n_loc: u32) -> DomainSim {
     let task = TaskAdapter::<Water3d>::new();
-    let topo = Lattice3d { bounds: [8, 8, 2] };
+    let topo = Lattice3d::new([8, 8, 2]);
     let mut zones = Vec::new();
     for (id, (point, s)) in POINTS.iter().zip(SLOTS).enumerate() {
         let mut p = Water3dParams::default_for(*point, s as u32);
@@ -109,6 +109,7 @@ pub fn stark_roundtrip_with(n_loc: u32, preset: umis_stark::config::FriPreset, n
     let proof = b.prove(&stmt, &w, &key).unwrap();
     let prove_ms = now_ms() - t;
     let pd = PublicData {
+        task_id: Some(task_water3d::TASK_ID),
         params: Some(&params),
         genesis_seed: Some(seed),
         prev_state: Some(&prev),

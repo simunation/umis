@@ -204,6 +204,12 @@ pub fn check(sim: &Sim, live_from: u64, live_until: u64, max_gap: u64) -> Report
         }
     }
 
+    // 9. Game of Life zones: every settled state is the global Game of Life
+    //    at its own generation.
+    if let Err(e) = check_life(sim, &head) {
+        r.violations.push(e);
+    }
+
     // staleness
     let (sum, n): (u64, u64) = honest
         .iter()
@@ -211,4 +217,42 @@ pub fn check(sim: &Sim, live_from: u64, live_until: u64, max_gap: u64) -> Report
         .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
     r.avg_staleness_ms = if n > 0 { sum as f64 / n as f64 } else { 0.0 };
     r
+}
+
+/// For `life2d` zones: collects the archive node's settled states and checks
+/// them against the monolithic reference (`task_life2d::reference`). Returns
+/// the number of states checked.
+pub fn check_life(sim: &Sim, head: &umis_protocol::beacon::BeaconState) -> Result<usize, String> {
+    use task_life2d::reference::{RefZone, check_global};
+    let a = sim.node(sim.archive);
+    let mut zones = Vec::new();
+    let mut states = Vec::new();
+    for (z, zone) in head.zones.iter().filter(|(_, z)| z.task_id == task_life2d::TASK_ID) {
+        let params: task_life2d::Life2dParams =
+            borsh::from_slice(&zone.params).map_err(|e| format!("zone {z}: params {e}"))?;
+        let idx = zones.len();
+        let mut birth = None;
+        if let (Some(eng), Some(commits)) = (a.engines.get(z), head.commits.get(z)) {
+            for c in commits.iter().filter(|c| c.status == CommitStatus::Settled) {
+                for bs in &c.blocks {
+                    let Some(st) = eng.get(&bs.hash).and_then(|e| e.state.clone()) else { continue };
+                    let s = task_life2d::decode_state(&params, &st)
+                        .ok_or_else(|| format!("zone {z}: settled state at slot {} is not canonical", bs.slot))?;
+                    if s.born {
+                        birth = Some(s.birth);
+                        states.push((idx, s));
+                    }
+                }
+            }
+        }
+        zones.push(RefZone { params, birth });
+    }
+    if zones.is_empty() {
+        return Ok(0);
+    }
+    let n = check_global(&sim.genesis.seed, &zones, &states)?;
+    if n == 0 {
+        return Err("life: no settled born state to check".into());
+    }
+    Ok(n)
 }

@@ -25,9 +25,7 @@ pub(crate) fn init() {
 }
 
 pub(crate) fn registry() -> umis_task::TaskRegistry {
-    let mut r = umis_task::TaskRegistry::new();
-    task_water3d::register(&mut r);
-    r
+    umis_tasks::registry()
 }
 
 pub(crate) fn js_err(e: impl std::fmt::Display) -> JsError {
@@ -138,7 +136,7 @@ impl SimNode {
         }
         self.started = true;
         let addrs: Vec<Multiaddr> = bootstrap.iter().map(|s| s.parse()).collect::<Result<_, _>>().map_err(js_err)?;
-        let backend = task_water3d::air::backend_for(&self.genesis).map_err(js_err)?;
+        let backend = umis_tasks::backend_for(&self.genesis).map_err(js_err)?;
         let ctx = Arc::new(Ctx::new(self.genesis.clone(), registry(), backend));
         let mut cfg = NodeConfig::new(self.key.clone());
         cfg.keep_blocks = false;
@@ -273,7 +271,7 @@ impl SimNode {
         Ok(())
     }
 
-    /// Proposes a water zone at `point` with slot length `slot_ticks`;
+    /// Proposes a zone on the genesis's first layer (water or life) at `point` with slot length `slot_ticks`;
     /// `founder_secrets` are the hex keys of founder nodes in this page
     /// (each co-signs). Returns the proposal id.
     #[wasm_bindgen(js_name = proposeZone)]
@@ -291,16 +289,17 @@ impl SimNode {
             .map(|h| Hash::from_hex(h).map(|b| SecretKey::from_bytes(&b.0)))
             .collect::<Result<_, _>>()
             .map_err(js_err)?;
-        let n_loc = self.genesis.zones.first().and_then(|z| z.params["n_loc"].as_u64()).unwrap_or(16) as u32;
-        let p = task_water3d::devnet::zone_params([point[0], point[1], point[2]], slot_ticks as u64, n_loc);
-        let params = borsh::to_vec(&p).map_err(js_err)?;
+        let layer = self.genesis.layers.first().cloned().unwrap_or_default();
+        let (task_id, params) =
+            umis_tasks::zone_proposal(&self.genesis, &layer, [point[0], point[1], point[2]], slot_ticks as u64)
+                .map_err(js_err)?;
         let refs: Vec<&SecretKey> = founders.iter().collect();
         let tx = umis_protocol::types::build_propose_tx(
             self.key.node_id(),
             &refs,
             [point[0], point[1], point[2]],
-            task_water3d::LAYER,
-            task_water3d::TASK_ID,
+            &layer,
+            task_id,
             params,
             slot_ticks as u64,
         );

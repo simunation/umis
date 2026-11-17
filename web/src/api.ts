@@ -59,7 +59,14 @@ export interface LatticeView {
   bounds: [number, number, number];
 }
 
-export interface RenderGrid { dims: [number, number, number]; origin: [number, number, number]; channels: number; data: number[] | Float32Array }
+export interface RenderGrid {
+  dims: [number, number, number];
+  origin: [number, number, number];
+  channels: number;
+  data: number[] | Float32Array;
+  /** Task display facts (life2d: born, gen, birth, next_slot, k, population). */
+  meta?: Record<string, unknown>;
+}
 
 export class Bootstrap {
   constructor(public base: string) {}

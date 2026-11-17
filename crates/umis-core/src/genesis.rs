@@ -77,8 +77,13 @@ impl Default for ChainParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TopologySpec {
-    /// Integer lattice points `0 ≤ p < bounds` per axis, face adjacency.
-    Lattice3d { bounds: [i32; 3] },
+    /// Integer lattice points `0 ≤ p < bounds` per axis, face adjacency; the
+    /// layers in `diagonal_layers` also link in-plane diagonal neighbours.
+    Lattice3d {
+        bounds: [i32; 3],
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        diagonal_layers: Vec<String>,
+    },
 }
 
 /// Connects ports of two different layers co-located at one point.
@@ -211,7 +216,7 @@ impl Genesis {
         if p.unbonding <= p.proof_lag + p.anchor_depth + 1 {
             return bad("unbonding U must exceed the rollback window L + D + 1".into());
         }
-        let TopologySpec::Lattice3d { bounds } = &self.topology;
+        let TopologySpec::Lattice3d { bounds, .. } = &self.topology;
         let mut seen_ids = std::collections::BTreeSet::new();
         let mut seen_loc = std::collections::BTreeSet::new();
         for z in &self.zones {
@@ -258,7 +263,7 @@ mod tests {
             genesis_time_ms: 1_700_000_000_000,
             seed: crate::hash::keccak256(b"seed"),
             params: ChainParams::default(),
-            topology: TopologySpec::Lattice3d { bounds: [8, 8, 2] },
+            topology: TopologySpec::Lattice3d { bounds: [8, 8, 2], diagonal_layers: vec![] },
             layers: vec!["water".into()],
             couplings: vec![],
             proof_backend: "mock".into(),

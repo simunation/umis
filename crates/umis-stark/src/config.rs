@@ -114,3 +114,171 @@ pub mod koala_bear {
         Config::new(pcs, Challenger::new(perm))
     }
 }
+
+/// KoalaBear with a Keccak Merkle MMCS: the same field, FRI and presets as [`koala_bear`], but
+/// the Merkle trees hash with Keccak-f[1600]. On x86 with AVX2, `p3-keccak` hashes four rows per
+/// permutation and commits about 3x (large traces) to 13x (small ones) faster than width-16
+/// Poseidon2 (`examples/mmcs_bench.rs`). The transcript stays the Poseidon2 duplex challenger
+/// (its proof-of-work grinding is a cheap parallel Poseidon2 search; a Keccak transcript's
+/// grinding cost ~2 ms per proof); Merkle roots enter it as 22-bit limbs ([`HybridChallenger`]).
+/// Not recursion-friendly: for leaf proofs that are verified natively.
+pub mod koala_bear_keccak {
+    use p3_challenger::{CanObserve, CanSample, CanSampleBits, DuplexChallenger, FieldChallenger, GrindingChallenger};
+    use p3_commit::ExtensionMmcs;
+    use p3_dft::Radix2DitParallel;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_fri::TwoAdicFriPcs;
+    use p3_keccak::{KeccakF, VECTOR_LEN};
+    use p3_koala_bear::{KoalaBear, default_koalabear_poseidon2_16};
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_symmetric::{CompressionFunctionFromHasher, MerkleCap, PaddingFreeSponge, SerializingHasher};
+    use p3_uni_stark::StarkConfig;
+
+    use super::FriPreset;
+    pub use super::koala_bear::Perm;
+
+    pub type Val = KoalaBear;
+    pub type Challenge = BinomialExtensionField<Val, 4>;
+    /// Keccak-f[1600] sponge over u64 words: rate 17 words, 4-word (256-bit) digest.
+    pub type Sponge = PaddingFreeSponge<KeccakF, 25, 17, 4>;
+    pub type Hash = SerializingHasher<Sponge>;
+    pub type Compress = CompressionFunctionFromHasher<Sponge, 2, 4>;
+    pub type ValMmcs = MerkleTreeMmcs<[Val; VECTOR_LEN], [u64; VECTOR_LEN], Hash, Compress, 2, 4>;
+    pub type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+    pub type Challenger = HybridChallenger;
+    pub type Dft = Radix2DitParallel<Val>;
+    pub type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+    pub type Config = StarkConfig<Pcs, Challenge, Challenger>;
+
+    /// The Poseidon2 duplex challenger, absorbing Keccak Merkle roots: every u64 word as three
+    /// limbs of 22, 22 and 20 bits (each below p, so the encoding is injective).
+    #[derive(Clone, Debug)]
+    pub struct HybridChallenger(pub DuplexChallenger<Val, Perm, 16, 8>);
+
+    impl HybridChallenger {
+        pub fn new(perm: Perm) -> Self {
+            Self(DuplexChallenger::new(perm))
+        }
+
+        /// The state `DuplexChallenger::grind` permutes per candidate and the witness's
+        /// rate slot: buffered inputs, the witness slot and zeros in the rate, the length
+        /// tag in the first capacity element (Plonky3 0.8 duplex absorption).
+        pub fn grind_base(&self) -> ([Val; 16], usize) {
+            let c = &self.0;
+            let widx = c.input_buffer.len();
+            let base = core::array::from_fn(|i| {
+                if i < widx {
+                    c.input_buffer[i]
+                } else if i < 8 {
+                    Val::ZERO
+                } else if i == 8 {
+                    c.sponge_state[8] + Val::from_u8((widx + 1) as u8)
+                } else {
+                    c.sponge_state[i]
+                }
+            });
+            (base, widx)
+        }
+
+        fn observe_word(&mut self, w: u64) {
+            for limb in [w & 0x3f_ffff, (w >> 22) & 0x3f_ffff, w >> 44] {
+                self.0.observe(Val::from_u32(limb as u32));
+            }
+        }
+    }
+
+    impl CanObserve<Val> for HybridChallenger {
+        fn observe(&mut self, value: Val) {
+            self.0.observe(value);
+        }
+    }
+
+    impl<const N: usize> CanObserve<&MerkleCap<Val, [u64; N]>> for HybridChallenger {
+        fn observe(&mut self, cap: &MerkleCap<Val, [u64; N]>) {
+            for digest in cap.roots() {
+                for w in digest {
+                    self.observe_word(*w);
+                }
+            }
+        }
+    }
+
+    impl<const N: usize> CanObserve<MerkleCap<Val, [u64; N]>> for HybridChallenger {
+        fn observe(&mut self, cap: MerkleCap<Val, [u64; N]>) {
+            self.observe(&cap);
+        }
+    }
+
+    impl<T> CanSample<T> for HybridChallenger
+    where
+        DuplexChallenger<Val, Perm, 16, 8>: CanSample<T>,
+    {
+        fn sample(&mut self) -> T {
+            self.0.sample()
+        }
+    }
+
+    impl CanSampleBits<usize> for HybridChallenger {
+        fn sample_bits(&mut self, bits: usize) -> usize {
+            self.0.sample_bits(bits)
+        }
+    }
+
+    impl FieldChallenger<Val> for HybridChallenger {}
+
+    /// A proof-of-work search offloaded from the CPU (a GPU): given the sponge state
+    /// before the witness's permutation (`DuplexChallenger::grind`'s base state), the
+    /// rate slot the witness goes into and the difficulty, a candidate witness.
+    pub type Grinder = fn(&[Val; 16], usize, usize) -> Option<Val>;
+
+    static GRINDER: core::sync::atomic::AtomicPtr<()> = core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+
+    /// Installs a [`Grinder`] for [`HybridChallenger::grind`] (prover side only: every
+    /// candidate is checked with `check_witness` before it is used, and the CPU search
+    /// runs if it fails, so the transcript and the proofs are those of the CPU grind).
+    pub fn set_grinder(g: Grinder) {
+        GRINDER.store(g as *mut (), core::sync::atomic::Ordering::Release);
+    }
+
+    fn grinder() -> Option<Grinder> {
+        let p = GRINDER.load(core::sync::atomic::Ordering::Acquire);
+        // SAFETY: only `set_grinder` stores a non-null value, and it stores a `Grinder`.
+        (!p.is_null()).then(|| unsafe { core::mem::transmute::<*mut (), Grinder>(p) })
+    }
+
+    impl GrindingChallenger for HybridChallenger {
+        type Witness = Val;
+
+        fn grind(&mut self, bits: usize) -> Val {
+            if bits > 0
+                && let Some(g) = grinder()
+            {
+                let (base, widx) = self.grind_base();
+                if let Some(w) = g(&base, widx, bits) {
+                    let mut probe = self.0.clone();
+                    if probe.check_witness(bits, w) {
+                        self.0 = probe;
+                        return w;
+                    }
+                }
+            }
+            self.0.grind(bits)
+        }
+    }
+
+    /// The FRI parameters of [`config`] (for provers that drive FRI themselves).
+    pub fn fri_params(preset: FriPreset) -> p3_fri::FriParameters<ChallengeMmcs> {
+        let sponge = Sponge::new(KeccakF);
+        preset.fri_params(ChallengeMmcs::new(ValMmcs::new(Hash::new(sponge), Compress::new(sponge), 0)))
+    }
+
+    /// Build the KoalaBear/Keccak STARK config.
+    pub fn config(preset: FriPreset) -> Config {
+        let sponge = Sponge::new(KeccakF);
+        let val_mmcs = ValMmcs::new(Hash::new(sponge), Compress::new(sponge), 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+        let pcs = Pcs::new(Dft::default(), val_mmcs, preset.fri_params(challenge_mmcs));
+        Config::new(pcs, HybridChallenger::new(default_koalabear_poseidon2_16()))
+    }
+}

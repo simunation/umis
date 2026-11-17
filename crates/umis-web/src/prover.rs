@@ -30,7 +30,7 @@ pub fn prove_job(genesis_json: &str, secret_hex: &str, job: &[u8]) -> Result<Vec
     let runner = match RUNNERS.with(|r| r.borrow().get(&k).cloned()) {
         Some(r) => r,
         None => {
-            let backend = task_water3d::air::backend_for(&genesis).map_err(crate::simnode::js_err)?;
+            let backend = umis_tasks::backend_for(&genesis).map_err(crate::simnode::js_err)?;
             let r = Arc::new(JobRunner::new(crate::simnode::registry(), backend, key));
             RUNNERS.with(|m| m.borrow_mut().insert(k, r.clone()));
             r

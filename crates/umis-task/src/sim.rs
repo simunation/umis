@@ -107,8 +107,7 @@ impl DomainSim {
 /// zone and wires the links given by the topology.
 pub fn from_genesis(g: &umis_core::genesis::Genesis, reg: &crate::TaskRegistry) -> crate::Result<DomainSim> {
     use crate::topology::{Coupling, Lattice3d, LayerId, Location, links_between};
-    let umis_core::genesis::TopologySpec::Lattice3d { bounds } = &g.topology;
-    let topo = Lattice3d { bounds: *bounds };
+    let topo = Lattice3d::from_spec(&g.topology);
     let couplings: Vec<Coupling> = g
         .couplings
         .iter()

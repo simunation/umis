@@ -10,6 +10,14 @@
   --settled: #27ae60;
   --invalid: #eb5757;
   --pruned: #c4c9d1;
+  --line-strong: #b8bec8;
+  --life-bg: #0b0f17;
+  --life-cell: #e8f0ff;
+  --life-trail: #2b4372;
+  --life-unborn: #141a25;
+  --life-ghost: #3a4458;
+  --good: #1f9d55;
+  --bad: #d64545;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -19,6 +27,7 @@
     --muted: #8b93a1;
     --line: #2c3440;
     --accent: #58a6ff;
+    --line-strong: #3b4554;
   }
 }
 * { box-sizing: border-box; }
@@ -40,10 +49,20 @@ input, select { font: inherit; background: var(--panel); color: var(--text); bor
 .role { font-weight: 600; }
 #view3d { height: 440px; background: #0b1020; border-radius: 6px; overflow: hidden; position: relative; }
 #view-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
-#lattice { margin-top: 10px; overflow-x: auto; }
-#lattice table { border-collapse: collapse; font-family: ui-monospace, monospace; font-size: 11px; }
-#lattice td, #lattice th { border: 1px solid var(--line); padding: 2px 6px; text-align: center; }
-#lattice td.c { cursor: pointer; }
+#lattice { margin-top: 10px; overflow: auto; max-height: 360px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+#lattice table { border-collapse: separate; border-spacing: 2px; font-family: ui-monospace, monospace; font-size: 11px; width: 100%; }
+#lattice th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 500; padding: 4px 6px; text-align: center; }
+#lattice td { padding: 2px 6px; text-align: center; border-radius: 3px; }
+#lattice td:first-child, #lattice td:nth-child(2) { color: var(--muted); }
+#lattice td.c { cursor: pointer; transition: filter 0.1s; }
+#lattice td.c:hover { filter: brightness(1.15); outline: 1px solid var(--text); }
+#lattice .legend { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+#view2d { height: 520px; background: var(--life-bg); border-radius: 6px; overflow: hidden; position: relative; cursor: crosshair; touch-action: none; }
+#life-stats { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 6px; font-size: 12px; }
+#life-stats .good { color: var(--good); }
+#life-stats .bad { color: var(--bad); font-weight: 600; }
+.chip { padding: 0 6px; border-radius: 3px; }
+[hidden] { display: none !important; }
 .st-optimistic { background: var(--optimistic); color: #222; }
 .st-proven { background: var(--proven); color: #222; }
 .st-settled { background: var(--settled); color: #fff; }
