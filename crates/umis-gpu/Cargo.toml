@@ -11,21 +11,21 @@ license.workspace = true
 cuda = ["dep:cudarc", "dep:p3-commit", "dep:p3-fri", "dep:p3-merkle-tree", "dep:p3-symmetric", "dep:p3-keccak", "dep:p3-challenger", "dep:p3-util", "dep:p3-maybe-rayon", "dep:p3-air", "dep:p3-uni-stark", "dep:p3-batch-stark", "dep:umis-stark", "dep:rayon"]
 
 [dependencies]
-p3-dft = "=0.8.0"
-p3-field = "=0.8.0"
-p3-koala-bear = "=0.8.0"
-p3-matrix = "=0.8.0"
-p3-commit = { version = "=0.8.0", optional = true }
-p3-fri = { version = "=0.8.0", optional = true }
-p3-merkle-tree = { version = "=0.8.0", optional = true }
-p3-symmetric = { version = "=0.8.0", optional = true }
-p3-keccak = { version = "=0.8.0", optional = true }
-p3-challenger = { version = "=0.8.0", optional = true }
-p3-util = { version = "=0.8.0", optional = true }
-p3-maybe-rayon = { version = "=0.8.0", optional = true, features = ["parallel"] }
-p3-air = { version = "=0.8.0", optional = true }
-p3-uni-stark = { version = "=0.8.0", optional = true }
-p3-batch-stark = { version = "=0.8.0", optional = true }
+p3-dft = "=0.9.0-rc.2"
+p3-field = "=0.9.0-rc.2"
+p3-koala-bear = "=0.9.0-rc.2"
+p3-matrix = "=0.9.0-rc.2"
+p3-commit = { version = "=0.9.0-rc.2", optional = true }
+p3-fri = { version = "=0.9.0-rc.2", optional = true }
+p3-merkle-tree = { version = "=0.9.0-rc.2", optional = true }
+p3-symmetric = { version = "=0.9.0-rc.2", optional = true }
+p3-keccak = { version = "=0.9.0-rc.2", optional = true }
+p3-challenger = { version = "=0.9.0-rc.2", optional = true }
+p3-util = { version = "=0.9.0-rc.2", optional = true }
+p3-maybe-rayon = { version = "=0.9.0-rc.2", optional = true, features = ["parallel"] }
+p3-air = { version = "=0.9.0-rc.2", optional = true }
+p3-uni-stark = { version = "=0.9.0-rc.2", optional = true }
+p3-batch-stark = { version = "=0.9.0-rc.2", optional = true }
 umis-stark = { workspace = true, optional = true }
 rayon = { version = "1.12", optional = true }
 cudarc = { version = "0.19", optional = true, default-features = false, features = ["driver", "nvrtc", "dynamic-loading", "cuda-13040", "std"] }
