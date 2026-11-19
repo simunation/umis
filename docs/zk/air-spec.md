@@ -163,8 +163,12 @@ seed, never received. When verifying keys are cached, key them by `(keccak(param
 - **INV-PARAM-1.** No production genesis may select `koalabear-test` (≈2 bits). Since 2026-11-19 `Genesis::validate`
   rejects a plonky3 genesis whose `stark_config_id` is not in `SECURE_STARK_CONFIGS` (`koalabear`,
   `koalabear-keccak`) unless it sets `insecure_proofs: true`, and `umis-cli node` refuses such a genesis without
-  `--allow-insecure-proofs` (`insecure_stark_configs_need_the_opt_in`). Unknown ids fail in `backend_for`. Still
-  open: rejecting `L = 0` with plonky3 (SimNet runs that combination on purpose).
+  `--allow-insecure-proofs` (`insecure_stark_configs_need_the_opt_in`). Unknown ids fail in `backend_for`. `L = 0`
+  with plonky3 is **allowed** (decided 2026-11-19): it is not a soundness question. With `L = 0` every zone
+  commitment is included together with its STARK-proven proof commitment, so there is no optimistic window and no
+  `MissingProof` rollback; the cost is that inclusion waits for proving, which GPU batch proving makes small.
+  SimNet `life-stark-l0` (honest) and `junk-proofs-l0` (junk proof commitments and shares) cover it. A misconfigured
+  network whose proving takes longer than a beacon slot stalls commitments (liveness), not safety.
 - **INV-PARAM-2.** The lookup degree budget passed to `ProverData::from_airs_and_degrees_with_lookup_budgets` must be
   derived from the preset's `log_blowup` (max constraint degree `2^log_blowup + 1`), not the literal `1`. Done:
   `self.preset.log_blowup()`; the per-AIR lookup budget stays 3, the shape the bound below is computed at.

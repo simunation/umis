@@ -47,6 +47,7 @@ Local, untracked resources are in `tmp/zk-research/`:
 | 5 | Tamper tests reach the prover's debug checker in debug builds | air-spec §8 | run them with `--release` (CLAUDE.md); life2d also with `LIFE_PRESET=p100` |
 | 6 | Native builds lacked AVX2 | — | fixed 2026-11-14 (`.cargo/config.toml`) |
 | 7 | Scaling: per-slot proofs plus full states per leaf on the beacon chain | — | roadmap phases 2–3 (recursion, INV-PARAM-5/6, INV-LIFE-FS-2) |
+| 9 | `L = 0` with plonky3 | INV-PARAM-1 | **kept, by decision**: valid (proofs at inclusion); tested (`life-stark-l0`, `junk-proofs-l0`) |
 | 8 | Batch STARK security falls with the member count | INV-LIFE-BATCH-4 | **fixed**: at most 32 members, bound asserted at 32 |
 
 **Facts verified in this pass:**

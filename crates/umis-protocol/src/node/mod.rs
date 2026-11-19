@@ -578,7 +578,7 @@ impl Node {
 
     /// Checks a proof commitment as the next beacon block would: against the head state, or,
     /// while its zone commitment is still pooled, against the head with the zone's pending
-    /// commitments applied (what the committer built on). `None`: not checkable yet.
+    /// zone commitments applied (what the committer built on). `None`: not checkable yet.
     fn check_pc(&self, pc: &ProofCommitEnvelope) -> Option<bool> {
         let (z, ce) = (pc.pc.zone, pc.pc.beacon_slot);
         let head = self.chain.head_state();
@@ -590,13 +590,15 @@ impl Node {
             }
             return Some(r.is_ok());
         }
-        if self.ctx.p.proof_lag == 0 || !self.zc_pool.contains_key(&(z, ce)) {
+        if !self.zc_pool.contains_key(&(z, ce)) {
             return None;
         }
-        let pending: Vec<(&ZoneCommitEnvelope, Option<&ProofCommitEnvelope>)> =
-            self.zc_pool.iter().filter(|((zz, e), _)| *zz == z && *e <= ce).map(|(_, v)| (v, None)).collect();
+        // Any proof lag: with L = 0 the zone commitment is optimistic only inside the block
+        // that also carries its proofs, which is what this projection models.
+        let pending: Vec<&ZoneCommitEnvelope> =
+            self.zc_pool.iter().filter(|((zz, e), _)| *zz == z && *e <= ce).map(|(_, v)| v).collect();
         let e_next = self.chain.head().slot.map(|s| s + 1).unwrap_or(0).max(ce + 1);
-        let projected = head.with_pending(&self.ctx, &view, e_next, &pending);
+        let projected = head.with_zone_commitments(&self.ctx, &view, e_next, &pending);
         if !projected.awaits_proof(z, ce) {
             return None;
         }

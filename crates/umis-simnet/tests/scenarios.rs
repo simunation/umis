@@ -56,6 +56,11 @@ fn junk_proofs() {
 }
 
 #[test]
+fn junk_proofs_l0() {
+    ok("junk-proofs-l0", 30);
+}
+
+#[test]
 fn same_seed_same_trace() {
     let a = scenarios::run(Scenario::Basic, 7, 15);
     let b = scenarios::run(Scenario::Basic, 7, 15);

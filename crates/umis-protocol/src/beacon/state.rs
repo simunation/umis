@@ -816,6 +816,26 @@ impl BeaconState {
         Ok(())
     }
 
+    /// This state with the given zone commitments applied (those that apply), whatever the
+    /// proof lag: their commitments are then optimistic, so a proof commitment for one can
+    /// be checked with [`Self::check_proof_commitment`] before either is included.
+    pub fn with_zone_commitments(
+        &self,
+        ctx: &Ctx,
+        view: &dyn ChainView,
+        e_next: u64,
+        zcs: &[&ZoneCommitEnvelope],
+    ) -> BeaconState {
+        let mut s = self.clone();
+        for zc in zcs {
+            let mut trial = s.clone();
+            if trial.apply_zone_commitment(ctx, view, e_next, zc).is_ok() {
+                s = trial;
+            }
+        }
+        s
+    }
+
     /// This state with pending zone commitments applied (those that apply),
     /// as the next beacon block would see them. Delegates build on it so a
     /// commitment for `e` can be made before the one for `e − 1` is included.

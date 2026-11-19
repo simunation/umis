@@ -36,10 +36,12 @@ pub enum Scenario {
     LifeSlow,
     JunkProofs,
     LifeStarkJunk,
+    LifeStarkL0,
+    JunkProofsL0,
 }
 
 /// The Game of Life scenarios (globally exact zones, see `task_life2d`).
-pub const LIFE: [&str; 10] = [
+pub const LIFE: [&str; 11] = [
     "life",
     "life-mixed",
     "life-create",
@@ -50,9 +52,10 @@ pub const LIFE: [&str; 10] = [
     "life-stark-keccak",
     "life-slow",
     "life-stark-junk",
+    "life-stark-l0",
 ];
 
-pub const ALL: [&str; 12] = [
+pub const ALL: [&str; 13] = [
     "basic",
     "churn",
     "partition",
@@ -65,6 +68,7 @@ pub const ALL: [&str; 12] = [
     "zone-sparse",
     "stark",
     "junk-proofs",
+    "junk-proofs-l0",
 ];
 
 impl std::str::FromStr for Scenario {
@@ -92,7 +96,9 @@ impl std::str::FromStr for Scenario {
             "life-stark-keccak" => Scenario::LifeStarkKeccak,
             "life-slow" => Scenario::LifeSlow,
             "junk-proofs" => Scenario::JunkProofs,
+            "junk-proofs-l0" => Scenario::JunkProofsL0,
             "life-stark-junk" => Scenario::LifeStarkJunk,
+            "life-stark-l0" => Scenario::LifeStarkL0,
             _ => return Err(format!("unknown scenario {s}")),
         })
     }
@@ -134,11 +140,17 @@ pub fn run(s: Scenario, seed: u64, slots: u64) -> Outcome {
             life_checked(stark(cfg, slots.clamp(20, 40)), false)
         }
         Scenario::LifeSlow => life_checked(life_slow(SimConfig::life(seed), slots.max(40)), false),
+        Scenario::LifeStarkL0 => {
+            let mut cfg = SimConfig::life(seed);
+            cfg.stark_config = Some("koalabear-keccak-test".into());
+            life_checked(stark_with_lag(cfg, slots.clamp(20, 40), 0), false)
+        }
         Scenario::JunkProofs => {
             let mut cfg = SimConfig::new(seed);
             cfg.proof_lag = 1;
             junk_proofs(cfg, slots.max(30), false)
         }
+        Scenario::JunkProofsL0 => junk_proofs(SimConfig::new(seed), slots.max(30), false),
         Scenario::LifeStarkJunk => {
             let mut cfg = SimConfig::life(seed);
             cfg.stark_config = Some("koalabear-keccak-test".into());
@@ -688,9 +700,15 @@ pub fn zone_sparse(mut cfg: SimConfig, slots: u64) -> Outcome {
 /// Real Plonky3 proofs (test FRI preset; water3d or life2d AIR by zone task) with proof lag L = 1: helpers prove
 /// off the event loop, proof commitments follow their zone commitments one
 /// beacon slot later, and beacon validators verify every STARK.
-pub fn stark(mut cfg: SimConfig, slots: u64) -> Outcome {
+pub fn stark(cfg: SimConfig, slots: u64) -> Outcome {
+    stark_with_lag(cfg, slots, 1)
+}
+
+/// [`stark`] with proof lag `lag`: with `L = 0` every zone commitment is included together
+/// with its STARK-proven proof commitment (no optimistic window, no `MissingProof`).
+pub fn stark_with_lag(mut cfg: SimConfig, slots: u64, lag: u64) -> Outcome {
     cfg.proof_backend = task_water3d::air::BACKEND_ID.into();
-    cfg.proof_lag = 1;
+    cfg.proof_lag = lag;
     cfg.members_per_zone = 4;
     let mut sim = Sim::new(cfg);
     sim.net.prove_delay_ms = 300;
