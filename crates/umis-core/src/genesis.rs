@@ -141,11 +141,21 @@ pub struct Genesis {
     pub proof_backend: String,
     /// Pinned STARK configuration when `proof_backend = plonky3`.
     pub stark_config_id: Option<String>,
+    /// Opt-in to an insecure STARK configuration (the `-test` presets, ≈ 2 bits): required for
+    /// any `stark_config_id` outside [`SECURE_STARK_CONFIGS`] (INV-PARAM-1). Nodes refuse such
+    /// a genesis unless started with `--allow-insecure-proofs`. Omitted from the JSON when false,
+    /// so it does not change the hash of secure genesis files.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub insecure_proofs: bool,
     /// Devnet faucet key that may sign `Grant` txs.
     pub faucet: NodeId,
     pub validators: Vec<GenesisValidator>,
     pub zones: Vec<GenesisZone>,
 }
+
+/// The `stark_config_id`s with ≥ 100 proven bits (the P100 FRI preset): `None` means
+/// `koalabear`. Any other id needs `insecure_proofs` (INV-PARAM-1).
+pub const SECURE_STARK_CONFIGS: &[&str] = &["koalabear", "koalabear-keccak"];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum GenesisError {
@@ -216,6 +226,16 @@ impl Genesis {
         if p.unbonding <= p.proof_lag + p.anchor_depth + 1 {
             return bad("unbonding U must exceed the rollback window L + D + 1".into());
         }
+        if self.proof_backend == "plonky3"
+            && !self.insecure_proofs
+            && !self.stark_config_id.as_deref().is_none_or(|id| SECURE_STARK_CONFIGS.contains(&id))
+        {
+            return bad(format!(
+                "stark_config_id {:?} is not a secure configuration ({SECURE_STARK_CONFIGS:?}); \
+                 set insecure_proofs to use it",
+                self.stark_config_id
+            ));
+        }
         let TopologySpec::Lattice3d { bounds, .. } = &self.topology;
         let mut seen_ids = std::collections::BTreeSet::new();
         let mut seen_loc = std::collections::BTreeSet::new();
@@ -268,6 +288,7 @@ mod tests {
             couplings: vec![],
             proof_backend: "mock".into(),
             stark_config_id: None,
+            insecure_proofs: false,
             faucet: crate::crypto::SecretKey::from_label("faucet").node_id(),
             validators: vec![],
             zones: [(0, [0, 0, 0], 4), (1, [1, 0, 0], 8), (2, [0, 1, 0], 4), (3, [1, 1, 0], 16)]
@@ -308,5 +329,26 @@ mod tests {
         g.params.anchor_depth = 1;
         assert!(g.validate().is_err());
         assert!(sample().validate().is_ok());
+    }
+
+    /// INV-PARAM-1: an insecure STARK configuration needs the explicit opt-in.
+    #[test]
+    fn insecure_stark_configs_need_the_opt_in() {
+        let mut g = sample();
+        g.proof_backend = "plonky3".into();
+        for id in [None, Some("koalabear"), Some("koalabear-keccak")] {
+            g.stark_config_id = id.map(Into::into);
+            g.validate().unwrap();
+        }
+        for id in ["koalabear-test", "koalabear-keccak-test", "anything"] {
+            g.stark_config_id = Some(id.into());
+            g.insecure_proofs = false;
+            assert!(g.validate().is_err(), "{id}");
+            g.insecure_proofs = true;
+            g.validate().unwrap();
+        }
+        // The flag stays out of secure genesis files (their hash is unchanged).
+        g.insecure_proofs = false;
+        assert!(!g.to_json_pretty().contains("insecure_proofs"));
     }
 }

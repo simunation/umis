@@ -9,12 +9,20 @@ use p3_fri::FriParameters;
 /// FRI parameter preset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FriPreset {
-    /// Plonky3's benchmark preset: blowup 2 (`log_blowup = 1`), 100 queries, 16 query-PoW bits
-    /// (~116 conjectured bits). `log_blowup = 1` caps the AIR constraint degree at 3.
+    /// The production preset: **≥ 101 proven bits in the unique-decoding regime** (BCI+20 UD
+    /// only, no 2025–26 list-decoding result) for every shape the umis verifiers accept
+    /// (INV-PARAM-3, `docs/zk/air-spec.md` §6): blowup 4 (`log_blowup = 2`, so constraint
+    /// degree ≤ 5), fold arity 8, 128 queries; grinding 16 bits at the query, out-of-domain,
+    /// batch-combination and lookup sites, 12 bits per commit-phase fold round. The
+    /// security tests in the task crates recompute the bound with p3-security.
+    P100,
+    /// Plonky3's benchmark preset: blowup 2 (`log_blowup = 1`), 100 queries, 16 query-PoW bits.
+    /// About 66 proven / 102 conjectured bits: benchmarks only, not selectable by a genesis.
     Benchmark,
     /// Same shape as [`FriPreset::Benchmark`] but only a few queries and no grinding: fast,
-    /// insecure, for unit tests. Without grinding proofs are deterministic (native grinding
-    /// is a parallel search that returns any valid nonce), so tests can pin proof bytes.
+    /// insecure (≈2 bits), for unit tests and genesis files marked `insecure_proofs`. Without
+    /// grinding proofs are deterministic (native grinding is a parallel search that returns any
+    /// valid nonce), so tests can pin proof bytes.
     Test,
 }
 
@@ -22,6 +30,16 @@ impl FriPreset {
     /// FRI parameters for this preset over the given (extension-field) MMCS.
     pub const fn fri_params<M>(self, mmcs: M) -> FriParameters<M> {
         match self {
+            Self::P100 => FriParameters {
+                log_blowup: 2,
+                log_final_poly_len: 0,
+                max_log_arity: 3,
+                num_queries: 128,
+                batch_proof_of_work_bits: 16,
+                commit_proof_of_work_bits: 12,
+                query_proof_of_work_bits: 16,
+                mmcs,
+            },
             Self::Benchmark => FriParameters::new_benchmark(mmcs),
             Self::Test => FriParameters {
                 log_blowup: 1,
@@ -33,6 +51,48 @@ impl FriPreset {
                 query_proof_of_work_bits: 0,
                 mmcs,
             },
+        }
+    }
+
+    /// `log2` of the FRI blowup (the constraint degree must be ≤ `2^log_blowup + 1`).
+    pub const fn log_blowup(self) -> usize {
+        match self {
+            Self::P100 => 2,
+            Self::Benchmark | Self::Test => 1,
+        }
+    }
+
+    /// Grinding bits before the out-of-domain point (`StarkConfig::with_ood_proof_of_work_bits`).
+    pub const fn ood_pow_bits(self) -> usize {
+        match self {
+            Self::P100 => 16,
+            Self::Benchmark | Self::Test => 0,
+        }
+    }
+
+    /// Grinding bits before the LogUp challenges (`StarkConfig::with_lookup_proof_of_work_bits`).
+    pub const fn lookup_pow_bits(self) -> usize {
+        match self {
+            Self::P100 => 16,
+            Self::Benchmark | Self::Test => 0,
+        }
+    }
+
+    /// Whether proofs under this preset are secure (≥ 100 proven bits). Only these may be
+    /// selected by a genesis that does not opt into `insecure_proofs` (INV-PARAM-1).
+    pub const fn is_secure(self) -> bool {
+        matches!(self, Self::P100)
+    }
+
+    /// The grinding this preset puts at the non-FRI sites, as p3-security counts it.
+    pub const fn grinding_sites(self) -> p3_security::GrindingSites {
+        p3_security::GrindingSites {
+            out_of_domain: self.ood_pow_bits(),
+            batch_combination: match self {
+                Self::P100 => 16,
+                Self::Benchmark | Self::Test => 0,
+            },
+            lookup_challenge: self.lookup_pow_bits(),
         }
     }
 }
@@ -73,6 +133,8 @@ pub mod goldilocks {
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
         let pcs = Pcs::new(Dft::default(), val_mmcs, preset.fri_params(challenge_mmcs));
         Config::new(pcs, Challenger::new(perm))
+            .with_ood_proof_of_work_bits(preset.ood_pow_bits())
+            .with_lookup_proof_of_work_bits(preset.lookup_pow_bits())
     }
 }
 
@@ -112,6 +174,8 @@ pub mod koala_bear {
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
         let pcs = Pcs::new(Dft::default(), val_mmcs, preset.fri_params(challenge_mmcs));
         Config::new(pcs, Challenger::new(perm))
+            .with_ood_proof_of_work_bits(preset.ood_pow_bits())
+            .with_lookup_proof_of_work_bits(preset.lookup_pow_bits())
     }
 }
 
@@ -280,5 +344,7 @@ pub mod koala_bear_keccak {
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
         let pcs = Pcs::new(Dft::default(), val_mmcs, preset.fri_params(challenge_mmcs));
         Config::new(pcs, HybridChallenger::new(default_koalabear_poseidon2_16()))
+            .with_ood_proof_of_work_bits(preset.ood_pow_bits())
+            .with_lookup_proof_of_work_bits(preset.lookup_pow_bits())
     }
 }

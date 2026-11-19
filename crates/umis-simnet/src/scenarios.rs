@@ -34,10 +34,12 @@ pub enum Scenario {
     LifeStark,
     LifeStarkKeccak,
     LifeSlow,
+    JunkProofs,
+    LifeStarkJunk,
 }
 
 /// The Game of Life scenarios (globally exact zones, see `task_life2d`).
-pub const LIFE: [&str; 9] = [
+pub const LIFE: [&str; 10] = [
     "life",
     "life-mixed",
     "life-create",
@@ -47,9 +49,10 @@ pub const LIFE: [&str; 9] = [
     "life-stark",
     "life-stark-keccak",
     "life-slow",
+    "life-stark-junk",
 ];
 
-pub const ALL: [&str; 11] = [
+pub const ALL: [&str; 12] = [
     "basic",
     "churn",
     "partition",
@@ -61,6 +64,7 @@ pub const ALL: [&str; 11] = [
     "zone-layers",
     "zone-sparse",
     "stark",
+    "junk-proofs",
 ];
 
 impl std::str::FromStr for Scenario {
@@ -87,6 +91,8 @@ impl std::str::FromStr for Scenario {
             "life-stark" => Scenario::LifeStark,
             "life-stark-keccak" => Scenario::LifeStarkKeccak,
             "life-slow" => Scenario::LifeSlow,
+            "junk-proofs" => Scenario::JunkProofs,
+            "life-stark-junk" => Scenario::LifeStarkJunk,
             _ => return Err(format!("unknown scenario {s}")),
         })
     }
@@ -128,6 +134,19 @@ pub fn run(s: Scenario, seed: u64, slots: u64) -> Outcome {
             life_checked(stark(cfg, slots.clamp(20, 40)), false)
         }
         Scenario::LifeSlow => life_checked(life_slow(SimConfig::life(seed), slots.max(40)), false),
+        Scenario::JunkProofs => {
+            let mut cfg = SimConfig::new(seed);
+            cfg.proof_lag = 1;
+            junk_proofs(cfg, slots.max(30), false)
+        }
+        Scenario::LifeStarkJunk => {
+            let mut cfg = SimConfig::life(seed);
+            cfg.stark_config = Some("koalabear-keccak-test".into());
+            cfg.proof_backend = task_life2d::air::BACKEND_ID.into();
+            cfg.proof_lag = 1;
+            cfg.members_per_zone = 4;
+            life_checked(junk_proofs(cfg, slots.clamp(20, 40), true), false)
+        }
     }
 }
 
@@ -434,6 +453,36 @@ pub fn faults(mut cfg: SimConfig, slots: u64) -> Outcome {
     }
     if sim.injected.len() < 3 {
         report.violations.push(format!("only {} faults staged", sim.injected.len()));
+    }
+    finish(sim, report)
+}
+
+/// A full node (it follows every zone) sends a junk proof commitment and junk shares for
+/// every zone commitment the moment it is pooled, racing the honest committers. The pools
+/// must not let junk hold a slot: no `MissingProof` rollback, and commitments get proven.
+pub fn junk_proofs(cfg: SimConfig, slots: u64, stark: bool) -> Outcome {
+    let mut sim = Sim::new(cfg);
+    if stark {
+        sim.net.prove_delay_ms = 300;
+    }
+    sim.run_to_slot(4);
+    sim.net.nodes[0].node.cfg.adversary.junk_proofs = true;
+    sim.honest[0] = false;
+    sim.run_to_slot(slots);
+    let mut report = oracle::check(&sim, 3, slots.saturating_sub(2), 4);
+    let head = sim.node(sim.archive).chain.head_state().clone();
+    let reasons: Vec<_> = head.rollback_log.iter().map(|r| format!("{:?}", r.reason)).collect();
+    if reasons.iter().any(|r| r == "MissingProof") {
+        report.violations.push(format!("junk proofs caused a missing-proof rollback (rollbacks: {reasons:?})"));
+    }
+    let proven = head
+        .commits
+        .values()
+        .flatten()
+        .filter(|c| matches!(c.status, CommitStatus::Proven | CommitStatus::Settled))
+        .count();
+    if proven == 0 {
+        report.violations.push("no commitment was proven".into());
     }
     finish(sim, report)
 }

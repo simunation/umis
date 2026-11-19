@@ -32,6 +32,22 @@ genesis (the default), and run provers with `UMIS_GPU_PROVE=1` (`UMIS_GPU=3090` 
 `UMIS_GPU_PROFILE=1` prints phase timings and program statistics; `UMIS_GPU_JIT=0` interprets the constraint bytecode
 instead of compiling it; `UMIS_GPU_GRIND=0` keeps proof-of-work grinding on the CPU.
 
+**P100 preset (2026-11-19).** Genesis ids now use `FriPreset::P100` (blowup 4, fold arity 8, 128 queries, grinding
+at the query, out-of-domain and batch sites). The GPU prover needed no change: blowup, arity and the extra
+grinding sites come from the config (the batch and OOD grinds also run on the GPU). Back to back on the 3090 Ti,
+256×256 k = 1: 3 provers × batch 16 0.62 → 0.77 ms per slot, one proof at a time 3.0 → 3.7 ms. Per batch of 16
+(`UMIS_GPU_PROFILE=1`, quiet): absorbing the opened values into the transcript 4.3 ms (CPU), FRI 2.8 ms (CPU), batch
+grind 0.45 ms, reduced openings 0.8 ms; the tables below are the earlier `Benchmark` runs.
+
+**Plan: FRI on the GPU (not built).** FRI is now about 13% of a batch on one prover and overlaps the GPU work of
+other provers, so it would save at most about 0.1–0.2 ms per slot. Steps, in order: (1) fold the reduced-opening
+vector on the device (arity-8 fold kernel over EF4, bit-reversed as `TwoAdicFriFolding`); (2) commit each folded
+layer with the existing Keccak leaf/layer kernels (`MerkleTreeMmcs` over EF4 rows of 8, byte-compatible, tested
+like `device_tree_equals_cpu_tree`); (3) keep the CPU transcript: observe each layer root, sample beta, grind on
+the GPU; (4) answer queries by gathering sibling rows and digest paths from the device trees, as `GpuMmcs` does for
+the input trees; (5) emit `FriProof` unchanged and test against `verify_fri`. The larger CPU item, absorbing about
+9 500 opened values, is fixed by the proof format.
+
 ## Batch proofs (k = 1, the default)
 
 With one generation per slot, a proof's fixed cost (Merkle trees, transcript, FRI, its 16-bit proof-of-work) is

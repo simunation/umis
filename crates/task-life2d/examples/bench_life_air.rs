@@ -1,7 +1,7 @@
 //! `cargo run --release -p task-life2d --features stark --example bench_life_air -- [n,k,strips,rpr ...]`
 //!
 //! One advancing life2d slot of a centre zone (8 live neighbours): native
-//! step time vs proof generation (trace + STARK, benchmark FRI preset),
+//! step time vs proof generation (trace + STARK, P100 FRI preset; `PRESET=benchmark`: the old one),
 //! verification time and proof size. Thread count: `RAYON_NUM_THREADS`;
 //! `LIFE_HASH=keccak` uses the Keccak Merkle config, `keccak-gpu` also the GPU
 //! coset LDE (`--features cuda`).
@@ -83,7 +83,10 @@ fn main() {
         };
         let lh = std::env::var("LIFE_HASH").unwrap_or_default();
         let hash = if lh.starts_with("keccak") { MerkleHash::Keccak } else { MerkleHash::Poseidon2 };
-        let mut b = Life2dStark::with_hash(FriPreset::Benchmark, hash);
+        let mut b = Life2dStark::with_hash(
+            if std::env::var("PRESET").as_deref() == Ok("benchmark") { FriPreset::Benchmark } else { FriPreset::P100 },
+            hash,
+        );
         if lh == "keccak-gpu" {
             assert!(b.use_gpu(true), "GPU prover unavailable (build with --features cuda)");
         }

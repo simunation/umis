@@ -141,6 +141,9 @@ impl Sim {
         genesis.proof_backend = cfg.proof_backend.clone();
         if cfg.proof_backend == task_water3d::air::BACKEND_ID {
             genesis.stark_config_id = Some(cfg.stark_config.clone().unwrap_or_else(|| "koalabear-test".into()));
+            // SimNet runs the fast, insecure presets by default (INV-PARAM-1 opt-in).
+            genesis.insecure_proofs =
+                !umis_core::genesis::SECURE_STARK_CONFIGS.contains(&genesis.stark_config_id.as_deref().unwrap_or(""));
         }
         genesis.validate().expect("valid genesis");
         let backend = umis_tasks::backend_for(&genesis).expect("backend");

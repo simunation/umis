@@ -86,6 +86,10 @@ See [`zk/life2d-air-spec.md`](zk/life2d-air-spec.md) for the invariants. Summary
 
 ### Benchmarks
 
+Since 2026-11-19 genesis ids use `FriPreset::P100` (≥ 101 proven bits, `zk/life2d-air-spec.md` §6): at k = 1,
+256×256 proves in 8.0 ms instead of 7.3 ms (250 KB instead of 194 KB), 64×64 in 6.7 instead of 2.6 ms; on the GPU,
+3 provers × batch 16 take 0.77 instead of 0.62 ms per slot. The tables below are the earlier `Benchmark` runs.
+
 Quiet machine (load ≈ 2–6 of 16 cores), 8 rayon threads (16 did not help), `FriPreset::Benchmark`, best of 5, native
 build with AVX2 (`x86-64-v3`, `.cargo/config.toml`). Command:
 `cargo run --release -p task-life2d --features stark --example bench_life_air -- n,k,strips,rpr …`

@@ -315,7 +315,13 @@ Related malleability: `LeafData` and the proof bytes inside a beacon block are n
 
 ## 9. Key risks and inefficiencies
 
-1. **First-writer-wins plus missing validation leads to a global rollback (liveness DoS).** Unverified shares (multi-slot blocks, mock shares from any key, nodes without an engine) and proof commitments checked only for their signature both occupy their slot permanently. The beacon refuses them, `MissingProof` fires after L, and `global_rollback` rolls back every zone. Fix by:
+1. **[Fixed 2026-11-19]** (nodes check a received proof commitment against the head state plus the zone's pending
+   commitments before pooling it, keep up to 8 unchecked candidates per key (one per signer), evict candidates that
+   fail at block building or on a new head, and `with_pending` no longer drops a zone commitment whose pooled proof
+   commitment fails; zone engines track shares they made or verified (`trusted`): an unverifiable share never stops
+   self-proving and a verified one replaces it; mock shares need a zone-member prover; failed share verifications
+   are `Reject`ed. SimNet `junk-proofs` and `life-stark-junk` run a full node that sends junk proof commitments and
+   shares for every commitment.) **First-writer-wins plus missing validation leads to a global rollback (liveness DoS).** Unverified shares (multi-slot blocks, mock shares from any key, nodes without an engine) and proof commitments checked only for their signature both occupy their slot permanently. The beacon refuses them, `MissingProof` fires after L, and `global_rollback` rolls back every zone. Fix by:
    - verifying before storing, buffering several candidates per key, or replacing a pooled item when beacon `apply` fails;
    - checking `can_act_for` and the leaves in `on_proof_commit`;
    - checking `identifies_prover` in mock `on_share`;

@@ -584,8 +584,10 @@ where
     let mut transcript =
         PcsProverTranscript::<Challenger, Val, Challenge>::new(challenger, PcsShape::from_opened_values(fri, &opened));
     transcript.claimed_openings(&opened);
+    lap("absorb opened values");
     let (alpha, batch_pow_witness) = transcript.batch_phase();
     let batch_pow_witness = batch_pow_witness.unwrap_or(Val::ZERO);
+    lap("batch phase");
 
     // FRI inputs: per height, sum over (matrix, point) in Plonky3's order of
     // alpha^o (f(z) - f(x)) / (z - x), with o the running count of reduced columns.

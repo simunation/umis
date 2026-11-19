@@ -125,6 +125,13 @@ pub fn genesis(a: GenesisArgs) -> anyhow::Result<()> {
     g.proof_backend = a.proof_backend.clone();
     if a.proof_backend == "plonky3" {
         g.stark_config_id = Some(a.stark_config.clone());
+        if !umis_core::genesis::SECURE_STARK_CONFIGS.contains(&a.stark_config.as_str()) {
+            eprintln!(
+                "WARNING: {} is an insecure STARK configuration (test only); genesis marked insecure_proofs",
+                a.stark_config
+            );
+            g.insecure_proofs = true;
+        }
     }
     g.validate().map_err(|e| anyhow::anyhow!("{e}"))?;
     let reg = crate::registry();

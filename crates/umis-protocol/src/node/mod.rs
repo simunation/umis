@@ -40,6 +40,9 @@ pub struct Adversary {
     pub forge_input_at: Option<(ZoneId, u64)>,
     /// Never prove or submit proof commitments for `(zone, commit slot)`.
     pub withhold_proofs: Option<(ZoneId, u64)>,
+    /// Send a junk proof commitment and junk shares for every zone commitment as soon as
+    /// it is pooled, instead of real ones.
+    pub junk_proofs: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -219,6 +222,17 @@ pub struct Node {
     tx_pool: BTreeMap<Hash, (u64, SignedTx)>,
     zc_pool: BTreeMap<(ZoneId, u64), ZoneCommitEnvelope>,
     pc_pool: BTreeMap<(ZoneId, u64), ProofCommitEnvelope>,
+    /// Pooled proof commitments that verified against the head state or that this node
+    /// built itself. Others are candidates: replaced by a trusted one, evicted when they
+    /// fail a check (proof-pool DoS fix: no junk item can hold a slot until `MissingProof`).
+    pc_trusted: BTreeSet<(ZoneId, u64)>,
+    /// Further unchecked candidates per key, at most one per signer: when the pooled
+    /// candidate is evicted the next one takes its place.
+    pc_alts: BTreeMap<(ZoneId, u64), Vec<ProofCommitEnvelope>>,
+    /// Zone commitments already on chain whose proof commitment is still missing: a
+    /// member can still build one (e.g. after a pooled one failed, or its signer left).
+    zc_awaiting: BTreeMap<(ZoneId, u64), ZoneCommitEnvelope>,
+    junk_sent: BTreeSet<(ZoneId, u64)>,
     vote_pool: BTreeMap<ZoneId, BTreeMap<(Hash, NodeId), SignedVote>>,
     voted: BTreeSet<Hash>,
     reported: BTreeSet<(NodeId, ZoneId, u64)>,
@@ -241,6 +255,8 @@ pub struct Node {
 }
 
 const MAX_BATCH: u32 = 32;
+/// Unchecked proof-commitment candidates kept per key besides the pooled one.
+const MAX_PC_ALTS: usize = 8;
 
 impl Node {
     pub fn new(ctx: Arc<Ctx>, cfg: NodeConfig) -> Result<Self, String> {
@@ -259,6 +275,10 @@ impl Node {
             tx_pool: BTreeMap::new(),
             zc_pool: BTreeMap::new(),
             pc_pool: BTreeMap::new(),
+            pc_trusted: BTreeSet::new(),
+            pc_alts: BTreeMap::new(),
+            zc_awaiting: BTreeMap::new(),
+            junk_sent: BTreeSet::new(),
             vote_pool: BTreeMap::new(),
             voted: BTreeSet::new(),
             reported: BTreeSet::new(),
@@ -451,13 +471,11 @@ impl Node {
             }
             (Topic::ZoneProof(z) | Topic::ZoneOut(z), Gossip::ProofShare(s)) if s.leaf.zone == z => {
                 match self.engines.get_mut(&z) {
-                    Some(e) => {
-                        if e.on_share(&self.ctx, &self.chain, *s) {
-                            Validation::Accept
-                        } else {
-                            Validation::Ignore
-                        }
-                    }
+                    Some(e) => match e.on_share(&self.ctx, &self.chain, *s) {
+                        crate::zone::ShareVerdict::Stored => Validation::Accept,
+                        crate::zone::ShareVerdict::Ignored => Validation::Ignore,
+                        crate::zone::ShareVerdict::Bad => Validation::Reject,
+                    },
                     None => Validation::Accept,
                 }
             }
@@ -505,19 +523,135 @@ impl Node {
             return Validation::Ignore;
         }
         self.zc_pool.insert(key, zc);
+        // A proof commitment that arrived first is checkable now.
+        if self.pc_pool.contains_key(&key) && !self.pc_trusted.contains(&key) {
+            self.check_pc_candidates();
+        }
         Validation::Accept
     }
 
+    /// A received proof commitment. It is checked like the beacon chain will check it as soon
+    /// as its zone commitment is on chain: one that fails is never pooled, one that passes
+    /// replaces an unchecked candidate. Before that it is only a candidate, and a node's
+    /// own build replaces it (see `zone_duties`).
     fn on_proof_commit(&mut self, pc: ProofCommitEnvelope) -> Validation {
         if !self.ctx.verify(&pc.pc.signer, &pc.pc.address(), &pc.sig) {
             return Validation::Reject;
         }
         let key = (pc.pc.zone, pc.pc.beacon_slot);
-        if self.pc_pool.contains_key(&key) {
+        if self.pc_trusted.contains(&key) {
             return Validation::Ignore;
         }
-        self.pc_pool.insert(key, pc);
-        Validation::Accept
+        if !self.chain.head_state().can_act_for(key.0, &pc.pc.signer) {
+            // The beacon chain refuses proof commitments from non-members.
+            return Validation::Ignore;
+        }
+        match self.check_pc(&pc) {
+            // Not relayed. (Not `Reject`: a peer on another fork may hold a different
+            // commitment for this key.)
+            Some(false) => return Validation::Ignore,
+            Some(true) => {
+                self.pc_pool.insert(key, pc);
+                self.pc_trusted.insert(key);
+                self.pc_alts.remove(&key);
+                return Validation::Accept;
+            }
+            None => {}
+        }
+        match self.pc_pool.get(&key) {
+            None => {
+                self.pc_pool.insert(key, pc);
+                Validation::Accept
+            }
+            Some(p) if p.pc.signer == pc.pc.signer => Validation::Ignore,
+            Some(_) => {
+                // Keep it (and relay it): the pooled candidate may be junk.
+                let alts = self.pc_alts.entry(key).or_default();
+                if alts.len() >= MAX_PC_ALTS || alts.iter().any(|a| a.pc.signer == pc.pc.signer) {
+                    return Validation::Ignore;
+                }
+                alts.push(pc);
+                Validation::Accept
+            }
+        }
+    }
+
+    /// Checks a proof commitment as the next beacon block would: against the head state, or,
+    /// while its zone commitment is still pooled, against the head with the zone's pending
+    /// commitments applied (what the committer built on). `None`: not checkable yet.
+    fn check_pc(&self, pc: &ProofCommitEnvelope) -> Option<bool> {
+        let (z, ce) = (pc.pc.zone, pc.pc.beacon_slot);
+        let head = self.chain.head_state();
+        let view = self.chain.view();
+        if head.awaits_proof(z, ce) {
+            let r = head.check_proof_commitment(&self.ctx, &view, pc);
+            if let Err(e) = &r {
+                tracing::debug!(zone = z, ce, "proof commitment check failed: {e}");
+            }
+            return Some(r.is_ok());
+        }
+        if self.ctx.p.proof_lag == 0 || !self.zc_pool.contains_key(&(z, ce)) {
+            return None;
+        }
+        let pending: Vec<(&ZoneCommitEnvelope, Option<&ProofCommitEnvelope>)> =
+            self.zc_pool.iter().filter(|((zz, e), _)| *zz == z && *e <= ce).map(|(_, v)| (v, None)).collect();
+        let e_next = self.chain.head().slot.map(|s| s + 1).unwrap_or(0).max(ce + 1);
+        let projected = head.with_pending(&self.ctx, &view, e_next, &pending);
+        if !projected.awaits_proof(z, ce) {
+            return None;
+        }
+        Some(projected.check_proof_commitment(&self.ctx, &view, pc).is_ok())
+    }
+
+    /// Checks the pooled candidates that are checkable now: trusted if they pass, evicted
+    /// if they fail (the next candidate takes the slot; members build their own).
+    fn check_pc_candidates(&mut self) {
+        loop {
+            let mut bad = Vec::new();
+            let mut good = Vec::new();
+            for (k, pc) in &self.pc_pool {
+                if self.pc_trusted.contains(k) {
+                    continue;
+                }
+                match self.check_pc(pc) {
+                    Some(true) => good.push(*k),
+                    Some(false) => {
+                        tracing::debug!(zone = k.0, ce = k.1, "evicting proof commitment");
+                        bad.push(*k);
+                    }
+                    None => {}
+                }
+            }
+            for k in &good {
+                self.pc_alts.remove(k);
+            }
+            self.pc_trusted.extend(good);
+            if bad.is_empty() {
+                return;
+            }
+            // Evicting promotes the next candidate, which is checked in the next round.
+            for k in bad {
+                self.evict_pc(k);
+            }
+        }
+    }
+
+    /// Drops a pooled proof commitment that failed a check, so a valid one can take its
+    /// place (this node's zone engine may build and send its own again).
+    fn evict_pc(&mut self, k: (ZoneId, u64)) {
+        self.pc_pool.remove(&k);
+        self.pc_trusted.remove(&k);
+        if let Some(eng) = self.engines.get_mut(&k.0) {
+            eng.sent_proof.remove(&k.1);
+        }
+        if let Some(alts) = self.pc_alts.get_mut(&k) {
+            if !alts.is_empty() {
+                self.pc_pool.insert(k, alts.remove(0));
+            }
+            if alts.is_empty() {
+                self.pc_alts.remove(&k);
+            }
+        }
     }
 
     fn on_output(&mut self, b: OutputBundle) -> Validation {

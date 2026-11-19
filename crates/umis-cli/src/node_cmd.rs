@@ -206,10 +206,19 @@ pub struct NodeArgs {
     /// Not a genesis validator: get faucet stake and join (`member` or `full`).
     #[arg(long)]
     pub join: Option<String>,
+    /// Run a genesis that opts into an insecure STARK configuration (`insecure_proofs`,
+    /// the `-test` presets): proofs then carry about 2 bits of security (INV-PARAM-1).
+    #[arg(long)]
+    pub allow_insecure_proofs: bool,
 }
 
 pub async fn node(a: NodeArgs) -> anyhow::Result<()> {
     let g = load_genesis(&a.genesis)?;
+    anyhow::ensure!(
+        !g.insecure_proofs || a.allow_insecure_proofs,
+        "genesis uses the insecure STARK configuration {:?}; pass --allow-insecure-proofs to run it",
+        g.stark_config_id
+    );
     let key = keys::load_or_create_secret(&a.key)?;
     std::fs::create_dir_all(&a.data_dir)?;
     let bootstrap = resolve_bootstrap(&a.bootstrap, a.bootstrap_http.as_deref()).await?;

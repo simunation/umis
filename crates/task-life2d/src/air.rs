@@ -99,7 +99,7 @@ pub const BACKEND_ID: &str = "plonky3";
 const DIGEST_LIMBS: usize = 16;
 pub const N_PUBLIC: usize = DIGEST_LIMBS;
 /// Cells per packed periodic limb (`2^30 < p`, KoalaBear).
-const LIMB_BITS: usize = 30;
+use crate::shape::LIMB_BITS;
 
 /// First byte of a life2d proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,70 +117,9 @@ pub enum ProofTag {
     BatchRef = 3,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Shape {
-    pub n: usize,
-    pub k: usize,
-    pub strips: usize,
-    pub rpr: usize,
-    /// Inner columns per strip.
-    pub w: usize,
-    /// Columns per strip, halo included.
-    pub ws: usize,
-    /// Rows per strip, halo included.
-    pub y: usize,
-    /// Trace height.
-    pub height: usize,
-}
+pub use crate::shape::Shape;
 
 impl Shape {
-    pub fn of(p: &Life2dParams) -> Self {
-        let (n, k, strips, rpr) = (p.n(), p.k(), p.strips as usize, p.rows_per_trace_row as usize);
-        let w = n / strips;
-        let y = n + 2 * k;
-        let height = (strips * y).div_ceil(rpr).next_power_of_two().max(4);
-        Self { n, k, strips, rpr, w, ws: w + 2 * k, y, height }
-    }
-
-    /// Torus rows.
-    pub fn rows(&self) -> usize {
-        self.rpr * self.height
-    }
-
-    /// Cone width of generation `t ≥ 1`.
-    pub fn cone(&self, t: usize) -> usize {
-        self.ws - 2 * t
-    }
-
-    /// First main column of generation `t ≥ 1` (generation 0 comes first).
-    pub fn base(&self, t: usize) -> usize {
-        self.rpr * self.ws + (1..t).map(|u| 2 * self.rpr * self.cone(u)).sum::<usize>()
-    }
-
-    pub fn width(&self) -> usize {
-        self.base(self.k + 1)
-    }
-
-    /// Main column of generation-0 cell at slot `i`, strip column `x`.
-    pub fn col0(&self, i: usize, x: usize) -> usize {
-        i * self.ws + x
-    }
-
-    /// Main column of cell `a` (`+1`: its `v`) at generation `t ≥ 1`, slot `i`,
-    /// strip column `x` (inside the cone).
-    pub fn col(&self, t: usize, i: usize, x: usize) -> usize {
-        debug_assert!(t >= 1 && x >= t && x < self.ws - t);
-        self.base(t) + 2 * (i * self.cone(t) + x - t)
-    }
-
-    /// Packed limbs of a generation-0 row (`Ws` cells) and of an output row (`w`).
-    fn limbs0(&self) -> usize {
-        self.ws.div_ceil(LIMB_BITS)
-    }
-    fn limbs_out(&self) -> usize {
-        self.w.div_ceil(LIMB_BITS)
-    }
-
     /// Number of mask offsets `o = t + i` for generations `1..=k`.
     fn offsets(&self) -> usize {
         self.k + self.rpr
@@ -202,12 +141,6 @@ impl Shape {
     }
     pub fn num_periodic(&self) -> usize {
         self.p_mask(self.offsets(), 0)
-    }
-
-    /// Exact number of constraints [`LifeAir::eval`] asserts.
-    pub fn num_constraints(&self) -> usize {
-        let cells: usize = (1..=self.k).map(|t| self.cone(t)).sum();
-        self.rpr * (self.ws + self.limbs0() + 2 * cells + self.limbs_out())
     }
 
     /// `(strip, row in the strip)` of a stacked row, `None` in the padding.
@@ -584,15 +517,15 @@ impl Life2dStark {
         }
     }
 
-    /// From a genesis `stark_config_id`: `koalabear` (benchmark FRI, Poseidon2),
-    /// `koalabear-keccak` (benchmark FRI, Keccak Merkle tree and transcript), and
+    /// From a genesis `stark_config_id`: `koalabear` (P100 FRI, Poseidon2),
+    /// `koalabear-keccak` (P100 FRI, Keccak Merkle tree, Poseidon2 transcript), and
     /// their `-test` variants (few queries, fast and insecure, for tests).
     pub fn from_config_id(id: Option<&str>) -> Result<Self, String> {
         match id.unwrap_or("koalabear") {
-            "koalabear" => Ok(Self::new(FriPreset::Benchmark)),
+            "koalabear" => Ok(Self::new(FriPreset::P100)),
             "koalabear-test" => Ok(Self::new(FriPreset::Test)),
             "koalabear-keccak" | "koalabear-keccak-test" => {
-                let preset = if id == Some("koalabear-keccak") { FriPreset::Benchmark } else { FriPreset::Test };
+                let preset = if id == Some("koalabear-keccak") { FriPreset::P100 } else { FriPreset::Test };
                 let mut b = Self::with_hash(preset, MerkleHash::Keccak);
                 // UMIS_GPU_PROVE=1: this node proves with the GPU coset LDE (`cuda` builds).
                 b.use_gpu(std::env::var("UMIS_GPU_PROVE").as_deref() == Ok("1"));
@@ -841,6 +774,11 @@ impl Life2dStark {
     }
 }
 
+/// Most members one batch STARK may have: the proven security of a batch falls with the
+/// number of codewords it combines, and the P100 bound is asserted at this size
+/// (INV-LIFE-BATCH-4). Larger commitments are proved as several batches.
+pub const MAX_BATCH: usize = 32;
+
 /// `ProofTag::BatchHead ‖ count (u16 BE) ‖ count member statement addresses ‖ postcard batch proof`.
 fn batch_head(members: &[Hash], body: &[u8]) -> Bytes {
     let mut out = vec![ProofTag::BatchHead as u8];
@@ -859,7 +797,7 @@ fn parse_batch_head(p: &[u8]) -> Result<(Vec<Hash>, &[u8]), ProofError> {
         return Err(bad());
     }
     let n = u16::from_be_bytes([rest[0], rest[1]]) as usize;
-    if n < 2 || rest.len() < 2 + 32 * n {
+    if !(2..=MAX_BATCH).contains(&n) || rest.len() < 2 + 32 * n {
         return Err(bad());
     }
     let members = (0..n).map(|k| Hash(rest[2 + 32 * k..2 + 32 * (k + 1)].try_into().expect("32"))).collect();
@@ -921,14 +859,22 @@ impl Life2dStark {
                 out[i] = Some(self.prove(items[i].0, &items[i].1, prover)?);
             }
         } else {
-            let input: Vec<_> = claims.iter().map(|(h, sl, e, a)| (*h, *sl, e, *a)).collect();
-            let proof = g.prove_ext_batch(&shapes[0], &input).map_err(ProofError::Prover)?;
-            let body = postcard::to_allocvec(&proof).map_err(|e| ProofError::Prover(e.to_string()))?;
-            let members: Vec<Hash> = idx.iter().map(|&i| items[i].0.address()).collect();
-            let head = batch_head(&members, &body);
-            let h = umis_core::keccak256(&head);
-            for (k, &i) in idx.iter().enumerate() {
-                out[i] = Some(if k == 0 { head.clone() } else { batch_ref(&h, k) });
+            // At most MAX_BATCH members per batch STARK (INV-LIFE-BATCH-4).
+            for (c, part) in idx.chunks(MAX_BATCH).enumerate() {
+                if part.len() == 1 {
+                    out[part[0]] = Some(self.prove(items[part[0]].0, &items[part[0]].1, prover)?);
+                    continue;
+                }
+                let lo = c * MAX_BATCH;
+                let input: Vec<_> = claims[lo..lo + part.len()].iter().map(|(h, sl, e, a)| (*h, *sl, e, *a)).collect();
+                let proof = g.prove_ext_batch(&shapes[0], &input).map_err(ProofError::Prover)?;
+                let body = postcard::to_allocvec(&proof).map_err(|e| ProofError::Prover(e.to_string()))?;
+                let members: Vec<Hash> = part.iter().map(|&i| items[i].0.address()).collect();
+                let head = batch_head(&members, &body);
+                let h = umis_core::keccak256(&head);
+                for (k, &i) in part.iter().enumerate() {
+                    out[i] = Some(if k == 0 { head.clone() } else { batch_ref(&h, k) });
+                }
             }
         }
         Ok(out.into_iter().map(|p| p.expect("every item")).collect())
@@ -995,16 +941,23 @@ impl ProofBackend for Life2dStark {
                 }
             }
         }
-        if idx.len() == 1 || !self.batch {
-            for (k, i) in idx.iter().enumerate() {
-                out[*i] = Some(self.prove_claim(&airs[k], traces[k].clone(), &publics[k]).map_err(ProofError::Prover)?);
+        let mut traces = traces.into_iter();
+        // At most MAX_BATCH members per batch STARK (INV-LIFE-BATCH-4).
+        let chunk = if self.batch { MAX_BATCH } else { 1 };
+        for (c, part) in idx.chunks(chunk).enumerate() {
+            let lo = c * chunk;
+            let hi = lo + part.len();
+            let tr: Vec<_> = traces.by_ref().take(part.len()).collect();
+            if part.len() == 1 {
+                let t = tr.into_iter().next().expect("one trace");
+                out[part[0]] = Some(self.prove_claim(&airs[lo], t, &publics[lo]).map_err(ProofError::Prover)?);
+                continue;
             }
-        } else if idx.len() > 1 {
-            let body = self.prove_claims_batch(&airs, traces, &publics).map_err(ProofError::Prover)?;
-            let members: Vec<Hash> = idx.iter().map(|&i| items[i].0.address()).collect();
+            let body = self.prove_claims_batch(&airs[lo..hi], tr, &publics[lo..hi]).map_err(ProofError::Prover)?;
+            let members: Vec<Hash> = part.iter().map(|&i| items[i].0.address()).collect();
             let head = batch_head(&members, &body);
             let h = umis_core::keccak256(&head);
-            for (k, &i) in idx.iter().enumerate() {
+            for (k, &i) in part.iter().enumerate() {
                 out[i] = Some(if k == 0 { head.clone() } else { batch_ref(&h, k) });
             }
         }

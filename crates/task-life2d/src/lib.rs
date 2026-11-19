@@ -48,6 +48,7 @@
 pub mod board;
 pub mod devnet;
 pub mod reference;
+pub mod shape;
 
 #[cfg(feature = "stark")]
 pub mod air;
@@ -607,6 +608,20 @@ impl ZoneTask for Life2d {
         }
         if p.rows_per_trace_row < 2 || p.rows_per_trace_row > 16 {
             return bad("rows_per_trace_row must be in 2..=16".into());
+        }
+        // INV-LIFE-PARAM-1: the proof shape stays inside the envelope its security is proven at.
+        let s = shape::Shape::of(p);
+        if s.height > shape::MAX_HEIGHT || s.width() > shape::MAX_WIDTH || s.num_constraints() > shape::MAX_CONSTRAINTS
+        {
+            return bad(format!(
+                "STARK shape {}x{} with {} constraints exceeds {}x{} / {}",
+                s.height,
+                s.width(),
+                s.num_constraints(),
+                shape::MAX_HEIGHT,
+                shape::MAX_WIDTH,
+                shape::MAX_CONSTRAINTS
+            ));
         }
         Ok(())
     }

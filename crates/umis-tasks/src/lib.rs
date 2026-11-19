@@ -90,6 +90,7 @@ mod tests {
         assert_eq!(backend_for(&g).unwrap().id(), umis_proof::MOCK_BACKEND);
         g.proof_backend = "plonky3".into();
         g.stark_config_id = Some("koalabear-test".into());
+        g.insecure_proofs = true;
         assert!(backend_for(&g).unwrap().is_async());
         for id in ["koalabear", "koalabear-keccak", "koalabear-keccak-test"] {
             g.stark_config_id = Some(id.into());

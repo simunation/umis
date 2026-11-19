@@ -66,6 +66,7 @@ pub fn devnet_genesis(o: DevnetOptions) -> Genesis {
         couplings: vec![],
         proof_backend: "mock".into(),
         stark_config_id: None,
+        insecure_proofs: false,
         faucet: o.faucet,
         validators: o.validators,
         zones,

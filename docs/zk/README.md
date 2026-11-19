@@ -36,17 +36,18 @@ Local, untracked resources are in `tmp/zk-research/`:
 
 **Environment:** Rust 1.99.1 with wasm32, wasm-bindgen-cli 0.2.108, and npm dependencies. All of these pass: the workspace tests, the STARK tests, the wasm golden proof (equal to native), SimNet `stark`, and the web build.
 
-**Open issues, by severity:**
+**Open issues, by severity** (status 2026-11-19):
 
 | # | Issue | Invariant | Status |
 |---|---|---|---|
-| 1 | **Non-canonical state/halo blobs (`v ± p`) get valid proofs.** Exploit confirmed | INV-CANON-1 | open; masked today by members' re-execution |
-| 2 | `shift` 15–16 accepted, so the stencil wraps mod p | INV-ARITH-1 | open |
-| 3 | Real security ≈ 65.9 proven / ≈101 conjectured bits, not the "~116" in the `config.rs` comment. `koalabear-test` (~2 bits) is selectable by any genesis | INV-PARAM-1/3 | open |
-| 4 | Junk shares or proof commitments trigger a global `MissingProof` rollback (DoS) | — (protocol) | open |
-| 5 | The tamper tests only reach the prover's debug checker in debug builds. They pass in `--release`, where the verifier rejects, but nothing enforces that | air-spec §8 | open |
-| 6 | Native builds lack AVX2, so the prover is ~4× slower (355–419 ms vs ~90 ms at 2 threads) | — | open |
-| 7 | Scaling: one 261 KB proof per slot plus full states per leaf on the beacon chain, ≈3.9 MB per 4 s with 4 zones | — | roadmap phases 2–3 |
+| 1 | Non-canonical state/halo blobs (`v ± p`) got valid proofs | INV-CANON-1 | **fixed** 2026-11-19 (`decode_cells` range check; `non_canonical_blobs_are_rejected`) |
+| 2 | `shift` 15–16 accepted, so the stencil wraps mod p | INV-ARITH-1 | **fixed** (`shift ≤ 14`) |
+| 3 | Security ≈ 66 proven bits; `koalabear-test` selectable by any genesis | INV-PARAM-1/3 | **fixed**: `koalabear*` = P100, ≥ 101 proven bits (UDR) asserted per task; test ids need `insecure_proofs` + `--allow-insecure-proofs` |
+| 4 | Junk shares or proof commitments triggered a global `MissingProof` rollback (DoS) | — (protocol) | **fixed**: proof commitments verified on receipt against head + pending commitments, candidates per signer, eviction; untrusted shares never block self-proving (`junk-proofs`, `life-stark-junk` SimNet scenarios) |
+| 5 | Tamper tests reach the prover's debug checker in debug builds | air-spec §8 | run them with `--release` (CLAUDE.md); life2d also with `LIFE_PRESET=p100` |
+| 6 | Native builds lacked AVX2 | — | fixed 2026-11-14 (`.cargo/config.toml`) |
+| 7 | Scaling: per-slot proofs plus full states per leaf on the beacon chain | — | roadmap phases 2–3 (recursion, INV-PARAM-5/6, INV-LIFE-FS-2) |
+| 8 | Batch STARK security falls with the member count | INV-LIFE-BATCH-4 | **fixed**: at most 32 members, bound asserted at 32 |
 
 **Facts verified in this pass:**
 - Moving to Plonky3 `=0.9.0-rc.2` is a pure version bump: same proof bytes, tests green.
@@ -71,8 +72,11 @@ Choose per layer: non-recursed final proofs can use PoW everywhere; recursed lea
 
 **Caveat on proven numbers:** p3-security's Johnson-regime commit and batch term uses the 2026 DKT count. Under the classic BCI+20 count alone, the P100-lb3 preset would be about 83 bits, not 101.7. If you want security that rests only on long-established results, use the unique-decoding presets (UDR-only) in `fri-soundness-foundations.md`.
 
+**Decided 2026-11-19:** 100 proven bits, unique-decoding regime (preset P100, `umis_stark::security`). 128 would
+need EF5, a digest of at least 9 elements and Poseidon2 width 24: with EF4 the ceiling is about 113 bits.
+
 **Waiting on the owner:**
-1. Security target: 100 vs 128 proven bits. 128 needs EF5, a digest of at least 9 elements and Poseidon2 width 24.
+1. (decided: 100, see above)
 2. Canonical state roots: keccak/Swarm BMT (dual roots) or Poseidon2.
 3. Browser role: leaf prover only, or also verifier.
 4. Nonlinear physics: it changes the constraint degree, so FRI `log_blowup` has to be at least 2.

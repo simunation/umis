@@ -97,11 +97,19 @@ impl Node {
         for k in stale {
             self.zc_pool.remove(&k);
             self.pc_pool.remove(&k);
+            self.pc_trusted.remove(&k);
+            self.pc_alts.remove(&k);
             if let Some(eng) = self.engines.get_mut(&k.0) {
                 eng.sent_commit.remove(&k.1);
                 eng.sent_proof.remove(&k.1);
             }
         }
+        for (k, zc) in &self.zc_pool {
+            if st.awaits_proof(k.0, k.1) && !self.pc_trusted.contains(k) {
+                self.zc_awaiting.insert(*k, zc.clone());
+            }
+        }
+        self.zc_awaiting.retain(|(z, ce), _| st.awaits_proof(*z, *ce));
         self.zc_pool.retain(|(z, ce), _| {
             st.commits.get(z).is_some_and(|l| !l.iter().any(|c| c.e >= *ce && c.status != CommitStatus::Invalid))
         });
@@ -111,6 +119,11 @@ impl Node {
                     && !l.iter().any(|c| c.e > *ce && c.status != CommitStatus::Invalid)
             })
         });
+        let pc_pool = &self.pc_pool;
+        self.pc_trusted.retain(|k| pc_pool.contains_key(k));
+        let (zc_pool, zc_awaiting) = (&self.zc_pool, &self.zc_awaiting);
+        self.pc_alts.retain(|k, _| zc_pool.contains_key(k) || zc_awaiting.contains_key(k));
+        self.check_pc_candidates();
         self.refresh_following(now, out);
         out.push(Action::Ui(UiEvent::BeaconHead { slot: e, height: head.height, hash: head.hash.short() }));
         if head.height % 8 == 0 {
@@ -338,7 +351,7 @@ impl Node {
         let head = self.chain.head_state().clone();
         let mut committed: BTreeSet<Hash> = BTreeSet::new();
         for (k, zc) in &self.zc_pool {
-            if !self.pc_pool.contains_key(k) {
+            if !self.pc_trusted.contains(k) {
                 committed.extend(zc.blocks.iter().map(|b| b.signed.hash()));
             }
         }
@@ -505,9 +518,12 @@ impl Node {
             return;
         }
         self.proposed.insert(e);
-        let Some((block, refused)) = self.build_block(e) else { return };
+        let Some((block, refused, bad_pcs)) = self.build_block(e) else { return };
         for h in refused {
             self.tx_pool.remove(&h);
+        }
+        for k in bad_pcs {
+            self.evict_pc(k);
         }
         let g = Gossip::BeaconBlock(Box::new(block.clone()));
         match self.chain.insert(&self.ctx, block) {
@@ -534,8 +550,10 @@ impl Node {
     }
 
     /// Builds a block; also returns proposals that were refused (dropped
-    /// from the pool: a refusal is final).
-    fn build_block(&self, e: u64) -> Option<(BeaconBlock, Vec<Hash>)> {
+    /// from the pool: a refusal is final) and unchecked proof commitments that
+    /// failed (evicted, so they cannot block their slot until `MissingProof`).
+    #[allow(clippy::type_complexity)]
+    fn build_block(&self, e: u64) -> Option<(BeaconBlock, Vec<Hash>, Vec<(ZoneId, u64)>)> {
         let parent = self.chain.head().clone();
         let pstate = parent.state.clone()?;
         let view = BranchView { chain: &self.chain, tip: parent.hash };
@@ -560,6 +578,7 @@ impl Node {
             }
         }
         let need_pc = self.ctx.p.proof_lag == 0;
+        let mut bad_pcs = Vec::new();
         for ((z, ce), zc) in &self.zc_pool {
             if *ce >= e {
                 continue;
@@ -577,6 +596,17 @@ impl Node {
                 body.zone_commitments.pop();
                 if pc.is_some() {
                     body.proof_commitments.pop();
+                    // If the zone commitment applies alone, the proof commitment was the
+                    // problem: evict it (a member builds another), and with L ≥ 1 include
+                    // the zone commitment now (with L = 0 it waits for a valid proof).
+                    body.zone_commitments.push(zc.clone());
+                    let zc_ok = pstate.apply_body(&self.ctx, &view, e, seed, &body).is_ok();
+                    if zc_ok && !self.pc_trusted.contains(&(*z, *ce)) {
+                        bad_pcs.push((*z, *ce));
+                    }
+                    if !zc_ok || need_pc {
+                        body.zone_commitments.pop();
+                    }
                 }
             }
         }
@@ -599,7 +629,12 @@ impl Node {
             trial.proof_commitments.sort_by_key(|p| (p.pc.zone, p.pc.beacon_slot));
             match pstate.apply_body(&self.ctx, &view, e, seed, &trial) {
                 Ok(_) => body = trial,
-                Err(err) => tracing::debug!(zone = key.0, commit = key.1, "proof commitment not included: {err}"),
+                Err(err) => {
+                    tracing::debug!(zone = key.0, commit = key.1, "proof commitment not included: {err}");
+                    if !self.pc_trusted.contains(key) {
+                        bad_pcs.push(*key);
+                    }
+                }
             }
         }
         let state = pstate.apply_body(&self.ctx, &view, e, seed, &body).ok()?;
@@ -618,7 +653,7 @@ impl Node {
             state_root: state.hash(),
         };
         let sig = self.cfg.key.sign(&header.address());
-        Some((BeaconBlock { header, sig, seed_sig, body }, refused))
+        Some((BeaconBlock { header, sig, seed_sig, body }, refused, bad_pcs))
     }
 
     fn zone_duties(&mut self, now: u64, e: u64, z: ZoneId, out: &mut Vec<Action>) {
@@ -663,15 +698,30 @@ impl Node {
             }
         }
         // Proof commitments for pooled zone commitments.
-        let keys: Vec<(ZoneId, u64)> =
-            self.zc_pool.keys().filter(|(zz, _)| *zz == z).copied().filter(|k| !self.pc_pool.contains_key(k)).collect();
+        // The committer builds unless it holds a trusted proof commitment (an unchecked
+        // candidate from gossip may be junk); others back it up only when none is pooled.
+        // Commitments pooled, or on chain without a proof yet (`zc_awaiting`).
+        let zcs = self.zc_pool.iter().chain(&self.zc_awaiting).filter(|((zz, _), _)| *zz == z);
+        let keys: Vec<(ZoneId, u64)> = zcs
+            .clone()
+            .filter(|(_, zc)| zc.commitment.signer == self.me || self.cfg.adversary.junk_proofs)
+            .map(|(k, _)| *k)
+            .filter(|k| !self.pc_trusted.contains(k))
+            .chain(zcs.map(|(k, _)| *k).filter(|k| !self.pc_pool.contains_key(k)))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         for key in keys {
             let ce = key.1;
             if self.cfg.adversary.withhold_proofs == Some(key) {
                 continue;
             }
-            let zc = self.zc_pool[&key].clone();
+            let zc = self.zc_pool.get(&key).or_else(|| self.zc_awaiting.get(&key)).expect("pooled").clone();
             let mine = zc.commitment.signer == self.me;
+            if self.cfg.adversary.junk_proofs {
+                self.send_junk_proofs(&zc, out);
+                continue;
+            }
             let slot_ms = self.ctx.grid.beacon_slot_ms();
             let t_next = self.ctx.grid.beacon_slot_start_ms(ce + 1);
             if !mine && now < t_next + slot_ms / 4 {
@@ -691,6 +741,13 @@ impl Node {
                     after_ms = now as i64 - t_next as i64,
                     "proof commitment"
                 );
+                // Trusted only if built from shares this node made or verified, by a node
+                // the beacon chain accepts as its signer.
+                let member = self.chain.head_state().can_act_for(z, &self.me);
+                if member && (self_prove || eng.all_trusted(&zc)) {
+                    self.pc_trusted.insert(key);
+                    self.pc_alts.remove(&key);
+                }
                 self.pc_pool.insert(key, pc.clone());
                 self.publish(Topic::Commit, &Gossip::ProofCommit(Box::new(pc)), out);
             } else if self_prove && self.ctx.backend.is_async() && (mine || batching) {
@@ -709,6 +766,20 @@ impl Node {
                 self.dispatch_proofs(z, outs, out);
             }
         }
+    }
+
+    /// Adversary (tests): junk shares and a junk proof commitment for `zc`, once.
+    fn send_junk_proofs(&mut self, zc: &ZoneCommitEnvelope, out: &mut Vec<Action>) {
+        let key = (zc.commitment.zone, zc.commitment.beacon_slot);
+        if !self.junk_sent.insert(key) {
+            return;
+        }
+        let Some(eng) = self.engines.get(&key.0) else { return };
+        let Some((pc, shares)) = eng.junk_proofs(&self.cfg.key, zc) else { return };
+        for s in shares {
+            self.publish(Topic::ZoneProof(key.0), &Gossip::ProofShare(Box::new(s)), out);
+        }
+        self.publish(Topic::Commit, &Gossip::ProofCommit(Box::new(pc)), out);
     }
 
     fn mint(&mut self, now: u64, z: ZoneId, j: u64, out: &mut Vec<Action>) {

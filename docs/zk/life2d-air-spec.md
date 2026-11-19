@@ -113,6 +113,11 @@ states, outputs, inputs, decision, header; INV-LIFE-IO, -CANON) and must be an a
 verified against the claims the verifier derived (periodic data and digests per member, INV-LIFE-FS-1), so each
 member is bound to its own statement and public data. Hold and birth slots keep tag 0 outside the batch.
 
+**INV-LIFE-BATCH-4 (size).** A batch STARK has at most `MAX_BATCH = 32` members: the verifier rejects a head
+listing more (`parse_batch_head`), and the prover splits a larger commitment into several batches. The batch
+combines every member's codewords with one challenge, so its proven security falls with the member count; §6
+asserts the bound at `MAX_BATCH`.
+
 `batched_slots_verify_only_as_a_group` covers: the honest group; each proof alone; a missing member; swapped
 references; a bit flip in the batch STARK; a member whose claimed next state is false (roots re-derived); replay
 into another zone; an unbatched proof in the same group.
@@ -133,24 +138,41 @@ into another zone; an unbatched proof in the same group.
 
 ## 6. Parameters
 
-Same FRI presets as water (`FriPreset::Benchmark`: `log_blowup = 1`, 100 queries, 16 query-PoW bits), which caps
-the constraint degree at 3; the AIR's maximum degree is 3. p3-security 0.8 (`tmp/zk-research/secprobe`, `LIFE=1`):
+**Preset P100** (`FriPreset::P100`, the `koalabear` and `koalabear-keccak` ids since 2026-11-19): `log_blowup = 2`
+(constraint degree ≤ 5; the AIR's is 3), fold arity 8 (`max_log_arity = 3`), `log_final_poly_len = 0`, 128 queries;
+grinding 16 bits at the query, out-of-domain and batch-combination sites (and lookup, unused here), 12 bits per
+commit-phase fold round. The `-test` ids keep `FriPreset::Test` (4 queries, ≈ 2 bits) and need the genesis
+opt-in `insecure_proofs` (INV-PARAM-1). `FriPreset::Benchmark` (the old preset, 65.9 proven / 102 conjectured bits)
+is kept for benchmarks only.
 
-| Layout `n, k, strips, rpr` | main width | constraints | height | proven | conjectured |
+**INV-PARAM-3 for life2d.** The release criterion is ≥ 101 proven bits (100 plus ethSTARK Cor. 3's union-bound bit)
+in the **unique-decoding regime**, which rests only on BCI+20's UD proximity gaps, not on the 2025–26 list-decoding
+counts (`notes/fri-soundness-foundations.md` §3.5–3.6); |EF4| is fed as 123 bits and collision resistance as 124.
+`p100_is_secure_on_the_whole_envelope` (`air/tests.rs`, via `umis_stark::security`) asserts it at every height of
+the envelope below, for one proof and for `MAX_BATCH` members, at the envelope's width and constraint count and at
+a narrow shape. It is 101.6 bits at the weakest corner (height 2^6, where an LDE has the fewest points per query)
+and about 102.8 at height 2^12.
+
+**INV-LIFE-PARAM-1 (shape envelope).** `validate_params` rejects any zone whose STARK shape (`shape.rs`) has more
+than `MAX_HEIGHT = 2^12` rows, `MAX_WIDTH = 4096` main columns or `MAX_CONSTRAINTS = 8192` constraints, and
+`Shape::of` pads every trace to at least `MIN_HEIGHT = 2^6` rows (padding rows are free, INV-LIFE-CONE-3). Security
+falls with height, width and constraint count, so the bound holds only inside an envelope the verifier enforces
+(`shapes_outside_the_envelope_are_rejected`; every CLI and SimNet layout is inside).
+
+| shape (n, k, strips, rpr) | main width | constraints | height | P100 proven (UDR) | old `Benchmark` (UDR / best) |
 |---|---|---|---|---|---|
-| 64, 4, 4, 2 (default) | 352 | 356 | 2^8 | 65.4 | 106.5 |
-| 64, 4, 2, 2 | 640 | 648 | 2^7 | 64.9 | 106.7 |
-| 128, 8, 4, 2 | 1344 | 1352 | 2^9 | 65.7 | 103.6 |
-| 256, 8, 8, 3 | 2016 | 2028 | 2^10 | 65.9 | 102.0 |
-| 16, 2, 1, 2 (SimNet) | 176 | 180 | 2^4 | 57.3 | 111.5 |
+| 256, 1, 8, 3 (CLI default) | 294 | 306 | 2^10 | 102.7 (× 32 members: 102.7) | 57.5 / 65.9 |
+| 64, 1, 4, 2 | 100 | 104 | 2^8 | 102.5 | |
+| 16, 2, 1, 2 (SimNet) | 176 | 180 | 2^6 (padded) | 101.6 | |
+| envelope corner | 4096 | 8192 | 2^12 | 102.8 (× 32 members: 102.8) | |
 
-Proven security binds on the low-degree test (as for water, INV-PARAM-3); conjectured binds on the batch
-combination, which shrinks slowly with width. The Keccak configuration has the same FRI parameters and 256-bit
-digests (Keccak-256 collision resistance 128 bits, above both figures), so the table holds for it too. Dropping
-the 16 query-PoW bits for 16 more queries was rejected: proven security falls to 57.3 bits (`n = 64`), and keeping
-65 bits would need about 132 queries (30% bigger proofs). `koalabear-test` (≈2 bits) is for tests only (INV-PARAM-1).
-`LifeAir` declares `num_constraints` (it must equal what `eval` asserts; debug builds cross-check) and
-`max_constraint_degree = 3`.
+Measured cost of P100 against `Benchmark`, back to back (Keccak config): CPU, 8 threads, one proof, 256×256 k = 1:
+7.3 → 8.0 ms, 194 → 250 KB; 64×64: 2.6 → 6.7 ms (three 16-bit grinds dominate small zones on the CPU), 78 → 115 KB.
+GPU (3090 Ti), 3 provers × batch 16: 0.62 → 0.77 ms per slot; one proof at a time 3.0 → 3.7 ms.
+
+Dropping the query PoW for more queries was rejected before (it costs about 8 proven bits per 16 bits at blowup 2).
+Without OOD and batch grinding no query count reaches 100 UDR bits for wide batches: the batch-combination term
+(`123 − log2 |LDE| − log2 B`) binds.
 
 ## 7. Required negative tests (all in `src/air/tests.rs`, run with `--release`)
 
@@ -170,4 +192,8 @@ test fail (booleanity, generation-0 limbs, mask, output limbs).
 - InputRef/payload mismatch and unreferenced inputs (INV-LIFE-IO-3);
 - non-canonical states: trailing byte, truncation, header padding (INV-LIFE-CANON-1); other params; missing
   public data;
-- batched proofs (INV-LIFE-BATCH-1..3, §4b).
+- batched proofs (INV-LIFE-BATCH-1..3, §4b); a batch head with more than `MAX_BATCH` members (INV-LIFE-BATCH-4);
+- shapes outside the envelope (INV-LIFE-PARAM-1); the P100 security bound on the whole envelope (INV-PARAM-3).
+
+The whole suite also runs on the production preset: `LIFE_PRESET=p100` (with `LIFE_HASH=keccak` for the Keccak
+configuration).

@@ -32,7 +32,7 @@ fn main() {
             inputs_commitment: umis_core::records::list_root_of::<umis_core::records::InputRef>(&[]),
             outputs_root: bmt::list_root(&leaves),
         };
-        let b = Water3dStark::new(FriPreset::Benchmark);
+        let b = Water3dStark::new(FriPreset::P100);
         let w = Witness {
             instance: inst.as_ref(),
             params: &params,

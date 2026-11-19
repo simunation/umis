@@ -213,13 +213,18 @@ impl Fixture {
     }
 }
 
-/// The test backend; `LIFE_HASH=keccak` runs the whole suite on the Keccak config.
+/// The test backend; `LIFE_HASH=keccak` runs the whole suite on the Keccak config and
+/// `LIFE_PRESET=p100` on the production FRI preset (with all its grinding sites).
 fn backend() -> Life2dStark {
     let hash = match std::env::var("LIFE_HASH").as_deref() {
         Ok("keccak") => MerkleHash::Keccak,
         _ => MerkleHash::Poseidon2,
     };
-    Life2dStark::with_hash(FriPreset::Test, hash)
+    let preset = match std::env::var("LIFE_PRESET").as_deref() {
+        Ok("p100") => FriPreset::P100,
+        _ => FriPreset::Test,
+    };
+    Life2dStark::with_hash(preset, hash)
 }
 
 fn prover_key() -> SecretKey {
@@ -597,7 +602,7 @@ fn profile_phases() {
         let t = Instant::now();
         let cl = get_symbolic_constraints::<Val, _>(&air, layout);
         let t_sym = t.elapsed();
-        let cfg = umis_stark::config::koala_bear::config(FriPreset::Benchmark);
+        let cfg = umis_stark::config::koala_bear::config(FriPreset::P100);
         let t = Instant::now();
         let proof = prove(&cfg, &air, trace, &public).unwrap();
         let t_prove = t.elapsed();
@@ -723,8 +728,71 @@ fn batch_timing() {
         }};
     }
     if std::env::var("LIFE_HASH").as_deref() == Ok("keccak") {
-        run!(umis_stark::config::koala_bear_keccak::config(FriPreset::Benchmark));
+        run!(umis_stark::config::koala_bear_keccak::config(FriPreset::P100));
     } else {
-        run!(umis_stark::config::koala_bear::config(FriPreset::Benchmark));
+        run!(umis_stark::config::koala_bear::config(FriPreset::P100));
     }
+}
+
+/// INV-PARAM-3, INV-LIFE-PARAM-1, INV-LIFE-BATCH-4: the P100 preset gives ≥ 101 proven bits
+/// (unique-decoding regime, p3-security) at every corner of the shape envelope the verifier
+/// accepts, for one proof and for a batch of `MAX_BATCH`.
+#[test]
+fn p100_is_secure_on_the_whole_envelope() {
+    use crate::shape::{MAX_CONSTRAINTS, MAX_HEIGHT, MAX_WIDTH, MIN_HEIGHT};
+    use umis_stark::security::{ProofShape, TARGET_BITS, proven_udr_bits};
+    for log_h in MIN_HEIGHT.trailing_zeros()..=MAX_HEIGHT.trailing_zeros() {
+        for m in [1, MAX_BATCH] {
+            for (w, c) in [(MAX_WIDTH, MAX_CONSTRAINTS), (64, 64)] {
+                let shape = ProofShape {
+                    log_height: log_h as usize,
+                    num_constraints: m * c,
+                    max_degree: 3,
+                    // main at zeta and zeta·g, two quotient chunks over EF4 at zeta
+                    batched_openings: m * (2 * w + 2 * 4),
+                    logup: None,
+                };
+                let bits = proven_udr_bits(FriPreset::P100, &shape);
+                assert!(bits >= TARGET_BITS, "2^{log_h} x{m} width {w}: {bits:.1} bits");
+            }
+        }
+    }
+    // The old benchmark preset was not: this is what the change buys.
+    let default =
+        ProofShape { log_height: 10, num_constraints: 306, max_degree: 3, batched_openings: 596, logup: None };
+    assert!(proven_udr_bits(FriPreset::Benchmark, &default) < 70.0);
+}
+
+/// INV-LIFE-PARAM-1: shapes outside the envelope are rejected by `validate_params`;
+/// every shape the CLI and SimNet use is inside it.
+#[test]
+fn shapes_outside_the_envelope_are_rejected() {
+    use crate::shape::{MAX_HEIGHT, MAX_WIDTH, MIN_HEIGHT};
+    let mut p = Life2dParams::default_for([0, 0, 0], 4);
+    for (n, k, strips, rpr) in
+        [(16, 2, 1, 2), (64, 4, 4, 2), (64, 4, 2, 2), (128, 8, 4, 2), (256, 8, 8, 3), (256, 1, 8, 3)]
+    {
+        (p.n, p.gens, p.strips, p.rows_per_trace_row) = (n, k, strips, rpr);
+        <Life2d as ZoneTask>::validate_params(&p).unwrap_or_else(|e| panic!("{n}/{k}/{strips}/{rpr}: {e}"));
+        let s = Shape::of(&p);
+        assert!(s.height >= MIN_HEIGHT && s.height <= MAX_HEIGHT && s.width() <= MAX_WIDTH);
+    }
+    let envelope = |p: &Life2dParams| {
+        <Life2d as ZoneTask>::validate_params(p).is_err_and(|e| e.to_string().contains("STARK shape"))
+    };
+    // too wide: many generations per slot
+    (p.n, p.gens, p.strips, p.rows_per_trace_row) = (256, 64, 2, 16);
+    assert!(envelope(&p));
+    // too tall: one-column strips
+    (p.n, p.gens, p.strips, p.rows_per_trace_row) = (256, 1, 256, 2);
+    assert!(envelope(&p));
+}
+
+/// INV-LIFE-BATCH-4: a batch head listing more than `MAX_BATCH` members is malformed.
+#[test]
+fn oversized_batch_heads_are_rejected() {
+    let members = vec![Hash::ZERO; MAX_BATCH + 1];
+    assert!(parse_batch_head(&batch_head(&members, &[1, 2, 3])).is_err());
+    let members = vec![Hash::ZERO; MAX_BATCH];
+    assert!(parse_batch_head(&batch_head(&members, &[1, 2, 3])).is_ok());
 }

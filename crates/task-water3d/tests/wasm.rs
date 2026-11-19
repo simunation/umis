@@ -22,7 +22,7 @@ fn stark_proof_matches_native() {
     assert_eq!(a.to_hex(), include_str!("golden-proof-4.txt").trim());
 }
 
-/// Benchmark-preset timings of the wasm prover (single-threaded, as in a
+/// P100-preset timings of the wasm prover (single-threaded, as in a
 /// browser worker): `cargo test --release --target wasm32-unknown-unknown
 /// -p task-water3d --features stark --test wasm -- --include-ignored`.
 #[cfg(feature = "stark")]
@@ -31,7 +31,7 @@ fn stark_proof_matches_native() {
 fn stark_bench_in_wasm() {
     let now = || web_time::Instant::now().duration_since(start()).as_secs_f64() * 1e3;
     for n in [4, 8, 16] {
-        let r = common::stark_roundtrip_with(n, umis_stark::config::FriPreset::Benchmark, &now);
+        let r = common::stark_roundtrip_with(n, umis_stark::config::FriPreset::P100, &now);
         console_log!(
             "n_loc {n:2}: prove {:.0} ms, verify {:.0} ms, proof {} KB",
             r.prove_ms,

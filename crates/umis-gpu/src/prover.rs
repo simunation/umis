@@ -698,9 +698,9 @@ mod tests {
             eprintln!("no GPU; skipped");
             return;
         }
-        let g = GpuStarkProver::new(FriPreset::Benchmark);
-        let interp = GpuStarkProver::new(FriPreset::Benchmark).interpreted();
-        let cpu = config(FriPreset::Benchmark);
+        let g = GpuStarkProver::new(FriPreset::P100);
+        let interp = GpuStarkProver::new(FriPreset::P100).interpreted();
+        let cpu = config(FriPreset::P100);
         let period: Vec<Val> = [3u64, 1, 4, 1].iter().map(|&x| Val::from_u64(x)).collect();
         for log_n in [3, 6, 10] {
             let air = Fib { per: vec![period.clone()] };

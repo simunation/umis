@@ -158,21 +158,29 @@ fn encode_cells(cells: &[Cell]) -> Bytes {
     out
 }
 
-fn decode_cells(b: &[u8], expect: usize) -> Option<Vec<Cell>> {
+/// Range of every committed cell value (states and halos): `[-2^15, 2^15)`, the range the
+/// AIR's byte decomposition gives `qn`. Inside it the field and integer stencil identities
+/// agree, so every value has exactly one encoding (INV-ARITH-2, INV-CANON-1).
+pub const VAL_RANGE: core::ops::Range<i32> = -(1 << 15)..(1 << 15);
+
+/// Decodes exactly `expect` cells, all in [`VAL_RANGE`]; `None` for any other blob, so every
+/// state and halo has one canonical encoding (INV-CANON-1/2).
+pub(crate) fn decode_cells(b: &[u8], expect: usize) -> Option<Vec<Cell>> {
     if b.len() != expect * CELL_BYTES {
         return None;
     }
-    Some(
-        b.chunks_exact(CELL_BYTES)
-            .map(|c| {
-                let mut cell = [0i32; FIELDS];
-                for (i, v) in cell.iter_mut().enumerate() {
-                    *v = i32::from_le_bytes(c[i * 4..i * 4 + 4].try_into().expect("4 bytes"));
-                }
-                cell
-            })
-            .collect(),
-    )
+    let mut out = Vec::with_capacity(expect);
+    for c in b.chunks_exact(CELL_BYTES) {
+        let mut cell = [0i32; FIELDS];
+        for (i, v) in cell.iter_mut().enumerate() {
+            *v = i32::from_le_bytes(c[i * 4..i * 4 + 4].try_into().expect("4 bytes"));
+            if !VAL_RANGE.contains(v) {
+                return None;
+            }
+        }
+        out.push(cell);
+    }
+    Some(out)
 }
 
 pub const PORT_NAMES: [&str; 6] = ["+x", "-x", "+y", "-y", "+z", "-z"];
@@ -205,8 +213,9 @@ impl ZoneTask for Water3d {
         if !p.k_sub.is_power_of_two() || p.k_sub > 16 {
             return bad("k_sub must be a power of two ≤ 16".into());
         }
-        if !(8..=16).contains(&p.shift) {
-            return bad("shift must be in 8..=16".into());
+        // INV-ARITH-1: at shift >= 15 the stencil identity can wrap mod p.
+        if !(8..=14).contains(&p.shift) {
+            return bad("shift must be in 8..=14".into());
         }
         if p.slot_ticks == 0 {
             return bad("slot_ticks must be positive".into());
@@ -273,7 +282,7 @@ impl ZoneTask for Water3d {
             *h = match ports.get(&port) {
                 Some(b) => decode_cells(b, fc).ok_or_else(|| TaskError::Input {
                     port,
-                    msg: format!("expected {} bytes, got {}", fc * CELL_BYTES, b.len()),
+                    msg: format!("expected {} bytes of in-range cells, got {}", fc * CELL_BYTES, b.len()),
                 })?,
                 None => vec![[0; FIELDS]; fc],
             };
@@ -301,9 +310,9 @@ impl ZoneTask for Water3d {
     }
 
     fn decode_state(ctx: &Ctx, b: &[u8]) -> umis_task::Result<State> {
-        decode_cells(b, ctx.p.cells())
-            .map(|cells| State { cells })
-            .ok_or_else(|| TaskError::State(format!("expected {} bytes, got {}", ctx.p.state_bytes(), b.len())))
+        decode_cells(b, ctx.p.cells()).map(|cells| State { cells }).ok_or_else(|| {
+            TaskError::State(format!("expected {} bytes of in-range cells, got {}", ctx.p.state_bytes(), b.len()))
+        })
     }
 
     fn render(ctx: &Ctx, s: &State) -> RenderGrid {

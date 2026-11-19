@@ -217,9 +217,12 @@ action. *Not done:* autonat and NTP-lite clock offset estimation.
 ## Proofs (umis-proof, umis-stark, task-water3d::air)
 
 The genesis selects the backend (`proof_backend`: `mock` or `plonky3`, plus
-`stark_config_id`: `koalabear` = Plonky3's benchmark FRI preset, or
-`koalabear-test` = 4 queries, insecure, for tests). Every node, native or
-browser, builds it with `task_water3d::air::backend_for(genesis)`.
+`stark_config_id`: `koalabear` / `koalabear-keccak` = the P100 FRI preset,
+≥ 101 proven bits (`docs/zk/air-spec.md` INV-PARAM-3), or the `-test`
+variants = 4 queries, insecure, for tests, allowed only with the genesis
+opt-in `insecure_proofs` and `umis-cli node --allow-insecure-proofs`). Every
+node, native or browser, builds it with `umis_tasks::backend_for(genesis)`.
+The tables below were measured with the older benchmark preset.
 
 **Field: KoalaBear** (7a). The toy AIR (`umis-stark::toy`, a 1D stencil with a
 LogUp memory bus, a range-check lookup and periodic public columns, 50

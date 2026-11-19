@@ -1,6 +1,7 @@
 //! GPU prover throughput: `T` threads proving advancing life2d slots concurrently.
 //! `UMIS_GPU=3090 cargo run --release -p task-life2d --features cuda --example gpu_throughput -- n,k,strips,rpr threads proofs [batch]`
 //! With `batch` > 1 every proof is one batch STARK over `batch` slots; times are per slot.
+//! `PRESET=benchmark` measures the old 66-bit preset (default: P100).
 use std::time::Instant;
 use task_life2d::Life2dParams;
 use task_life2d::air::Shape;
@@ -23,7 +24,9 @@ fn main() {
     for (i, c) in ext.cells.iter_mut().enumerate() {
         *c = ((i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 60 < 5) as u8;
     }
-    let g = GpuProver::new(FriPreset::Benchmark);
+    let preset =
+        if std::env::var("PRESET").as_deref() == Ok("benchmark") { FriPreset::Benchmark } else { FriPreset::P100 };
+    let g = GpuProver::new(preset);
     let _ = g.prove_ext(&s, &Default::default(), 1, &ext, &[false; 8]).unwrap(); // warm up
     let t = Instant::now();
     std::thread::scope(|sc| {

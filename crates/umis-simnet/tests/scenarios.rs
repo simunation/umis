@@ -51,6 +51,11 @@ fn zone_sparse() {
 }
 
 #[test]
+fn junk_proofs() {
+    ok("junk-proofs", 30);
+}
+
+#[test]
 fn same_seed_same_trace() {
     let a = scenarios::run(Scenario::Basic, 7, 15);
     let b = scenarios::run(Scenario::Basic, 7, 15);

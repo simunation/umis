@@ -50,7 +50,7 @@ then `|lhs − rhs| ≤ 2^(s+16) + B_F`. That must be `< p` for `lhs ≡ rhs (mo
 - s = 14: `2^30 + B_F`. Sound as long as `B_F < p − 2^30 ≈ 1.06·10^9`, which holds for the genesis bounds.
 - **s ≥ 15: unsound.** Example at s = 16: `2^16·32512 + 1 = p`. `validate_params` currently accepts `8..=16`.
 
-**INV-ARITH-1.** `shift ≤ 14`, enforced in `validate_params`. **Currently violated (accepts up to 16).**
+**INV-ARITH-1.** `shift ≤ 14`, enforced in `validate_params` (fixed 2026-11-19; `shift_above_14_is_rejected`).
 
 **INV-ARITH-2.** Every value that enters a stencil row as an integer, i.e. `X_in` and the halo cells, lies in
 `[−2^15, 2^15)`. In-circuit, `qn` is range-checked, but `q` at t = 0 (pinned to the periodic `x_in`) and the halo values
@@ -79,10 +79,14 @@ catches it as InvalidTransition. **It becomes a full soundness break as soon as 
 
 **INV-CANON-1.** Before `claim_data`, the verifier must reject unless every decoded i32 in `X_in`, `X_out` and every
 halo lies in `[−2^15, 2^15)`. The halos must also have exactly `face_bytes` length (see INV-IO-2). The prover side
-should assert the same.
+should assert the same. **Implemented 2026-11-19:** `decode_cells` (`lib.rs`, `VAL_RANGE`) accepts only in-range
+cells of the exact length, for the native task (`decode_state`, `decode_inputs`) and for the verifier
+(`check_roots`, `halos`), so every state and halo has exactly one encoding (INV-CANON-2).
+`non_canonical_blobs_are_rejected` replays the exploit (aliased X_out, X_in and halo with re-derived roots, digest
+and a proof for the aliased claim) and a short halo; with the range check disabled the aliased X_out is accepted.
 
 **INV-CANON-2.** Every committed blob has exactly one valid encoding (the `seg` codec rule 4 applies to records; the
-raw blobs need INV-CANON-1). Required test: an aliased X_out, X_in or halo with a re-derived digest must fail.
+raw blobs need INV-CANON-1). Test: `non_canonical_blobs_are_rejected`.
 
 ## 3. Trace layout (summary; the authoritative version is the doc comment at `air.rs:1-38`)
 
@@ -148,21 +152,29 @@ seed, never received. When verifying keys are cached, key them by `(keccak(param
 
 - **INV-IO-1.** `to_slot == from_slot + 1` and `params_hash` matches the zone setup. This changes when proofs cover a
   whole commitment; update all three sites listed in `protocol-proof-flow.md` §8.
-- **INV-IO-2.** Halos: a present input must have exactly `face_bytes` bytes. Today `halos()` (`air.rs:294-299`)
-  silently treats a wrong length as zeros, while `decode_inputs` returns an error. Make both reject.
+- **INV-IO-2.** Halos: a present input must have exactly `face_bytes` bytes. `halos()` and `decode_inputs` both
+  reject any other length (fixed 2026-11-19; it used to be read as an absent neighbour).
 - **INV-IO-3.** `inputs.len() == refs.len()`, each payload's bmt address equals its ref, and
   `list_root(refs) == inputs_commitment`. All three hold today.
 - **INV-IO-4.** `outputs_root` is recomputed from `X_out`. That holds today.
 
 ## 6. Parameters and configuration
 
-- **INV-PARAM-1.** No production genesis may select `koalabear-test` (≈2 bits). Genesis validation must reject an
-  unknown `proof_backend` or `stark_config_id`, and must reject `L = 0` with plonky3.
+- **INV-PARAM-1.** No production genesis may select `koalabear-test` (≈2 bits). Since 2026-11-19 `Genesis::validate`
+  rejects a plonky3 genesis whose `stark_config_id` is not in `SECURE_STARK_CONFIGS` (`koalabear`,
+  `koalabear-keccak`) unless it sets `insecure_proofs: true`, and `umis-cli node` refuses such a genesis without
+  `--allow-insecure-proofs` (`insecure_stark_configs_need_the_opt_in`). Unknown ids fail in `backend_for`. Still
+  open: rejecting `L = 0` with plonky3 (SimNet runs that combination on purpose).
 - **INV-PARAM-2.** The lookup degree budget passed to `ProverData::from_airs_and_degrees_with_lookup_budgets` must be
-  derived from the preset's `log_blowup` (max constraint degree `2^log_blowup + 1`), not the literal `1` (`air.rs:473`).
+  derived from the preset's `log_blowup` (max constraint degree `2^log_blowup + 1`), not the literal `1`. Done:
+  `self.preset.log_blowup()`; the per-AIR lookup budget stays 3, the shape the bound below is computed at.
 - **INV-PARAM-3.** The stated security level is computed with `p3-security` for the exact shape and asserted in a test.
-  The current preset gives ≈66 bits proven and ≈101 conjectured, not the "~116" in `config.rs`. See
-  `docs/zk/notes/fri-soundness-foundations.md`.
+  Since 2026-11-19 the `koalabear*` ids use `FriPreset::P100` (blowup 4, arity 8, 128 queries, 16-bit query/OOD/
+  batch/lookup grinding, 12-bit commit grinding): ≥ 101 proven bits in the **unique-decoding** regime (no
+  dependence on 2025–26 list-decoding results) at every height `validate_params` allows (2^8…2^16),
+  `p100_is_secure_for_every_water_shape`, via `umis_stark::security::proven_udr_bits`. The old `Benchmark`
+  preset (≈66 proven / ≈101 conjectured) remains for benchmarks only. `p100_proofs_verify_and_bind_the_preset`
+  proves and verifies under P100 and rejects a Test-preset proof.
 - **INV-PARAM-4.** Trace height × blowup must not exceed KoalaBear's two-adicity (2^24).
 - **INV-PARAM-5 (recursion compatibility).** Proofs that may be recursively aggregated (roadmap phase 3) must use
   0 PoW bits at the batch, lookup and OOD steps. The Plonky3-recursion in-circuit verifier rejects non-zero PoW at
@@ -187,11 +199,11 @@ seed, never received. When verifying keys are cached, key them by `(keccak(param
 
 The existing tests are in `air.rs` (`tampered_traces_are_rejected`, `honest_proof_verifies_and_tampering_is_rejected`)
 and `umis-stark/src/toy.rs`. Add:
-- aliased (non-canonical) X_out, X_in and halo with a re-derived digest (INV-CANON-1);
-- shift 15 and 16 rejected by `validate_params` (INV-ARITH-1);
-- a wrong-length halo rejected (INV-IO-2);
+- done: aliased (non-canonical) X_out, X_in and halo with a re-derived digest (INV-CANON-1);
+- done: shift 15 and 16 rejected by `validate_params` (INV-ARITH-1);
+- done: a wrong-length halo rejected (INV-IO-2);
 - the digest omitted or altered while the periodic data stays the same: rejected (INV-FS-1);
 - a proof replayed for a different `slot`, `zone` or `params_hash`: rejected;
-- a proof made under the `Test` preset rejected by a `Benchmark` verifier (preset binding);
+- done: a proof made under the `Test` preset rejected by a P100 verifier (preset binding);
 - a tampered table multiplicity or memory multiplicity, and an extra read on padding rows;
-- `koalabear-test` in a non-dev genesis rejected (INV-PARAM-1).
+- done: `koalabear-test` in a genesis without `insecure_proofs` rejected (INV-PARAM-1).

@@ -195,8 +195,8 @@ mod tests {
             eprintln!("no GPU; skipped");
             return;
         }
-        let g = GpuProver::new(FriPreset::Benchmark);
-        let cpu = config(FriPreset::Benchmark);
+        let g = GpuProver::new(FriPreset::P100);
+        let cpu = config(FriPreset::P100);
         for (n, k, strips, rpr, absent_mask) in
             [(16, 2, 2, 2, 0u8), (64, 4, 4, 2, 0b1010_0101), (128, 8, 4, 2, 0), (256, 8, 8, 3, 0)]
         {
@@ -242,8 +242,8 @@ mod tests {
             eprintln!("no GPU; skipped");
             return;
         }
-        let g = GpuProver::new(FriPreset::Benchmark);
-        let cpu = config(FriPreset::Benchmark);
+        let g = GpuProver::new(FriPreset::P100);
+        let cpu = config(FriPreset::P100);
         for (n, k, strips, rpr, m) in [(16, 1, 2, 2, 2usize), (64, 1, 4, 2, 5), (64, 4, 4, 2, 3), (256, 1, 8, 3, 8)] {
             let masks = [0u8, 0b1010_0101, 0b0110_0000, 0xff, 0b0000_0001];
             let claims: Vec<(Board, [bool; 8], u64)> = (0..m)

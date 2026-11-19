@@ -140,7 +140,7 @@ mod tests {
         assert_eq!(states, want, "GPU Poseidon2 differs from the CPU");
         // the hooked grind gives witnesses the CPU check accepts, for every buffer fill
         umis_stark::config::koala_bear_keccak::set_grinder(grind);
-        let cfg = umis_stark::config::koala_bear_keccak::config(umis_stark::config::FriPreset::Benchmark);
+        let cfg = umis_stark::config::koala_bear_keccak::config(umis_stark::config::FriPreset::P100);
         for fill in 0..8u64 {
             let mut ch = cfg.initialise_challenger();
             for i in 0..8 + fill {
