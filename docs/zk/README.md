@@ -76,6 +76,15 @@ Choose per layer: non-recursed final proofs can use PoW everywhere; recursed lea
 **Decided 2026-11-19:** 100 proven bits, unique-decoding regime (preset P100, `umis_stark::security`). 128 would
 need EF5, a digest of at least 9 elements and Poseidon2 width 24: with EF4 the ceiling is about 113 bits.
 
+**Recursion vs P100 (measured 2026-11-19, `secprobe RECUR=1`).** Plonky3-recursion's in-circuit verifier rejects
+grinding at the OOD, batch and lookup sites (INV-PARAM-5); P100 uses all three. Without batch grinding the
+unique-decoding batch-combination term (`123 − log2|LDE| − log2 B`) caps leaves at: 101.8 bits for one 256×256
+life proof at the default shape (126 queries at lb 2), 96.8 for a batch of 32, 91–98 for the largest shapes of the
+envelope; lb 3 is worse (bigger LDE). So aggregated leaves at 100 UDR bits need one of: (a) single-instance
+leaves of small shapes only (aggregation then replaces batching); (b) the Johnson regime (depends on DKT26,
+§3.6 of `notes/fri-soundness-foundations.md`); (c) batch grinding supported in-circuit upstream; (d) EF5, which
+adds about 31 bits to every field-size term. The Plonky3 0.9.0-rc.2 bump P3R needs is done (commit 0954b2f).
+
 **Waiting on the owner:**
 1. (decided: 100, see above)
 2. Canonical state roots: keccak/Swarm BMT (dual roots) or Poseidon2.
