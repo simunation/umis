@@ -367,7 +367,17 @@ impl Mmcs<Val> for GpuMmcs {
         indices: &[usize],
         tree: &GpuTree,
     ) -> (Vec<Vec<Vec<Val>>>, Self::MultiProof) {
+        let t0 = std::time::Instant::now();
         let rows = open_rows(tree, indices).expect("GPU open");
+        if std::env::var_os("UMIS_GPU_PROFILE").is_some() {
+            eprintln!(
+                "      open rows {}x{} at {} queries: {:?}",
+                tree.mat.height,
+                tree.mat.width,
+                indices.len(),
+                t0.elapsed()
+            );
+        }
         // Pruned binary paths, in Plonky3's frontier order (see `p3_merkle_tree::pruning`).
         let mut nodes: Vec<usize> = indices.to_vec();
         nodes.sort_unstable();

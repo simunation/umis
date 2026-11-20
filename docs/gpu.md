@@ -39,6 +39,16 @@ grinding sites come from the config (the batch and OOD grinds also run on the GP
 (`UMIS_GPU_PROFILE=1`, quiet): absorbing the opened values into the transcript 4.3 ms (CPU), FRI 2.8 ms (CPU), batch
 grind 0.45 ms, reduced openings 0.8 ms; the tables below are the earlier `Benchmark` runs.
 
+**FRI breakdown, measured 2026-11-20** (`UMIS_GPU_PROFILE=1`, 3090 Ti, batch of 16 at 256×256 k = 1, three runs):
+the FRI step takes about 2.2 ms, of which downloading the 128 queried rows of the 4704-column trace tree (2.4 MB,
+which go into the proof) is 1.1–1.2 ms plus 0.14 ms for the quotient tree (this machine's PCIe link runs at about
+2 GB/s), grinding is about 0.45 ms (already on the GPU), and folding, the commit-phase Merkle trees, the final
+polynomial and the commit-phase query answers together about 0.4 ms. A device FRI could save only that 0.4 ms,
+about 0.025 ms per slot (3%), so it was not built; the plan below stays for a faster link or larger batches. The
+largest remaining CPU cost is absorbing the opened values into the transcript (about 2.7 ms per batch,
+sequential Poseidon2); Plonky3 rc.2 opens either all columns or none at the next row
+(`main_next_row_columns` only matters when empty), so it cannot be cut by opening fewer columns.
+
 **Plan: FRI on the GPU (not built).** FRI is now about 13% of a batch on one prover and overlaps the GPU work of
 other provers, so it would save at most about 0.1–0.2 ms per slot. Steps, in order: (1) fold the reduced-opening
 vector on the device (arity-8 fold kernel over EF4, bit-reversed as `TwoAdicFriFolding`); (2) commit each folded
