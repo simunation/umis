@@ -16,6 +16,14 @@ pub enum FriPreset {
     /// batch-combination and lookup sites, 12 bits per commit-phase fold round. The
     /// security tests in the task crates recompute the bound with p3-security.
     P100,
+    /// Leaf preset for recursive aggregation (Plonky3-recursion verifies it in-circuit, which
+    /// rejects grinding at the out-of-domain, batch and lookup sites): blowup 4, arity 8,
+    /// 128 queries, 16 query-PoW bits, 16 commit-PoW bits per fold round, nothing else.
+    /// Without batch grinding the batch-combination term caps the bound, so it reaches 101
+    /// proven bits (unique decoding) only for single proofs of small shapes, such as a
+    /// 256×256 life zone at the default layout (101.8): check the exact shape with
+    /// [`crate::security::proven_udr_bits`].
+    R100,
     /// Plonky3's benchmark preset: blowup 2 (`log_blowup = 1`), 100 queries, 16 query-PoW bits.
     /// About 66 proven / 102 conjectured bits: benchmarks only, not selectable by a genesis.
     Benchmark,
@@ -40,6 +48,16 @@ impl FriPreset {
                 query_proof_of_work_bits: 16,
                 mmcs,
             },
+            Self::R100 => FriParameters {
+                log_blowup: 2,
+                log_final_poly_len: 0,
+                max_log_arity: 3,
+                num_queries: 128,
+                batch_proof_of_work_bits: 0,
+                commit_proof_of_work_bits: 16,
+                query_proof_of_work_bits: 16,
+                mmcs,
+            },
             Self::Benchmark => FriParameters::new_benchmark(mmcs),
             Self::Test => FriParameters {
                 log_blowup: 1,
@@ -57,7 +75,7 @@ impl FriPreset {
     /// `log2` of the FRI blowup (the constraint degree must be ≤ `2^log_blowup + 1`).
     pub const fn log_blowup(self) -> usize {
         match self {
-            Self::P100 => 2,
+            Self::P100 | Self::R100 => 2,
             Self::Benchmark | Self::Test => 1,
         }
     }
@@ -66,7 +84,7 @@ impl FriPreset {
     pub const fn ood_pow_bits(self) -> usize {
         match self {
             Self::P100 => 16,
-            Self::Benchmark | Self::Test => 0,
+            Self::R100 | Self::Benchmark | Self::Test => 0,
         }
     }
 
@@ -74,7 +92,7 @@ impl FriPreset {
     pub const fn lookup_pow_bits(self) -> usize {
         match self {
             Self::P100 => 16,
-            Self::Benchmark | Self::Test => 0,
+            Self::R100 | Self::Benchmark | Self::Test => 0,
         }
     }
 
@@ -90,7 +108,7 @@ impl FriPreset {
             out_of_domain: self.ood_pow_bits(),
             batch_combination: match self {
                 Self::P100 => 16,
-                Self::Benchmark | Self::Test => 0,
+                Self::R100 | Self::Benchmark | Self::Test => 0,
             },
             lookup_challenge: self.lookup_pow_bits(),
         }

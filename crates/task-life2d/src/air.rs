@@ -209,6 +209,13 @@ pub struct LifeAir {
     periodic: Vec<Vec<Val>>,
 }
 
+impl LifeAir {
+    /// The AIR of a claim from its shape and periodic data ([`claim_data`]).
+    pub fn new(shape: Shape, periodic: Vec<Vec<Val>>) -> Self {
+        Self { shape, periodic }
+    }
+}
+
 impl BaseAir<Val> for LifeAir {
     fn width(&self) -> usize {
         self.shape.width()
@@ -240,7 +247,14 @@ impl<AB: AirBuilder<F = Val>> Air<AB> for LifeAir {
         let s = self.shape;
         let main = builder.main();
         let (cur, next) = (main.current_slice(), main.next_slice());
-        let per: Vec<AB::Expr> = builder.periodic_values().iter().map(|x| (*x).into()).collect();
+        let mut per: Vec<AB::Expr> = builder.periodic_values().iter().map(|x| (*x).into()).collect();
+        if per.is_empty() {
+            // Plonky3-recursion's interaction probe (`RecursiveAir::declares_interactions`,
+            // rev 3a69ba6) builds its symbolic layout without the periodic columns. Only the
+            // constraint shape matters there; every prover and verifier builder supplies all of
+            // them, and zeros in a real check would reject honest proofs, not accept others.
+            per = vec![AB::Expr::ZERO; s.num_periodic()];
+        }
         let three = AB::Expr::from_u64(3);
         let one = AB::Expr::ONE;
         let bases: Vec<usize> = (0..=s.k).map(|t| if t == 0 { 0 } else { s.base(t) }).collect();

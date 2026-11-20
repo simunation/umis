@@ -11,6 +11,7 @@ This was built on 2026-11-03 against commit `4c26c42` (Plonky3 0.8.0). File:line
 | Document | Use it for |
 |---|---|
 | [`air-spec.md`](air-spec.md) | **The rules.** What a proof claims, the arithmetic bounds, the trace layout, and every invariant (`INV-*`) with its current status. Cite these IDs in commits and tests |
+| [`aggregation.md`](aggregation.md) | Recursive aggregation spike (`umis-agg`): measured cost and the ~93-bit security blocker |
 | [`life2d-air-spec.md`](life2d-air-spec.md) | The Game of Life AIR (`task-life2d/src/air.rs`): claim split, light-cone layout, `INV-LIFE-*` invariants, measured security |
 | [`research/REPORT.md`](research/REPORT.md) | The overall analysis: how the simulation and proofs work, measured performance, scaling limits, and the phased roadmap |
 | [`notes/plonky3-implementation-guide.md`](notes/plonky3-implementation-guide.md) | **How to code it.** The Plonky3 0.8 API as used; migration to 0.9.0-rc.2; multi-AIR batches; a compile-checked Poseidon2 state commitment; Plonky3-recursion; security knobs and a CI test; per-phase checklists |
