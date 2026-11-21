@@ -295,3 +295,13 @@ fn with_one_strip_the_halo_digest_ignores_the_zone_board() {
         assert_eq!(halo_digest(&d, &ext) == halo_digest(&d, &blank), independent, "strips {strips}");
     }
 }
+
+#[test]
+fn symbolic_degree_is_six_and_the_life_air_three() {
+    // Periodic columns count as degree 1: `sel · cell` sponge inputs cubed by the S-box give
+    // degree 6 (security inputs must use this, not the declared 3). The life AIR is degree 3.
+    for (n, k, strips, rpr) in [(16, 2, 1, 2), (64, 1, 4, 2)] {
+        let (_, s) = shape(n, k, strips, rpr);
+        assert_eq!(LifeDigestAir::new(s).symbolic_degree(), 6);
+    }
+}

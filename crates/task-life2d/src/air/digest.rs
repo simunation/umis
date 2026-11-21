@@ -431,6 +431,19 @@ pub struct LifeDigestAir {
 }
 
 impl LifeDigestAir {
+    /// The constraint degree Plonky3 derives symbolically (periodic columns count as degree
+    /// 1, so `sel · cell` sponge inputs make the first S-box degree 6).
+    pub fn symbolic_degree(&self) -> usize {
+        use p3_air::symbolic::{AirLayout, get_max_constraint_degree};
+        let layout = AirLayout {
+            main_width: self.shape.width(),
+            num_public_values: N_PUBLIC,
+            num_periodic_columns: self.shape.num_periodic(),
+            ..Default::default()
+        };
+        get_max_constraint_degree::<Val, _>(self, layout, self.shape.life.height)
+    }
+
     /// Panics unless [`DigestShape::supports`] the shape.
     pub fn new(life: Shape) -> Self {
         let shape = DigestShape::new(life);
@@ -455,6 +468,7 @@ impl BaseAir<Val> for LifeDigestAir {
         Some(self.shape.num_constraints())
     }
     fn max_constraint_degree(&self) -> Option<usize> {
+        // A lower bound only: Plonky3 takes the larger of this and the symbolic degree (6).
         Some(3)
     }
 }

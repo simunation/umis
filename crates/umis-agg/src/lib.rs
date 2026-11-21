@@ -152,7 +152,7 @@ impl DigestLeaf {
         ProofShape {
             log_height: d.life.height.trailing_zeros() as usize,
             num_constraints: d.num_constraints(),
-            max_degree: 3,
+            max_degree: self.air.symbolic_degree(),
             batched_openings: 2 * d.width() + 2 * 5,
             logup: None,
         }

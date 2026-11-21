@@ -135,17 +135,19 @@ fn digest_leaf_shapes_are_secure() {
         let mut lp = Life2dParams::default_for([1, 1, 0], 4);
         (lp.n, lp.gens, lp.strips, lp.rows_per_trace_row) = (n, k, strips, rpr);
         let d = DigestShape::new(task_life2d::air::Shape::of(&lp));
+        let degree = task_life2d::air::digest::LifeDigestAir::new(d.life).symbolic_degree();
+        assert_eq!(degree, 6, "sel-gated sponge inputs make the S-box degree 6");
         let shape = umis_stark::security::ProofShape {
             log_height: d.life.height.trailing_zeros() as usize,
             num_constraints: d.num_constraints(),
-            max_degree: 3,
+            max_degree: degree,
             batched_openings: 2 * d.width() + 10,
             logup: None,
         };
-        for p in [AggParams::J101, AggParams::U101] {
-            let bits = p.bits(&shape);
-            assert!(bits >= 101.0, "{n}/{k}/{strips}/{rpr} {p:?}: {bits:.1}");
-        }
+        // J101 (blowup 8) covers degree 6; U101 (blowup 4) does not, so the calculator gives 0.
+        let bits = AggParams::J101.bits(&shape);
+        assert!(bits >= 101.0, "{n}/{k}/{strips}/{rpr} J101: {bits:.1}");
+        assert_eq!(AggParams::U101.bits(&shape), 0.0);
     }
 }
 

@@ -44,7 +44,17 @@ pub fn proven_udr_bits(preset: FriPreset, shape: &ProofShape) -> f64 {
         commit_pow_bits: f.commit_proof_of_work_bits,
         query_pow_bits: f.query_proof_of_work_bits,
     };
+    if !fits(f.log_blowup, shape) {
+        return 0.0;
+    }
     report(&fri, preset.grinding_sites(), shape, 123).udr.security_bits()
+}
+
+/// Whether the calculator's model covers `shape`: a constraint degree above `blowup + 1` is
+/// outside it (p3-security: "the prover cannot commit a quotient"), so its figure would be
+/// meaningless; such shapes are reported as 0 bits.
+pub fn fits(log_blowup: usize, shape: &ProofShape) -> bool {
+    shape.max_degree <= (1 << log_blowup) + 1
 }
 
 /// The challenge field a proof samples from.
@@ -91,6 +101,9 @@ pub fn proven_bits(fri: &RecursiveFri, field: Field, regime: Regime, shape: &Pro
         Field::Ef4 => 123,
         Field::Ef5 => 154,
     };
+    if !fits(fri.log_blowup, shape) {
+        return 0.0;
+    }
     let r = report(&regime_fri, none, shape, bits);
     match regime {
         Regime::UniqueDecoding => r.udr.security_bits(),

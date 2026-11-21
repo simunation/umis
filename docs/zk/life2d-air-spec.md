@@ -145,6 +145,13 @@ digests natively (`digest::public_values`). Tests: `a_false_output_is_rejected`,
 `a_false_previous_board_is_rejected`, `generation_zero_must_match_the_digest`,
 `tampered_sponge_columns_are_rejected`.
 
+**INV-LIFE-DIG-6 (degree, found 2026-11-22).** Plonky3 counts periodic columns as degree 1, so the `sel`-gated
+sponge inputs (degree 2) cubed by the first S-box make the AIR **degree 6**, not the declared 3. Plonky3 uses the
+larger symbolic degree, so proofs are correct. Security figures use `LifeDigestAir::symbolic_degree()`: J101
+(blowup 8) covers it at ≥ 101 bits; U101 (blowup 4) is outside the calculator's model (degree > blowup + 1), and
+`umis_stark::security` now reports 0 bits for any such shape (`fits`). The generic stencil framework keeps sponge
+inputs degree 1: limbs are committed as columns.
+
 **INV-LIFE-DIG-2 (sponge in the trace).** Each row carries `cap_in[8]` and, per permutation, its 128 full-round
 and 20 partial-round S-box outputs (degree-3 constraints, the rounds of `Poseidon2KoalaBear<16>`;
 `permutation_columns_match_the_native_permutation`). Permutation `m`'s input is `[limbs[8m..8m+8], capacity]`,
