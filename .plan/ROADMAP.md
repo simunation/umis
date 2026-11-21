@@ -115,6 +115,21 @@ commitments in the batch head format (spec §4d INV-LIFE-AGG-1..3), the verifier
 the zone block header (dual roots, signed by the minter; a mismatch is fault evidence). The beacon checks
 `chain(statement)` against those roots and `d_halo` against input payloads. Then `LeafData` states are dropped for
 aggregated commitments, and the aggregator becomes a separate role with its own deadline.
+**A4 step 2 design (2026-11-21).** What the beacon checks natively from the states today, and what replaces it
+once the states are gone:
+
+| checked today from `LeafData` states | without states |
+|---|---|
+| `prev/next` match the keccak state roots | header carries a Poseidon2 board root next to the keccak root (minter-signed); `chain()` ties `d_prev`/`d_next` to it; a root mismatch is fault evidence anyone with the state can post |
+| canonical encoding, header fields (`born`, `generation`, `next_slot`, …) | the header fields go into the leaf statement (they are a few field elements, so a public-value check), or into fault evidence |
+| `outputs_root` from `next` (the faces consumers read) | **new in-circuit digest**: `d_faces` over the `X_out` border cells (a 4th sponge, gated by a shape-only face indicator). The beacon checks `keccak(face payload)` against `outputs_root` natively and `d_faces` against a Poseidon2 digest of the payload, or `d_faces` goes into the header |
+| inputs ↔ `inputs_commitment` (keccak) | unchanged (payloads are small, so they stay in `LeafData`); `d_halo` is recomputed from them natively (one strip per zone) |
+| the decision (hold / birth / advance) from the state and inputs | holds and births stay native, which needs their tiny state delta, or they become leaves |
+
+So step 2 is: (i) the `d_faces` sponge in the digest AIR, (ii) a Poseidon2 board root in the zone block header (a
+record layout change: golden vectors, `seg-samples.json`), (iii) the beacon's stateless path for aggregated
+commitments (`LeafData` keeps only inputs), (iv) fault evidence for a Poseidon2/keccak root mismatch. About 2
+sessions. (i) and (ii) are independent.
 **A4 (original plan, 2–3 sessions).** Behind a genesis flag (`aggregation: true`), keep the per-leaf path as
 the fallback:
 - Record `AggregateProof { beacon_slot, zones_root, statement_root, proof }`; an aggregation deadline `L_agg` after
