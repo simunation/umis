@@ -134,8 +134,12 @@ verifier and recurse. Until then aggregation leaves prove on the CPU (16.8–23 
 - ~~**B4**~~ Done 2026-11-21: `Ctx::verify_proof` memoizes failures keyed by statement, proof address **and** a keyed
   fingerprint of the public data (a copied honest proof with wrong states must not condemn the right states); test
   `ctx::tests::failed_verifications_are_memoized_per_public_data`. Grouped batch verification is not memoized.
-- **B5** Browser prover: stop posting the secret key to workers (`crates/umis-web/src/prover.rs:24`); pass only what the
+- ~~**B5**~~ Done 2026-11-21: workers get no key (throwaway key; backends that identify their prover are refused). Was: stop posting the secret key to workers (`crates/umis-web/src/prover.rs:24`); pass only what the
   job needs (async backends do not sign).
+- **B6a (found 2026-11-21)** `GENESIS_ARGS="--proof-backend plonky3" scripts/e2e.sh stark.spec.ts`: browser
+  workers prove, but the bootstrap records 4 rollbacks (the spec expects 0). Same result on `3fb838a`, before this
+  session's changes, at machine load ~14. Suspect: P100 proving cost in wasm and on loaded native provers. Measure
+  with B6 and fix (prover capacity or deadlines) before trusting the browser demo.
 - **B6** Measure P100 in wasm for life2d (browser leaf cost) and EF5 leaves in wasm; record in `docs/life2d.md`.
 - **B7** Refresh the demo (`scripts/demo/`) with P100 and republish the player artifact (the published one predates
   P100).
@@ -164,7 +168,7 @@ verifier and recurse. Until then aggregation leaves prove on the CPU (16.8–23 
 | 1 | ~~B2, B3, B4~~ (done 2026-11-21) | 0.5 | — |
 | 2 | ~~A1 measure~~ (done 2026-11-21) | 0.5 | — |
 | 3 | ~~A2 claim-independent leaf circuit~~ (done 2026-11-21) | 1–2 | A1 |
-| 4 | B1 draft upstream issue, B5 | 0.25 | — |
+| 4 | B1 draft upstream issue, ~~B5~~ (done) | 0.25 | — |
 | 5 | A3 statement schema, per-commitment chaining | 1 | A2, P2 |
 | 6 | A4 protocol integration + SimNet | 2–3 | A3 |
 | 7 | B6, B7 browser numbers, demo refresh | 0.5 | — |

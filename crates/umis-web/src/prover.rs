@@ -15,23 +15,29 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 thread_local! {
-    /// `(genesis hash, prover)` → runner (task instances and STARK setups stay warm).
-    static RUNNERS: RefCell<HashMap<(Hash, Hash), Arc<JobRunner>>> = RefCell::new(HashMap::new());
+    /// Genesis hash → runner (task instances and STARK setups stay warm).
+    static RUNNERS: RefCell<HashMap<Hash, Arc<JobRunner>>> = RefCell::new(HashMap::new());
 }
 
-/// Worker entry point: `job` is a borsh `ProveJob`, the result its proof.
+/// Worker entry point: `job` is a borsh `ProveJob`, the result its proof. Workers never see
+/// the node's secret key: STARK proofs do not depend on the prover's key (the proof
+/// commitment that carries them is signed on the page), so the runner gets a throwaway key,
+/// and a backend whose proofs identify their prover (the mock's signatures) is refused.
 #[wasm_bindgen(js_name = proveJob)]
-pub fn prove_job(genesis_json: &str, secret_hex: &str, job: &[u8]) -> Result<Vec<u8>, JsError> {
+pub fn prove_job(genesis_json: &str, job: &[u8]) -> Result<Vec<u8>, JsError> {
     crate::simnode::init();
     let genesis = Genesis::from_json(genesis_json).map_err(crate::simnode::js_err)?;
-    let key = SecretKey::from_bytes(&Hash::from_hex(secret_hex).map_err(crate::simnode::js_err)?.0);
     let job: ProveJob = borsh::from_slice(job).map_err(crate::simnode::js_err)?;
-    let k = (genesis.hash(), Hash(key.node_id().0));
+    let k = genesis.hash();
     let runner = match RUNNERS.with(|r| r.borrow().get(&k).cloned()) {
         Some(r) => r,
         None => {
             let backend = umis_tasks::backend_for(&genesis).map_err(crate::simnode::js_err)?;
-            let r = Arc::new(JobRunner::new(crate::simnode::registry(), backend, key));
+            if backend.identifies_prover() {
+                return Err(JsError::new("this proof backend signs with the prover's key; prove on the page"));
+            }
+            let r =
+                Arc::new(JobRunner::new(crate::simnode::registry(), backend, SecretKey::from_label("umis-web-worker")));
             RUNNERS.with(|m| m.borrow_mut().insert(k, r.clone()));
             r
         }
