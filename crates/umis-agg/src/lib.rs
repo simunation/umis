@@ -1,214 +1,125 @@
 //! Recursive aggregation of umis leaf proofs with Plonky3-recursion (native only).
 //!
-//! Status: a spike that measures the cost of aggregation (`docs/zk/aggregation.md`).
-//! - [`leaf`]: one life2d slot proved as a uni-STARK under the recursion-compatible
-//!   [`FriPreset::R100`] (Poseidon2 Merkle trees, no OOD/batch/lookup grinding).
-//! - [`layer1`]: a recursive proof that verifies one leaf in-circuit.
-//! - [`aggregate`]: a 2-to-1 recursive proof over two recursive proofs.
+//! Every proof here samples its challenges from KoalaBear⁵ (`QuinticTrinomialExtensionField`,
+//! about 2^155): Plonky3-recursion's in-circuit verifier cannot check proof-of-work at the
+//! out-of-domain, batch or lookup steps, and over KoalaBear⁴ the batch-combination term then
+//! caps the recursive proofs at about 93 bits (`docs/zk/aggregation.md`). The circuit field is
+//! the leaves' challenge field, so leaves are KoalaBear⁵ proofs too.
+//!
+//! - [`config`]: upstream's built-in `KoalaBearD5Poseidon2BinaryConfig` at [`AggParams`].
+//! - [`leaf`]: one life2d slot proved as a uni-STARK.
+//! - [`Layer1`]: a trusted prepared owner whose recursive proofs verify one leaf in-circuit;
+//!   [`Aggregator`]: one whose proofs verify two recursive proofs (2-to-1). Their verifiers
+//!   check every proof against its expected statement (the leaf's public values).
 //!
 //! Plonky3-recursion is unaudited (its README says so); this crate is pinned to one commit.
 
-use std::sync::Arc;
-
-use p3_circuit::ops::{generate_poseidon2_trace, generate_recompose_trace};
-use p3_circuit::{CircuitBuilder, CircuitRunner, NonPrimitiveOpId};
 use p3_circuit_prover::BatchStarkProof;
-use p3_circuit_prover::batch_stark_prover::BatchStarkProver;
-use p3_commit::Pcs;
-use p3_lookup::logup::LogUpGadget;
-use p3_poseidon2_circuit_air::KoalaBearD4Width16;
-use p3_recursion::pcs::{
-    FriProofTargets, InputProofTargets, MerkleCapTargets, RecExtensionValMmcs, RecValMmcs, restore_fri_query_paths,
-    set_fri_mmcs_private_data,
+use p3_circuit_prover::batch_stark_prover::CircuitVerifier;
+use p3_recursion::builtin_config::{
+    FriConfigV1, KoalaBearD5Poseidon2BinaryConfig, SuiteIdV1, koala_bear_d5_poseidon2_binary,
 };
-use p3_recursion::traits::{RecursiveAir, RecursivePcs};
-use p3_recursion::verifier::VerificationError;
+use p3_recursion::verifier::VerifierLimits;
 use p3_recursion::{
-    BatchOnly, FriRecursionBackend, FriRecursionBackendForExt, FriRecursionConfig, FriVerifierParams, NativeFriParams,
-    OpeningTranscript, Poseidon2Config, ProveNextLayerParams, RecursionInput, RecursionOutput,
-    build_and_prove_aggregation_layer, build_and_prove_next_layer, observe_opened_values,
+    BatchOnly, FriRecursionBackend, FriRecursionBackendD5, Poseidon2Config, ProveNextLayerParams, RecursionOutput,
+    TrustedPreparedAggregation, TrustedPreparedInput, TrustedPreparedLayer, TrustedPreparedSource,
 };
-use p3_uni_stark::{Proof, StarkGenericConfig, Val as ValOf, prove, verify};
+use p3_uni_stark::{Proof, prove, verify};
 use task_life2d::Life2dParams;
 use task_life2d::air::{LifeAir, Shape, claim_data, generate_trace};
 use task_life2d::board::Board;
 use umis_core::Hash;
-use umis_stark::config::FriPreset;
-use umis_stark::config::koala_bear::{
-    Challenge, ChallengeMmcs, Challenger, Compress, Config, Dft, Hash as P2Hash, Pcs as MyPcs, Val, ValMmcs,
-};
+use umis_stark::security::{Field, ProofShape, RecursiveFri, Regime, proven_bits};
 
-const DIGEST_ELEMS: usize = 8;
+/// The STARK configuration of every aggregation proof (leaves and recursive layers).
+pub type AggConfig = KoalaBearD5Poseidon2BinaryConfig;
+type Val = p3_koala_bear::KoalaBear;
 
-/// The opening-proof targets of a KoalaBear D4 `TwoAdicFriPcs` verifier circuit.
-pub type InnerFri = FriProofTargets<
-    Val,
-    Challenge,
-    RecExtensionValMmcs<Val, Challenge, DIGEST_ELEMS, RecValMmcs<Val, DIGEST_ELEMS, P2Hash, Compress>>,
-    InputProofTargets<Val, Challenge, RecValMmcs<Val, DIGEST_ELEMS, P2Hash, Compress>>,
-    p3_recursion::pcs::Witness<Val>,
->;
+/// The recursion backend for KoalaBear⁵ (base-field Poseidon2 challenger).
+pub type Backend = FriRecursionBackendD5<16, 8, Poseidon2Config>;
 
-/// The recursion backend for KoalaBear D4 with width-16 Poseidon2.
-pub type Backend = FriRecursionBackendForExt<4, 16, 8, Poseidon2Config>;
-
-/// The umis KoalaBear/Poseidon2 STARK config at a preset, with the FRI verifier parameters a
-/// recursive verifier circuit needs (Plonky3-recursion's `FriRecursionConfig`).
-#[derive(Clone)]
-pub struct AggConfig {
-    config: Arc<Config>,
-    fri_verifier_params: FriVerifierParams,
-    native_fri_params: NativeFriParams,
-    val_mmcs: ValMmcs,
-    fri_params: p3_fri::FriParameters<ChallengeMmcs>,
+/// FRI parameters of the aggregation configuration and the bound they are claimed under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AggParams {
+    pub fri: RecursiveFri,
+    pub regime: Regime,
 }
 
-impl core::ops::Deref for AggConfig {
-    type Target = Config;
-    fn deref(&self) -> &Config {
-        &self.config
-    }
-}
+impl AggParams {
+    /// ≥ 101 proven bits in the Johnson regime (DKT26 line count) for leaves and recursive
+    /// proofs: blowup 8, arity 8, 58 queries, 16-bit query and commit grinding.
+    pub const J101: Self = Self {
+        fri: RecursiveFri { log_blowup: 3, max_log_arity: 3, num_queries: 58, commit_pow_bits: 16, query_pow_bits: 16 },
+        regime: Regime::Johnson,
+    };
+    /// ≥ 101 proven bits in the unique-decoding regime only: blowup 4, arity 8, 128 queries.
+    pub const U101: Self = Self {
+        fri: RecursiveFri {
+            log_blowup: 2,
+            max_log_arity: 3,
+            num_queries: 128,
+            commit_pow_bits: 16,
+            query_pow_bits: 16,
+        },
+        regime: Regime::UniqueDecoding,
+    };
+    /// Fast and insecure (tests).
+    pub const TEST: Self = Self {
+        fri: RecursiveFri { log_blowup: 1, max_log_arity: 1, num_queries: 2, commit_pow_bits: 0, query_pow_bits: 0 },
+        regime: Regime::UniqueDecoding,
+    };
 
-impl AggConfig {
-    /// `preset` must not grind at the OOD, batch or lookup sites ([`FriPreset::R100`] or
-    /// [`FriPreset::Test`]).
-    pub fn new(preset: FriPreset) -> Self {
-        assert_eq!(preset.ood_pow_bits() + preset.lookup_pow_bits(), 0, "recursion rejects OOD/lookup grinding");
-        let perm = p3_koala_bear::default_koalabear_poseidon2_16();
-        let val_mmcs = ValMmcs::new(P2Hash::new(perm.clone()), Compress::new(perm.clone()), 0);
-        let fri_params = preset.fri_params(ChallengeMmcs::new(val_mmcs.clone()));
-        assert_eq!(fri_params.batch_proof_of_work_bits, 0, "recursion rejects batch grinding");
-        let native_fri_params = NativeFriParams::try_from_native::<Val, _>(&fri_params).expect("fri params");
-        let fri_verifier_params = FriVerifierParams::with_mmcs(
-            native_fri_params.log_blowup(),
-            native_fri_params.log_final_poly_len(),
-            native_fri_params.max_log_arity(),
-            native_fri_params.commit_pow_bits(),
-            native_fri_params.query_pow_bits(),
-            native_fri_params.num_queries(),
-            Poseidon2Config::KOALA_BEAR_D4_W16,
-        );
-        let pcs = MyPcs::new(Dft::default(), val_mmcs.clone(), fri_params.clone());
-        let config = Arc::new(Config::new(pcs, Challenger::new(perm)));
-        Self { config, fri_verifier_params, native_fri_params, val_mmcs, fri_params }
+    /// Proven bits of a proof of `shape` under these parameters.
+    pub fn bits(&self, shape: &ProofShape) -> f64 {
+        proven_bits(&self.fri, Field::Ef5, self.regime, shape)
     }
 }
 
-impl StarkGenericConfig for AggConfig {
-    type Challenge = Challenge;
-    type Challenger = Challenger;
-    type Pcs = MyPcs;
-    fn pcs(&self) -> &MyPcs {
-        self.config.pcs()
-    }
-    fn initialise_challenger(&self) -> Challenger {
-        self.config.initialise_challenger()
-    }
-}
-
-type InputTargets = InputProofTargets<Val, Challenge, RecValMmcs<Val, DIGEST_ELEMS, P2Hash, Compress>>;
-
-impl FriRecursionConfig for AggConfig
-where
-    MyPcs: RecursivePcs<
-            Self,
-            InputTargets,
-            InnerFri,
-            MerkleCapTargets<Val, DIGEST_ELEMS>,
-            <MyPcs as Pcs<Challenge, Challenger>>::Domain,
-        >,
-{
-    type Commitment = MerkleCapTargets<Val, DIGEST_ELEMS>;
-    type InputProof = InputTargets;
-    type OpeningProof = InnerFri;
-    type RawOpeningProof = <MyPcs as Pcs<Challenge, Challenger>>::Proof;
-    const DIGEST_ELEMS: usize = DIGEST_ELEMS;
-
-    fn native_fri_validation_params(&self) -> Option<NativeFriParams> {
-        Some(self.native_fri_params)
-    }
-
-    fn with_fri_opening_proof<'a, A, R>(
-        prev: &RecursionInput<'a, Self, A>,
-        f: impl FnOnce(&Self::RawOpeningProof) -> R,
-    ) -> R
-    where
-        A: RecursiveAir<ValOf<Self>, Self::Challenge, LogUpGadget>,
-    {
-        match prev {
-            RecursionInput::UniStark { proof, .. } => f(&proof.opening_proof),
-            RecursionInput::BatchStark { proof, .. } => f(&proof.proof.opening_proof),
-        }
-    }
-
-    fn prepare_circuit_for_verification(
-        &self,
-        circuit: &mut CircuitBuilder<Challenge>,
-    ) -> Result<(), VerificationError> {
-        circuit.enable_poseidon2_perm::<KoalaBearD4Width16, _>(
-            generate_poseidon2_trace::<Challenge, KoalaBearD4Width16>,
-            p3_koala_bear::default_koalabear_poseidon2_16(),
-        );
-        circuit.enable_recompose::<Val>(generate_recompose_trace::<Val, Challenge>);
-        Ok(())
-    }
-
-    fn pcs_verifier_params(
-        &self,
-    ) -> &<MyPcs as RecursivePcs<
-        Self,
-        InputTargets,
-        InnerFri,
-        MerkleCapTargets<Val, DIGEST_ELEMS>,
-        <MyPcs as Pcs<Challenge, Challenger>>::Domain,
-    >>::VerifierParams {
-        &self.fri_verifier_params
-    }
-
-    fn set_fri_private_data(
-        config: &Self,
-        runner: &mut CircuitRunner<'_, Challenge>,
-        op_ids: &[NonPrimitiveOpId],
-        opening_proof: &Self::RawOpeningProof,
-        transcript: OpeningTranscript<Self>,
-    ) -> Result<(), &'static str> {
-        let OpeningTranscript { mut challenger, commitments_with_opening_points } = transcript;
-        observe_opened_values::<Self>(
-            &mut challenger,
-            &commitments_with_opening_points,
-            config.fri_params.batch_proof_of_work_bits,
-        );
-        let claims: Vec<_> = commitments_with_opening_points.into_iter().map(Into::into).collect();
-        let paths = restore_fri_query_paths(
-            &config.fri_params,
-            &config.val_mmcs,
-            &config.val_mmcs,
-            opening_proof,
-            &mut challenger,
-            &claims,
-        )
-        .map_err(|_| "restoring the FRI query paths")?;
-        set_fri_mmcs_private_data::<Val, Challenge, DIGEST_ELEMS>(
-            runner,
-            op_ids,
-            &paths,
-            Poseidon2Config::KOALA_BEAR_D4_W16,
-        )
-    }
+/// The built-in KoalaBear⁵ Poseidon2 configuration at `p`.
+pub fn config(p: &AggParams) -> AggConfig {
+    let f = &p.fri;
+    let descriptor = FriConfigV1::new(
+        SuiteIdV1::KoalaBearD5Poseidon2BinaryFri,
+        f.log_blowup as u32,
+        0,
+        f.max_log_arity as u32,
+        f.num_queries as u32,
+        f.commit_pow_bits as u32,
+        f.query_pow_bits as u32,
+        0,
+        0,
+        0,
+        0,
+    );
+    koala_bear_d5_poseidon2_binary(&descriptor, &VerifierLimits::default()).expect("aggregation FRI parameters")
 }
 
 /// The recursion backend.
 pub fn backend() -> Backend {
-    FriRecursionBackend::<16, 8, _>::new(Poseidon2Config::KOALA_BEAR_D4_W16).for_extension_degree::<4>()
+    FriRecursionBackend::<16, 8, _>::new_d5(Poseidon2Config::KOALA_BEAR_D1_W16)
+        .with_extra_poseidon2_table(Poseidon2Config::KOALA_BEAR_D1_W32)
 }
 
 /// One life2d slot proved for aggregation: its AIR (with the claim's periodic data), proof
-/// and public values.
+/// and public values (the claim digest, its statement).
 pub struct Leaf {
     pub air: LifeAir,
     pub proof: Proof<AggConfig>,
     pub public: Vec<Val>,
+}
+
+impl Leaf {
+    /// The leaf's shape for the security calculator.
+    pub fn shape(&self) -> ProofShape {
+        let s = self.air.shape;
+        ProofShape {
+            log_height: s.height.trailing_zeros() as usize,
+            num_constraints: s.num_constraints(),
+            max_degree: 3,
+            batched_openings: 2 * s.width() + 2 * 5,
+            logup: None,
+        }
+    }
 }
 
 /// Proves one advancing slot of a zone with layout `p` on the extended board `ext`.
@@ -222,36 +133,74 @@ pub fn leaf(cfg: &AggConfig, p: &Life2dParams, slot: u64, ext: &Board, absent: &
     Leaf { air, proof, public }
 }
 
-/// A recursive proof that verifies `leaf` in-circuit.
-pub fn layer1(cfg: &AggConfig, leaf: &Leaf) -> Result<RecursionOutput<AggConfig>, String> {
-    let input = RecursionInput::UniStark {
-        proof: &leaf.proof,
-        air: &leaf.air,
-        public_inputs: leaf.public.clone(),
-        preprocessed_commit: None,
-    };
-    build_and_prove_next_layer::<_, _, _, 4>(&input, cfg, &backend(), &ProveNextLayerParams::default())
-        .map_err(|e| format!("{e:?}"))
+/// A recursive proof and the statement it carries.
+pub struct Recursive {
+    pub out: RecursionOutput<AggConfig>,
+    pub statement: Vec<Val>,
+    pub verifier: CircuitVerifier<AggConfig>,
 }
 
-/// A 2-to-1 recursive proof over two recursive proofs.
-pub fn aggregate(
-    cfg: &AggConfig,
-    left: &RecursionOutput<AggConfig>,
-    right: &RecursionOutput<AggConfig>,
-) -> Result<RecursionOutput<AggConfig>, String> {
-    let l = left.into_recursion_input::<BatchOnly>();
-    let r = right.into_recursion_input::<BatchOnly>();
-    build_and_prove_aggregation_layer::<_, _, _, _, 4>(&l, &r, cfg, &backend(), &ProveNextLayerParams::default())
-        .map_err(|e| format!("{e:?}"))
+impl Recursive {
+    /// Verifies the proof against its retained verifier and statement.
+    pub fn verify(&self) -> Result<(), String> {
+        self.verifier.verify(&self.out.0, &self.statement).map_err(|e| format!("{e:?}"))
+    }
 }
 
-/// Verifies a recursive proof natively.
-pub fn verify_recursive(cfg: &AggConfig, out: &RecursionOutput<AggConfig>) -> Result<(), String> {
-    let mut v = BatchStarkProver::new(cfg.clone()).with_table_packing(ProveNextLayerParams::default().table_packing);
-    v.register_poseidon2_table::<4>(Poseidon2Config::KOALA_BEAR_D4_W16.for_shared_challenger_table());
-    v.register_recompose_table::<4>(true);
-    v.verify_all_tables::<Challenge>(&out.0).map_err(|e| format!("{e:?}"))
+fn params() -> ProveNextLayerParams {
+    ProveNextLayerParams::default()
+}
+
+/// Layer 1: a recursive proof that verifies `leaf` in-circuit, with the leaf's public values
+/// as its statement. The life AIR's per-claim periodic data are circuit constants, so each
+/// claim needs its own owner (INV-LIFE-FS-2).
+pub fn layer1(p: &AggParams, leaf: &Leaf) -> Result<Recursive, String> {
+    let owner = TrustedPreparedLayer::<_, _, _, _, 5>::new(
+        TrustedPreparedSource::UniStark {
+            config: config(p),
+            air: &leaf.air,
+            preprocessed_commit: None,
+            proof: &leaf.proof,
+            public_inputs: &leaf.public,
+        },
+        config(p),
+        backend(),
+        params(),
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    let out = owner
+        .prove(TrustedPreparedInput::UniStark { proof: &leaf.proof, public_inputs: &leaf.public })
+        .map_err(|e| format!("{e:?}"))?;
+    Ok(Recursive { out, statement: leaf.public.clone(), verifier: owner.verifier() })
+}
+
+/// A 2-to-1 recursive proof over two recursive proofs; its statement is the left statement
+/// followed by the right one.
+pub fn aggregate(p: &AggParams, left: &Recursive, right: &Recursive) -> Result<Recursive, String> {
+    let owner = TrustedPreparedAggregation::<_, _, BatchOnly, BatchOnly, _, 5>::new(
+        TrustedPreparedSource::BatchStark {
+            verifier: left.verifier.clone(),
+            proof: &left.out.0,
+            statement: &left.statement,
+        },
+        TrustedPreparedSource::BatchStark {
+            verifier: right.verifier.clone(),
+            proof: &right.out.0,
+            statement: &right.statement,
+        },
+        config(p),
+        backend(),
+        params(),
+    )
+    .map_err(|e| format!("{e:?}"))?;
+    let out = owner
+        .prove(
+            TrustedPreparedInput::BatchStark { proof: &left.out.0, statement: &left.statement },
+            TrustedPreparedInput::BatchStark { proof: &right.out.0, statement: &right.statement },
+        )
+        .map_err(|e| format!("{e:?}"))?;
+    let statement = [left.statement.as_slice(), right.statement.as_slice()].concat();
+    Ok(Recursive { out, statement, verifier: owner.verifier() })
 }
 
 /// Serialized size of a recursive proof.
@@ -260,27 +209,29 @@ pub fn proof_bytes(p: &BatchStarkProof<AggConfig>) -> usize {
 }
 
 /// The shape of a recursive (circuit-table) batch proof for the security calculator: its
-/// tallest table, every opened codeword (base columns count 1, extension columns 4), and
-/// upper estimates for what the proof does not carry (constraints: 4 per opened codeword;
-/// LogUp: 4 interactions of width 8 per permutation column).
-pub fn recursive_shape(p: &BatchStarkProof<AggConfig>) -> umis_stark::security::ProofShape {
+/// tallest table, every opened codeword (base columns count 1, extension columns 5), the
+/// degree its quotient chunking allows, and upper estimates for what the proof does not carry
+/// (constraints: 4 per opened codeword; LogUp: 4 interactions of width 8 per permutation column).
+pub fn recursive_shape(p: &BatchStarkProof<AggConfig>) -> ProofShape {
+    const E: usize = 5;
     let bp = &p.proof;
     let log_height = bp.degree_bits.iter().copied().max().unwrap_or(0);
-    let (mut openings, mut perm_cols) = (0usize, 0usize);
+    let (mut openings, mut perm_cols, mut chunks) = (0usize, 0usize, 1usize);
     for inst in &bp.opened_values.instances {
         let b = &inst.base_opened_values;
         openings += b.trace_local.len() + b.trace_next.as_ref().map_or(0, Vec::len);
         if let Some(pre) = &b.preprocessed {
             openings += pre.local.len() + pre.next.as_ref().map_or(0, Vec::len);
         }
-        openings += 4 * b.quotient_chunks.iter().map(Vec::len).sum::<usize>();
-        openings += 4 * (inst.permutation_local.len() + inst.permutation_next.len());
+        openings += E * b.quotient_chunks.iter().map(Vec::len).sum::<usize>();
+        openings += E * (inst.permutation_local.len() + inst.permutation_next.len());
         perm_cols += inst.permutation_local.len();
+        chunks = chunks.max(b.quotient_chunks.len());
     }
-    umis_stark::security::ProofShape {
+    ProofShape {
         log_height,
         num_constraints: 4 * openings,
-        max_degree: 3,
+        max_degree: chunks + 1,
         batched_openings: openings,
         logup: (perm_cols > 0).then_some((4 * perm_cols, 8)),
     }

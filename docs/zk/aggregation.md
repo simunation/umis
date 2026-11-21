@@ -1,57 +1,61 @@
-# Recursive aggregation (spike, 2026-11-20)
+# Recursive aggregation (`umis-agg`)
 
 `crates/umis-agg` (native only) aggregates life2d leaf proofs with Plonky3-recursion (P3R), pinned to commit
 `3a69ba61f713c8400b14eb3d8f0e52caa13512c7` (unaudited upstream; approved by the owner on 2026-11-20). Plonky3 is on
-`=0.9.0-rc.2`, the version P3R pins.
+`=0.9.0-rc.2`, the version P3R pins. Status: working prototype, not wired into the protocol.
 
-## What exists
+## Design
 
-- `FriPreset::R100` (umis-stark): the leaf preset P3R can verify in-circuit. Blowup 4, arity 8, 128 queries, 16-bit
-  query and per-round commit grinding, **no** OOD, batch or lookup grinding (INV-PARAM-5). Poseidon2 Merkle trees
-  (`koala_bear` config; the Keccak config is not recursion-friendly).
-- `umis_agg::AggConfig`: the umis KoalaBear/Poseidon2 config plus the FRI verifier parameters P3R needs
-  (`FriRecursionConfig`).
-- `leaf` (one advancing slot as a uni-STARK), `layer1` (a recursive proof verifying one leaf), `aggregate` (2-to-1
-  over two recursive proofs), `verify_recursive` (native check), `recursive_shape` (security-calculator shape of a
-  recursive proof).
-- Tests (`tests/agg.rs`, test preset): leaf → layer 1 → 2-to-1, all verified; a leaf presented with another claim's
-  public values does not recurse.
-- Bench: `cargo run --release -p umis-agg --example agg_bench -- 16,2,1,2 64,1,4,2 256,1,8,3`.
+- **Field: KoalaBear⁵** (`QuinticTrinomialExtensionField`, about 2^155) for every aggregation proof. P3R's
+  in-circuit verifier cannot check proof-of-work at the out-of-domain, batch or lookup steps (INV-PARAM-5). Over
+  KoalaBear⁴ the batch-combination term (`F − log2|LDE| − log2 B`) then capped the recursive proofs at 93–96 bits
+  (first spike, 2026-11-20). EF5 adds about 31 bits to every field-size term. P3R's cross-config APIs need the same
+  challenge field on both sides, so leaves are EF5 proofs too.
+- **Config:** upstream's built-in `KoalaBearD5Poseidon2BinaryConfig` (Poseidon2 Merkle trees, binary, 8-element
+  digests) at `AggParams`; backend `FriRecursionBackend::new_d5(KOALA_BEAR_D1_W16)`.
+- **Owners:** `TrustedPreparedLayer` (layer 1: verify one leaf in-circuit) and `TrustedPreparedAggregation` (2-to-1).
+  Their `CircuitVerifier`s check each recursive proof against its expected statement: the leaf's public values (the
+  claim digest), and for a 2-to-1 proof the left statement followed by the right one.
+- **Parameters** (`AggParams`, all without OOD/batch/lookup grinding, 16-bit query and per-round commit grinding,
+  fold arity 8):
 
-## Measured (R100, 16 cores, load about 5)
+  | preset | regime | blowup | queries | leaf / layer 1 / 2-to-1 proven bits |
+  |---|---|---|---|---|
+  | `J101` (default) | Johnson (DKT26 line count, `fri-soundness-foundations.md` §3.6) | 8 | 58 | 102.9 / 102.4 / 102.0 |
+  | `U101` | unique decoding only | 4 | 128 | 102.7 / 102.8 / 102.8 |
 
-| zone | leaf | layer 1 | 2-to-1 | verify (either) |
-|---|---|---|---|---|
-| 16×16 | 7.0 ms, 132 KB | 180 ms, 518 KB | 1.26 s, 617 KB | 13–15 ms |
-| 64×64 | 9.5 ms, 113 KB | 143 ms, 532 KB | 1.28 s, 625 KB | 13–16 ms |
-| 256×256 | 16.8 ms, 243 KB | 350 ms, 540 KB | 1.37 s, 619 KB | 14–16 ms |
+  Over EF4 the Johnson regime gave nothing (the batch term bound in both); over EF5 it needs about half the queries,
+  and recursive verifier circuits scale with the query count. The owner's rule (2026-11-20): take the newer bound
+  where it is faster.
 
-Recursion cost does not grow with the zone; a beacon slot's worth of leaves (tens) folds into one ~620 KB proof
-with a tree of depth 4–6, about 6–8 s of 2-to-1 work per level sequentially (parallel across a level).
+## Measured (16 cores, load about 6)
 
-## Security: the blocker
+| zone | params | leaf | layer 1 | 2-to-1 | verify |
+|---|---|---|---|---|---|
+| 64×64 | J101 | 16.8 ms, 66 KB | 167 ms, 347 KB | 1.62 s, 404 KB | 9–11 ms |
+| 256×256 | J101 | 23.2 ms, 136 KB | 324 ms, 347 KB | 1.79 s, 401 KB | 10–12 ms |
+| 64×64 | U101 | 9.1 ms, 122 KB | 270 ms, 669 KB | 2.52 s, 835 KB | 17 ms |
+| 256×256 | U101 | 20.9 ms, 260 KB | 447 ms, 705 KB | 3.07 s, 831 KB | 18–22 ms |
 
-Leaf, at the default 256×256 shape: 101.8 proven bits (unique decoding). The **recursive proofs** are batch STARKs
-over the circuit tables, verified in-circuit by the next layer, so they cannot grind at the batch step either:
+The earlier EF4 spike (insecure at about 93 bits) took 1.3 s and 620 KB per 2-to-1 step. Recursion cost does not
+grow with the zone. Leaves are proved on the CPU: the GPU prover is EF4-only.
 
-| recursive proof | tables | tallest | opened codewords | proven (UDR, R100) |
-|---|---|---|---|---|
-| layer 1 | 5 | 2^14 | 1654 | **96.3** |
-| 2-to-1 | 5 | 2^17 | 1654 | **93.3** |
+## Tests and tools
 
-The batch-combination term `123 − log2|LDE| − log2 B` binds; Johnson is worse without batch grinding, more blowup is
-worse (bigger LDE). An aggregate is only as strong as its weakest layer, so this pipeline is at about 93 bits. Only
-the outermost proof (verified natively by the beacon chain) may grind (`*_cross` APIs with an output config).
+- `tests/agg.rs` (test parameters): leaf → layer 1 → 2-to-1, each verified against its statement; a recursive
+  proof against another statement and an aggregate with swapped statements are rejected; a leaf presented with
+  another claim's public values does not recurse; `J101` and `U101` clear 101 bits for the CLI's leaf shapes.
+- `umis_agg::recursive_shape` gives the security calculator a recursive proof's shape (tallest table, opened
+  codewords, degree; constraint and LogUp counts are upper estimates).
+- Bench: `PARAMS=j101|u101 cargo run --release -p umis-agg --example agg_bench -- 64,1,4,2 256,1,8,3`.
 
-Ways to 100 bits, for the owner to choose:
-1. **EF5 for the recursive layers** (`QuinticTrinomialExtensionField`; P3R has quintic tests): about 31 more bits on
-   every field-size term; leaves may stay EF4. Cost: bigger opened values, P3R's "field extensions are not fully
-   parametrizable" caveat.
-2. **Batch grinding in P3R's in-circuit FRI verifier** (one Poseidon2 permutation check, like the query PoW it
-   already supports): a small upstream change, but it means patching unaudited code or waiting for upstream.
-3. Smaller tables (table packing) only reach about 96 bits: not enough.
+## Open
 
-Also open: the life AIR's per-claim periodic columns become circuit constants, so every slot builds its own
-layer-1 circuit (INV-LIFE-FS-2); the claim data has to move into committed columns or public values before a
-prepared, reusable layer-1 circuit is possible. P3R bug worked around in `LifeAir::eval`: its interaction probe
-(`RecursiveAir::declares_interactions`) omits `num_periodic_columns` from the layout.
+- **Per-claim periodic columns** (INV-LIFE-FS-2): the life AIR's claim data are circuit constants, so every slot
+  needs its own layer-1 owner and circuit. Move them into committed columns or public values to reuse one prepared
+  circuit per zone shape.
+- **Protocol integration:** an aggregator role, an aggregation deadline after `L`, an aggregate record checked by the
+  beacon chain, and leaves bound to the beacon's statements (today the leaf statement is the claim digest).
+- **GPU leaves:** the GPU prover's kernels are EF4; aggregation leaves need an EF5 port to use it.
+- **P3R bug worked around** in `LifeAir::eval`: `RecursiveAir::declares_interactions` builds its layout without
+  `num_periodic_columns`.

@@ -44,6 +44,66 @@ pub fn proven_udr_bits(preset: FriPreset, shape: &ProofShape) -> f64 {
         commit_pow_bits: f.commit_proof_of_work_bits,
         query_pow_bits: f.query_proof_of_work_bits,
     };
+    report(&fri, preset.grinding_sites(), shape, 123).udr.security_bits()
+}
+
+/// The challenge field a proof samples from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    /// KoalaBear⁴ (2^123.95, fed as 123 bits).
+    Ef4,
+    /// KoalaBear⁵, `QuinticTrinomialExtensionField` (2^154.94, fed as 154 bits).
+    Ef5,
+}
+
+/// Which proximity bound a figure rests on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Regime {
+    /// Unique decoding only (BCI+20 UD; the conservative choice).
+    UniqueDecoding,
+    /// The better of unique decoding and the Johnson (list-decoding) regime; the latter rests
+    /// on the 2026 DKT26 line count as p3-security implements it.
+    Johnson,
+}
+
+/// FRI parameters without grinding at the OOD, batch or lookup sites (recursion-compatible).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecursiveFri {
+    pub log_blowup: usize,
+    pub max_log_arity: usize,
+    pub num_queries: usize,
+    pub commit_pow_bits: usize,
+    pub query_pow_bits: usize,
+}
+
+/// Proven bits of `shape` under recursion-compatible FRI parameters.
+pub fn proven_bits(fri: &RecursiveFri, field: Field, regime: Regime, shape: &ProofShape) -> f64 {
+    let regime_fri = FriRegime {
+        log_blowup: fri.log_blowup,
+        num_queries: fri.num_queries,
+        log_final_poly_len: 0,
+        max_log_arity: fri.max_log_arity,
+        commit_pow_bits: fri.commit_pow_bits,
+        query_pow_bits: fri.query_pow_bits,
+    };
+    let none = p3_security::GrindingSites { out_of_domain: 0, batch_combination: 0, lookup_challenge: 0 };
+    let bits = match field {
+        Field::Ef4 => 123,
+        Field::Ef5 => 154,
+    };
+    let r = report(&regime_fri, none, shape, bits);
+    match regime {
+        Regime::UniqueDecoding => r.udr.security_bits(),
+        Regime::Johnson => r.security_bits(),
+    }
+}
+
+fn report(
+    fri: &FriRegime,
+    grinding: p3_security::GrindingSites,
+    shape: &ProofShape,
+    modulus_bits: usize,
+) -> p3_security::SecurityReport {
     let chunks = (shape.max_degree.max(2) - 1).next_power_of_two();
     let air = StarkAirParams {
         num_constraints: shape.num_constraints,
@@ -53,11 +113,10 @@ pub fn proven_udr_bits(preset: FriPreset, shape: &ProofShape) -> f64 {
     };
     let inst = InstanceShape {
         log_trace_length: shape.log_height,
-        modulus_bits: 123,
+        modulus_bits,
         collision_resistance: 124,
         num_batched_functions: shape.batched_openings,
     };
-    let grinding = preset.grinding_sites();
     let extras: alloc::vec::Vec<_> = shape
         .logup
         .and_then(|(n, w)| {
@@ -65,7 +124,7 @@ pub fn proven_udr_bits(preset: FriPreset, shape: &ProofShape) -> f64 {
         })
         .into_iter()
         .collect();
-    proven_security_report(&fri, &air, &inst, &extras, &grinding).udr.security_bits()
+    proven_security_report(fri, &air, &inst, &extras, &grinding)
 }
 
 #[cfg(test)]
