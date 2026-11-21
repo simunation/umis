@@ -40,6 +40,30 @@
 The earlier EF4 spike (insecure at about 93 bits) took 1.3 s and 620 KB per 2-to-1 step. Recursion cost does not
 grow with the zone. Leaves are proved on the CPU: the GPU prover is EF4-only.
 
+## Where the time goes (A1, 2026-11-21, J101, load 13–15)
+
+Each recursive step is two parts: building the prepared owner (the verifier circuit for its children, P3R
+`TrustedPrepared*::new`) and proving with it (`prove(&self, …)`, reusable).
+
+| zone | step | build | prove | table log heights (6 tables) |
+|---|---|---|---|---|
+| 64×64 | layer 1 | 93–100 ms | 181–182 ms | 11, 6, 13, 12, 10, 0 |
+| 256×256 | layer 1 | 165–189 ms | 338–367 ms | 14, 7, 14, 13, 11, 0 |
+| any | 2-to-1 | 733–959 ms | 1.43–1.60 s | 9, 8, 16, 16, 13, 0 |
+
+- The build takes about a third of every step.
+- **The per-claim circuits cascade.** An aggregation owner fixes its children's verifiers. Every layer-1 circuit
+  differs per claim, because of the periodic columns (INV-LIFE-FS-2). So every 2-to-1 owner must be rebuilt too,
+  and nothing can be built once and reused.
+- **The checker cannot use a fixed verifier.** It would have to rebuild the whole tree of circuits from the claims
+  to check one aggregate (about 1 s per 2-to-1 node). A2 (claim-independent leaf) is therefore **required** before
+  protocol integration (A4), not just an optimization. With reusable owners a 2-to-1 step drops to its prove time
+  (about 1.6× faster).
+- Leaves: under the same load, an EF5 J101 leaf on the CPU (including its native verify) took 20/36 ms
+  (64×64 / 256×256), against 5.3/18.6 ms for an EF4 P100 proof (`bench_life_air`). The GPU EF4 single-proof
+  latency is 3.7 ms at 256×256 (`docs/gpu.md`). Leaves are not the bottleneck: one 2-to-1 step costs as much as
+  about 60 leaves.
+
 ## Tests and tools
 
 - `tests/agg.rs` (test parameters): leaf → layer 1 → 2-to-1, each verified against its statement; a recursive

@@ -85,5 +85,7 @@ aggregation default because it is ~1.6× faster with half-size proofs; U101 kept
 
 ## Next action
 
-B2–B4 done (2026-11-21). Next: `ROADMAP.md` A1 (measure layer-1 circuit build vs prove, EF5 CPU leaf vs GPU EF4
-leaf, circuit sizes), then A2. Pending owner decision before A3: P2 (state roots).
+B2–B4 and A1 done (2026-11-21). Next: `ROADMAP.md` A2 (claim-independent life leaf circuit; required, since
+per-claim circuits make every aggregation owner and the checker rebuild circuits). First check what P3R offers
+(`recursion/src/prepared/trusted.rs`, `StateTransitionLayout` / `StatementSchema`), then decide between a Poseidon2
+sponge AIR + bus or inline Poseidon2 columns. Pending owner decision before A3: P2 (state roots).

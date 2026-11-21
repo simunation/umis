@@ -138,6 +138,15 @@ pub struct Recursive {
     pub out: RecursionOutput<AggConfig>,
     pub statement: Vec<Val>,
     pub verifier: CircuitVerifier<AggConfig>,
+    /// Time spent building the prepared owner (verifier circuit) and proving with it.
+    pub timing: Timing,
+}
+
+/// Where a recursive step's time went.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Timing {
+    pub build: std::time::Duration,
+    pub prove: std::time::Duration,
 }
 
 impl Recursive {
@@ -155,6 +164,7 @@ fn params() -> ProveNextLayerParams {
 /// as its statement. The life AIR's per-claim periodic data are circuit constants, so each
 /// claim needs its own owner (INV-LIFE-FS-2).
 pub fn layer1(p: &AggParams, leaf: &Leaf) -> Result<Recursive, String> {
+    let t = std::time::Instant::now();
     let owner = TrustedPreparedLayer::<_, _, _, _, 5>::new(
         TrustedPreparedSource::UniStark {
             config: config(p),
@@ -168,15 +178,19 @@ pub fn layer1(p: &AggParams, leaf: &Leaf) -> Result<Recursive, String> {
         params(),
     )
     .map_err(|e| format!("{e:?}"))?;
+    let build = t.elapsed();
+    let t = std::time::Instant::now();
     let out = owner
         .prove(TrustedPreparedInput::UniStark { proof: &leaf.proof, public_inputs: &leaf.public })
         .map_err(|e| format!("{e:?}"))?;
-    Ok(Recursive { out, statement: leaf.public.clone(), verifier: owner.verifier() })
+    let timing = Timing { build, prove: t.elapsed() };
+    Ok(Recursive { out, statement: leaf.public.clone(), verifier: owner.verifier(), timing })
 }
 
 /// A 2-to-1 recursive proof over two recursive proofs; its statement is the left statement
 /// followed by the right one.
 pub fn aggregate(p: &AggParams, left: &Recursive, right: &Recursive) -> Result<Recursive, String> {
+    let t = std::time::Instant::now();
     let owner = TrustedPreparedAggregation::<_, _, BatchOnly, BatchOnly, _, 5>::new(
         TrustedPreparedSource::BatchStark {
             verifier: left.verifier.clone(),
@@ -193,6 +207,8 @@ pub fn aggregate(p: &AggParams, left: &Recursive, right: &Recursive) -> Result<R
         params(),
     )
     .map_err(|e| format!("{e:?}"))?;
+    let build = t.elapsed();
+    let t = std::time::Instant::now();
     let out = owner
         .prove(
             TrustedPreparedInput::BatchStark { proof: &left.out.0, statement: &left.statement },
@@ -200,7 +216,8 @@ pub fn aggregate(p: &AggParams, left: &Recursive, right: &Recursive) -> Result<R
         )
         .map_err(|e| format!("{e:?}"))?;
     let statement = [left.statement.as_slice(), right.statement.as_slice()].concat();
-    Ok(Recursive { out, statement, verifier: owner.verifier() })
+    let timing = Timing { build, prove: t.elapsed() };
+    Ok(Recursive { out, statement, verifier: owner.verifier(), timing })
 }
 
 /// Serialized size of a recursive proof.

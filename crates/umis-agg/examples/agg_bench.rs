@@ -49,9 +49,11 @@ fn main() {
         for (name, r) in [("layer1", &ra), ("2-to-1", &agg)] {
             let sh = recursive_shape(&r.out.0);
             eprintln!(
-                "  {name}: tables {} height 2^{} openings {} max degree {} bits {:.1}",
+                "  {name}: build {:.0} ms prove {:.0} ms | tables {} log heights {:?} openings {} max degree {} bits {:.1}",
+                r.timing.build.as_secs_f64() * 1e3,
+                r.timing.prove.as_secs_f64() * 1e3,
                 r.out.0.proof.degree_bits.len(),
-                sh.log_height,
+                r.out.0.proof.degree_bits,
                 sh.batched_openings,
                 sh.max_degree,
                 p.bits(&sh)

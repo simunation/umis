@@ -48,7 +48,7 @@ steps. **C** are optional. Effort is in working sessions of this assistant (one 
 
 ### A. Aggregation into the protocol
 
-**A1. Measure where layer-1 time goes (0.5 session).** Split `layer1` into owner construction (circuit build,
+**A1. ~~Measure where layer-1 time goes~~ — done 2026-11-21** (`docs/zk/aggregation.md` "Where the time goes": build ≈ ⅓ of each step; per-claim circuits cascade to every 2-to-1 owner and to the checker, so A2 is required before A4). Split `layer1` into owner construction (circuit build,
 `TrustedPreparedLayer::new`) and `prove`, for 64×64 and 256×256 at J101, and the same for `aggregate`. Also measure
 an EF5 leaf on the CPU vs the EF4 GPU leaf, and the layer-1 circuit size (rows per table). Output: a table in
 `docs/zk/aggregation.md`. Decides how urgent A2 is: if the build is a small share, per-claim circuits are tolerable
@@ -150,7 +150,7 @@ verifier and recurse. Until then aggregation leaves prove on the CPU (16.8–23 
 | order | step | sessions | needs |
 |---|---|---|---|
 | 1 | ~~B2, B3, B4~~ (done 2026-11-21) | 0.5 | — |
-| 2 | A1 measure | 0.5 | — |
+| 2 | ~~A1 measure~~ (done 2026-11-21) | 0.5 | — |
 | 3 | A2 claim-independent leaf circuit | 1–2 | A1 |
 | 4 | B1 draft upstream issue, B5 | 0.25 | — |
 | 5 | A3 statement schema, per-commitment chaining | 1 | A2, P2 |
