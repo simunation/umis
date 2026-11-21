@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Full local/CI gate: every milestone must end green on this script.
-#   scripts/check.sh            fmt + clippy + tests (native), wasm32 check, wasm tests
-#   SKIP_WASM_TEST=1 ...        skip the wasm-bindgen node test run
-#   SKIP_WEB=1 ...              skip the web/ type check and build
+#   scripts/check.sh            fmt + clippy + tests (native). The network is native-only
+#                               since 2026-11-22 (ROADMAP §1): this is the whole gate.
+#   WITH_WASM=1 ...             also the frozen browser build: wasm32 check and clippy,
+#                               wasm tests, web/ type check (legacy, not required)
+#   SKIP_WASM_TEST=1 ...        with WITH_WASM: skip the wasm-bindgen node test run
+#   SKIP_WEB=1 ...              with WITH_WASM: skip the web/ type check
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
 
-# Crates that must compile for the browser.
+# The frozen browser build (WITH_WASM=1 only).
 WASM_CRATES=(umis-core umis-task task-water3d task-life2d umis-tasks umis-proof umis-stark umis-protocol umis-net umis-node umis-web)
 # `tests/wasm.rs` tests run under node via wasm-bindgen-test-runner: determinism
 # (golden trace, golden STARK proof) and the wasm prover.
@@ -23,6 +26,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 step "cargo test (native)"
 cargo test --workspace --quiet
+
+if [ -z "${WITH_WASM:-}" ]; then
+  step "all checks passed (native; WITH_WASM=1 adds the frozen browser build)"
+  exit 0
+fi
 
 step "cargo check (wasm32-unknown-unknown)"
 pkgs=()

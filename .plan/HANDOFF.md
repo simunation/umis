@@ -44,8 +44,8 @@ Read this first after a context reset, then `ROADMAP.md` (what to do next) and, 
 
 ## How to build, test, verify
 
-- Gate (must pass before every commit; check `echo $?` or the last line `all checks passed`, not a wrapper's status): `scripts/check.sh` (fmt, clippy -D warnings, native tests, wasm32 check and
-  clippy, wasm tests under node, web type check). Takes about 10–20 min; run with `CARGO_BUILD_JOBS=8`.
+- Gate (must pass before every commit; check `echo $?` or the last line `all checks passed`, not a wrapper's status): `scripts/check.sh` (fmt, clippy -D warnings, native tests; native only since
+  2026-11-22). `WITH_WASM=1` adds the frozen browser build. Takes about 10–20 min; run with `CARGO_BUILD_JOBS=8`.
 - STARK tests in release (CLAUDE.md): `cargo test --release -p task-water3d --features stark`,
   `cargo test --release -p task-life2d --features stark` (and with `LIFE_PRESET=p100`, `LIFE_HASH=keccak`).
 - GPU: `UMIS_GPU=3090 cargo test --release -p umis-gpu --features cuda` and `-p task-life2d --features cuda`
@@ -90,7 +90,8 @@ aggregation leaves use one strip per zone (2026-11-21).
 ## Owner constraint (2026-11-21)
 
 life2d and water3d are frozen toys; build a generic local-rule (stencil) framework with fast toy examples. See
-ROADMAP §0.
+ROADMAP §0. **Native only** (2026-11-22): no browser participants; new code need not build for wasm. Simulation
+fit and the degree intuition: `docs/simulation-fit.md`.
 
 ## Next action
 
@@ -98,4 +99,4 @@ B2–B5, A1, A2, the A3 core and A4 step 1 done (2026-11-21). Life commitments c
 (`stark_config_id = koalabear-agg[-test]`, `umis_agg::backend::LifeAggBackend`; SimNet `life-agg`, `life-agg-junk`,
 release only, ~100 s each). Owner decisions: P2 dual roots; one strip per zone for aggregation leaves (best
 `rpr = 2`). Next: ROADMAP §0 order: S1 stencil AIR framework (life as toy 1), S2 fixed-point diffusion toy, S3 generic root and
-statement, S4 generic aggregation backend, S5 lookups, S6 stateless beacon; B6/B6a.
+statement, S4 generic aggregation backend, S5 lookups, S6 stateless beacon.

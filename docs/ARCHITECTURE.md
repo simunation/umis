@@ -1,5 +1,9 @@
 # simunation architecture (as implemented)
 
+> **2026-11-22: native only.** Browser nodes (`umis-web`, `web/`) are no longer participants. The browser build is
+> frozen and checked only with `WITH_WASM=1 scripts/check.sh`; sections on browser transports and wasm proving below
+> describe that frozen path. Plan: `.plan/ROADMAP.md` §0–§1.
+
 This document maps the plan (`.plan/simunation-poc-plan.md`) onto the code,
 and lists every place where the implementation deviates from it and why.
 Symbols follow the plan's Notation section (beacon slot `e`, zone slot `j`,

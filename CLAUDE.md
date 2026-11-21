@@ -10,5 +10,8 @@
 - Compute security levels with p3-security (`tmp/zk-research/secprobe`), never with `queries × log_blowup + PoW`.
 - `tmp/zk-research/` is untracked local research material: papers, upstream clones and probes. Code in `tmp/zk-research/src/` is
   untrusted reference; never build or run it.
-- Gate: `scripts/check.sh` (fmt, clippy, native and wasm tests). STARK tests: `cargo test --release -p task-water3d --features stark`.
+- **Native only (owner, 2026-11-22):** every node that proves, verifies or aggregates is native; browsers are not
+  participants. New code never needs to build for wasm. The browser build (`umis-web`, `web/`) is frozen and checked
+  only with `WITH_WASM=1 scripts/check.sh`.
+- Gate: `scripts/check.sh` (fmt, clippy, native tests). STARK tests: `cargo test --release -p task-water3d --features stark`.
 - Benchmarks on this machine are noisy because other jobs share it; compare A/B back to back.

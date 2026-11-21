@@ -1,5 +1,9 @@
 # umis zero-knowledge / STARK knowledge base
 
+> Choosing simulations: [`../simulation-fit.md`](../simulation-fit.md) explains constraint degree, what makes physics
+> expensive to prove, and which simulations fit P100. Since 2026-11-22 the network is native only, so wasm and
+> browser proving notes below are historical.
+
 Start here before changing anything that touches proofs: `crates/task-water3d/src/air.rs`, `crates/umis-stark`,
 `crates/umis-proof`, the proof paths in `crates/umis-protocol` (`beacon/state.rs` `apply_proof_commitment`,
 `zone/engine.rs` shares, `node/duties.rs` jobs), the provers in `umis-node` and `umis-web`, and genesis proof settings.

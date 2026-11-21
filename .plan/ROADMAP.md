@@ -33,24 +33,41 @@ sponge technique.
    scale. This is the efficiency path for real physics; spike it right after S2 if bit decomposition proves too
    wide.
 6. **S6 stateless beacon** (old A4 step 2) on the S3 statement: header root, outputs digest, fault evidence.
-7. B6/B6a (browser cost, e2e rollbacks): generic, keep.
+7. ~~B6/B6a (browser cost, e2e rollbacks)~~: dropped (N1, native only).
 
-Owner questions still open: P3 nonlinear rules (the constraint degree sets the blowup: P100's blowup 4 allows
-degree ≤ 5; more needs blowup 8 or auxiliary columns), and P1 browser role.
+Owner questions still open: P3 nonlinear rules. The constraint degree sets the blowup: P100's blowup 4 allows
+degree ≤ 5; more needs blowup 8 or helper columns (see `docs/simulation-fit.md`). P1 (browser role) is resolved:
+no browsers (N1).
 
 ## 1. Goals
 
-From the POC plan and the owner's decisions since:
+**Current goals (owner, 2026-11-22).** These supersede the table below.
 
-| # | Goal | Source |
+| # | Goal |
+|---|---|
+| N1 | **Native nodes only.** Every node that proves, verifies, aggregates or validates is a native process (CPU, optionally GPU). Browsers are not participants. New code never needs to build for wasm |
+| N2 | **A generic local-rule framework** (ROADMAP §0): a simulation declares its cell state and local update rule; the framework proves it. Toys first (life, heat diffusion, reaction–diffusion, lattice Boltzmann), growing towards physics and fluids. No toy-specific optimizations |
+| N3 | **≥ 100 proven bits** for every proof the network relies on (unchanged; computed with p3-security) |
+| N4 | **Proving keeps up with the simulation on native hardware**: GPU where available, CPU otherwise; provers and aggregators are separate native roles |
+| N5 | **Succinct checking:** the beacon chain verifies one aggregate per commitment or beacon slot without the full states (§0 S6) |
+| N6 | No cheap liveness attacks around proofs (unchanged; done for the current pools) |
+| N7 | Every soundness check has a release-mode verifier negative test, mutation-checked (unchanged) |
+
+**Old goals (struck 2026-11-22).** Kept for history.
+
+| # | Goal | Status |
 |---|---|---|
-| G1 | Every zone transition is proven by a STARK that every node (native, browser) can verify | plan §4 |
-| G2 | **≥ 100 proven bits** for every proof the network relies on (decided 2026-11-19; 128 not needed) | owner |
-| G3 | Proving keeps up with simulation; life2d (the test task) proves at about the native step's cost on a GPU | life2d effort |
-| G4 | The beacon chain verifies **one aggregate proof per beacon slot** instead of every leaf proof, without needing full states (succinct verification) | plan §9 future work, REPORT phase 3 |
-| G5 | No cheap liveness attacks around proofs (junk shares / proof commitments) | REPORT §4.2 |
-| G6 | Native and browser nodes run the same code; browsers can at least prove leaves | plan context |
-| G7 | Every soundness-relevant check has a negative test that runs the verifier in release mode; security is computed with p3-security, never `queries × log_blowup + PoW` | CLAUDE.md |
+| ~~G1~~ | ~~Every zone transition is proven by a STARK that every node (native, **browser**) can verify~~ | Replaced by N1 + N5 |
+| ~~G2~~ | ~~≥ 100 proven bits~~ | Carried over as N3 |
+| ~~G3~~ | ~~life2d proves at about the native step's cost on a GPU~~ | Life-specific; replaced by N4 |
+| ~~G4~~ | ~~One aggregate per beacon slot without full states~~ | Carried over as N5 |
+| ~~G5~~ | ~~No cheap liveness attacks around proofs~~ | Carried over as N6 |
+| ~~G6~~ | ~~Native and browser nodes run the same code; browsers can at least prove leaves~~ | **Dropped**: browsers prove ~100× slower than a native CPU and ~1000× slower than a GPU, are unreliable (tabs close, throttled), and cannot aggregate |
+| ~~G7~~ | ~~Release-mode negative tests; p3-security~~ | Carried over as N7 |
+
+**Browser build:** frozen, not deleted. `umis-web`, `web/` and the wasm tests still exist and build with
+`WITH_WASM=1 scripts/check.sh`, but they are not part of the gate and get no new features. B5–B7 and B6a are
+dropped.
 
 Owner rules that steer choices: prefer the newer (Johnson/DKT26) bound only where it is faster or otherwise
 pays off, else the conservative unique-decoding bound (2026-11-20). Benchmarks back to back (shared machine).
@@ -72,7 +89,7 @@ Decisions already made: 100 bits (not 128); L = 0 allowed with STARKs; Plonky3 p
 Plonky3-recursion git dependency pinned to `3a69ba6` (approved); aggregation over EF5; Johnson preset J101 for
 aggregation (faster than UDR there); GPU FRI not built (measured).
 
-Still to decide (owner): canonical state roots (keccak BMT vs Poseidon2, §4 P2), browser role (leaf prover only, or
+Still to decide (owner): canonical state roots (keccak BMT vs Poseidon2, §4 P2), ~~browser role~~ (resolved: none) (leaf prover only, or
 verifier too), nonlinear physics (raises constraint degree), Plonky3 version policy beyond the current pins.
 
 ## 3. Plan
@@ -199,12 +216,12 @@ verifier and recurse. Until then aggregation leaves prove on the CPU (16.8–23 
   `ctx::tests::failed_verifications_are_memoized_per_public_data`. Grouped batch verification is not memoized.
 - ~~**B5**~~ Done 2026-11-21: workers get no key (throwaway key; backends that identify their prover are refused). Was: stop posting the secret key to workers (`crates/umis-web/src/prover.rs:24`); pass only what the
   job needs (async backends do not sign).
-- **B6a (found 2026-11-21)** `GENESIS_ARGS="--proof-backend plonky3" scripts/e2e.sh stark.spec.ts`: browser
+- ~~**B6a**~~ (dropped 2026-11-22, native only) **(found 2026-11-21)** `GENESIS_ARGS="--proof-backend plonky3" scripts/e2e.sh stark.spec.ts`: browser
   workers prove, but the bootstrap records 4 rollbacks (the spec expects 0). Same result on `3fb838a`, before this
   session's changes, at machine load ~14. Suspect: P100 proving cost in wasm and on loaded native provers. Measure
   with B6 and fix (prover capacity or deadlines) before trusting the browser demo.
-- **B6** Measure P100 in wasm for life2d (browser leaf cost) and EF5 leaves in wasm; record in `docs/life2d.md`.
-- **B7** Refresh the demo (`scripts/demo/`) with P100 and republish the player artifact (the published one predates
+- ~~**B6**~~ (dropped 2026-11-22) Measure P100 in wasm for life2d (browser leaf cost) and EF5 leaves in wasm; record in `docs/life2d.md`.
+- ~~**B7**~~ (dropped 2026-11-22, browser demo frozen) Refresh the demo (`scripts/demo/`) with P100 and republish the player artifact (the published one predates
   P100).
 - **B8** Move share verification off the event loop (`ZoneEngine::on_share` verifies synchronously).
 
@@ -217,7 +234,7 @@ verifier and recurse. Until then aggregation leaves prove on the CPU (16.8–23 
 
 ## 4. Pending owner decisions (ask when the step needs them)
 
-- **P1** Browser role: leaf prover only, or verifier of every proof? (decides B6 depth, wasm SIMD/threads work).
+- ~~**P1**~~ **Resolved 2026-11-22: no browsers (N1).** Was: Browser role: leaf prover only, or verifier of every proof? (decides B6 depth, wasm SIMD/threads work).
 - **P2 — DECIDED 2026-11-21: dual roots** (owner). Also decided: aggregation leaves use **one strip per zone**
   (`strips = 1`), so the leaf has no internal halo copies (A3 layout). Was: Canonical state roots: keep keccak BMT (Swarm-compatible) and add a Poseidon2 digest next to it (dual roots),
   or make Poseidon2 canonical. Needed by A3/A4. Recommendation: dual roots (keccak for storage/DA, Poseidon2 for
@@ -235,7 +252,7 @@ verifier and recurse. Until then aggregation leaves prove on the CPU (16.8–23 
 | 4 | B1 draft upstream issue, ~~B5~~ (done) | 0.25 | — |
 | 5 | ~~A3 statement schema, per-commitment chaining~~ (core done 2026-11-21) | 1 | A2, P2 |
 | 6 | A4 protocol integration + SimNet | 2–3 | A3 |
-| 7 | B6, B7 browser numbers, demo refresh | 0.5 | — |
+| 7 | ~~B6, B7 browser numbers, demo refresh~~ (dropped) | 0.5 | — |
 | 8 | A5 EF5 GPU leaves | 1–2 | A4 running |
 | 9 | A6 water aggregation | 2 | A4 |
 
