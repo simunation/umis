@@ -19,5 +19,9 @@ serde_json.workspace = true
 task-water3d = { workspace = true, features = ["stark"] }
 task-life2d = { workspace = true, features = ["stark"] }
 
+# Recursive aggregation (Plonky3-recursion): native only (`koalabear-agg*` configs).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+umis-agg = { path = "../umis-agg" }
+
 [lints]
 workspace = true

@@ -34,7 +34,8 @@ Read this first after a context reset, then `ROADMAP.md` (what to do next) and, 
 - `crates/umis-agg`: aggregation over EF5 (`AggParams::{J101,U101,TEST}`, `config`, per-claim `leaf`/`layer1`/`aggregate`,
   claim-independent `digest_leaf` + reusable `Layer1Owner`/`AggOwner`, `Recursive::{verify,timing}`, `recursive_shape`),
   `tests/agg.rs`, `examples/agg_bench.rs` (`DIGEST=1`).
-- `crates/task-life2d/src/air/digest.rs` (+ `digest_tests.rs`): claim-independent digest AIR (inline Poseidon2 sponge).
+- `crates/task-life2d/src/air/digest.rs` (+ `digest_tests.rs`): claim-independent digest AIR (three inline Poseidon2 sponges).
+- `crates/umis-agg/src/backend.rs` (+ `tests/backend.rs`): aggregating life backend; wired in `umis-tasks::backend_for` (native only).
 - `crates/umis-core/src/genesis.rs`: `insecure_proofs`, `SECURE_STARK_CONFIGS`.
 - `crates/umis-protocol/src/node/{mod.rs,duties.rs}`: pools (`pc_pool`, `pc_trusted`, `pc_alts`, `zc_awaiting`),
   `check_pc`, `check_pc_candidates`, `evict_pc`, junk adversary; `zone/engine.rs`: `trusted` shares, `ShareVerdict`;
@@ -53,7 +54,7 @@ Read this first after a context reset, then `ROADMAP.md` (what to do next) and, 
   `UMIS_GPU_PROFILE=1`.
 - Aggregation: `cargo test --release -p umis-agg`; bench `PARAMS=j101|u101 cargo run --release -p umis-agg --example agg_bench -- 64,1,4,2 256,1,8,3`.
 - SimNet sweep: `cargo build --release -p umis-simnet && target/release/umis-simnet --scenario all --seeds 5 --slots 60 --threads 10`
-  (24 scenarios × 5 seeds, about 4 min at 6 threads; last result 120/120 OK, 2026-11-21).
+  (26 scenarios × 5 seeds, about 11 min at 6 threads with the aggregation scenarios; last result 130/130 OK, 2026-11-21).
 - Security numbers: always `umis_stark::security` or the secprobe; never `queries × log_blowup + PoW`.
 - Mutation-check every new negative test (disable the check, see the test fail, restore). Soundness tests must
   reject in the **verifier in release mode**; a debug-build prover panic is not a rejection, and tests must also
@@ -88,8 +89,8 @@ aggregation leaves use one strip per zone (2026-11-21).
 
 ## Next action
 
-B2–B5, A1, A2 and the A3 core done (2026-11-21). The digest leaf (`task_life2d::air::digest`) exports `[d_prev,
-d_halo, d_next, absent]`; `umis_agg::{digest_leaf, Layer1Owner, AggOwner, chain}`. Owner decisions: P2 dual roots,
-one strip per zone for aggregation leaves (best `rpr = 2`). Next: A4 (ROADMAP §3: Poseidon2 roots in zone
-commitments, halo check from payloads, hold/birth slots, cross-zone 2-to-1, aggregator role behind a genesis flag),
-B1 (draft the P3R issue), B6/B6a (browser P100 cost, e2e rollbacks).
+B2–B5, A1, A2, the A3 core and A4 step 1 done (2026-11-21). Life commitments can be aggregated in the protocol
+(`stark_config_id = koalabear-agg[-test]`, `umis_agg::backend::LifeAggBackend`; SimNet `life-agg`, `life-agg-junk`,
+release only, ~100 s each). Owner decisions: P2 dual roots; one strip per zone for aggregation leaves (best
+`rpr = 2`). Next: A4 step 2 (ROADMAP: Poseidon2 board root in zone headers, beacon chain/halo checks, drop
+LeafData states), B6/B6a (browser P100 cost, e2e rollbacks).

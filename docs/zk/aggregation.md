@@ -99,6 +99,15 @@ layout (J101, load about 10, owners built once):
 
 Layer-1 cost grows with the leaf's width (every query opens a whole row in-circuit), so prefer small `rpr`.
 
+## In the protocol (A4 step 1, 2026-11-21)
+
+`umis_agg::backend::LifeAggBackend` (genesis `stark_config_id = koalabear-agg[-test]`, native only, insecure opt-in)
+proves a commitment's advancing life slots as one aggregate in the batch head format (spec §4d,
+INV-LIFE-AGG-1..3). Each verifier builds its own owner tree per (shape, member count) and caches it. SimNet
+`life-agg` and `life-agg-junk` pass (0 rollbacks, exact life state; about 100 s each, dominated by proving). The
+beacon still receives the states. Next (step 2): Poseidon2 roots in zone commitments, the halo check from input
+payloads, and leaving the states off the beacon chain.
+
 ## Tests and tools
 
 - `tests/agg.rs` (test parameters): leaf → layer 1 → 2-to-1, each verified against its statement; a recursive

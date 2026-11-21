@@ -182,6 +182,33 @@ zone's state recomputes it from the input payloads. With several strips, the str
 enter `d_halo` and only a checker holding the state can recompute it. Best layout at 256×256, k = 1: `rpr = 2`
 (width 2896, height 256).
 
+## 4d. Aggregated proof commitments (`umis_agg::backend`, ROADMAP A4 step 1)
+
+With `stark_config_id = koalabear-agg` (J101 aggregates, P100 single leaves) or `koalabear-agg-test`, which are
+native only and need the insecure opt-in (Plonky3-recursion is unaudited), a commitment's advancing slots of one
+supported shape (`k ≤ rpr`, two or more) are proved as one recursive aggregate.
+
+**INV-LIFE-AGG-1 (format).** The first member carries `ProofTag::AggHead (4) ‖ m (u16 BE) ‖ m member statement
+addresses ‖ postcard aggregate`, `2 ≤ m ≤ 32`; every other member carries exactly `ProofTag::AggRef (5) ‖
+keccak(head) ‖ index`. As for batches, neither verifies alone (`Life2dStark::verify` rejects tags 4 and 5), and a
+head verifies only with every listed reference present. Single advancing slots keep tag 1, holds and births tag 0,
+and unsupported shapes the EF4 batch format.
+
+**INV-LIFE-AGG-2 (statement).** The verifier runs every native check of every member (`native_claim`: roots,
+canonical states, outputs, inputs, decision, header). It derives each member's `[d_prev, d_halo, d_next, absent]`
+from the public data and verifies the aggregate against their concatenation, in member order. The statement comes
+from the verifier, never from the proof. Tests (`umis-agg/tests/backend.rs`): another claim set's aggregate under
+a commitment's head, and a reordered member list, are rejected (checked by disabling the aggregate verification).
+
+**INV-LIFE-AGG-3 (verifier per shape and count).** A node builds the verifier for `(shape, m)` from its own
+owner tree (layer 1 plus a 2-to-1 owner for each subtree size `⌈m/2⌉ + ⌊m/2⌋`, from dead-board dummy leaves).
+Aggregates from another node's tree verify, and a verifier for another `m` rejects
+(`aggregates_verify_across_independently_built_trees`, `a_commitment_aggregates_and_verifies_on_another_node`).
+SimNet: `life-agg`, `life-agg-junk`.
+
+The beacon still receives the states (`LeafData`). Dropping them needs the Poseidon2 roots in zone commitments and
+the halo check from payloads (A4 step 2).
+
 ## 5. I/O and tags (native, `verify_inner`)
 
 - **INV-LIFE-IO-1.** `to_slot = from_slot + 1`, `params_hash` matches the zone; `prev`/`next` match the roots.

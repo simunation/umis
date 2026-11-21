@@ -14,6 +14,7 @@ p3-poseidon2-circuit-air = { git = "https://github.com/Plonky3/Plonky3-recursion
 umis-stark = { path = "../umis-stark" }
 task-life2d = { path = "../task-life2d", features = ["stark"] }
 umis-core = { path = "../umis-core" }
+umis-proof = { path = "../umis-proof" }
 postcard = { version = "1.1", features = ["alloc"] }
 p3-air = "=0.9.0-rc.2"
 p3-batch-stark = "=0.9.0-rc.2"
@@ -28,3 +29,7 @@ p3-uni-stark = "=0.9.0-rc.2"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+umis-task = { path = "../umis-task" }
+borsh = { workspace = true }

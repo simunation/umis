@@ -38,10 +38,12 @@ pub enum Scenario {
     LifeStarkJunk,
     LifeStarkL0,
     JunkProofsL0,
+    LifeAgg,
+    LifeAggJunk,
 }
 
 /// The Game of Life scenarios (globally exact zones, see `task_life2d`).
-pub const LIFE: [&str; 11] = [
+pub const LIFE: [&str; 13] = [
     "life",
     "life-mixed",
     "life-create",
@@ -53,6 +55,8 @@ pub const LIFE: [&str; 11] = [
     "life-slow",
     "life-stark-junk",
     "life-stark-l0",
+    "life-agg",
+    "life-agg-junk",
 ];
 
 pub const ALL: [&str; 13] = [
@@ -99,6 +103,8 @@ impl std::str::FromStr for Scenario {
             "junk-proofs-l0" => Scenario::JunkProofsL0,
             "life-stark-junk" => Scenario::LifeStarkJunk,
             "life-stark-l0" => Scenario::LifeStarkL0,
+            "life-agg" => Scenario::LifeAgg,
+            "life-agg-junk" => Scenario::LifeAggJunk,
             _ => return Err(format!("unknown scenario {s}")),
         })
     }
@@ -151,6 +157,20 @@ pub fn run(s: Scenario, seed: u64, slots: u64) -> Outcome {
             junk_proofs(cfg, slots.max(30), false)
         }
         Scenario::JunkProofsL0 => junk_proofs(SimConfig::new(seed), slots.max(30), false),
+        // Commitments' advancing slots proved by one recursive aggregate (ROADMAP A4 step 1).
+        Scenario::LifeAgg => {
+            let mut cfg = SimConfig::life(seed);
+            cfg.stark_config = Some("koalabear-agg-test".into());
+            aggregated(life_checked(stark(cfg, slots.clamp(20, 40)), false))
+        }
+        Scenario::LifeAggJunk => {
+            let mut cfg = SimConfig::life(seed);
+            cfg.stark_config = Some("koalabear-agg-test".into());
+            cfg.proof_backend = task_life2d::air::BACKEND_ID.into();
+            cfg.proof_lag = 1;
+            cfg.members_per_zone = 4;
+            aggregated(life_checked(junk_proofs(cfg, slots.clamp(20, 40), true), false))
+        }
         Scenario::LifeStarkJunk => {
             let mut cfg = SimConfig::life(seed);
             cfg.stark_config = Some("koalabear-keccak-test".into());
@@ -160,6 +180,23 @@ pub fn run(s: Scenario, seed: u64, slots: u64) -> Outcome {
             life_checked(junk_proofs(cfg, slots.clamp(20, 40), true), false)
         }
     }
+}
+
+/// Requires that some proof commitment on the archive's canonical chain carries a recursive
+/// aggregate (`ProofTag::AggHead`).
+fn aggregated(mut o: Outcome) -> Outcome {
+    let a = o.sim.node(o.sim.archive);
+    let n = a
+        .chain
+        .canonical()
+        .filter_map(|e| e.block.as_ref())
+        .flat_map(|b| b.body.proof_commitments.iter())
+        .filter(|pce| pce.proofs.iter().any(|p| p.first() == Some(&(task_life2d::air::ProofTag::AggHead as u8))))
+        .count();
+    if n == 0 {
+        o.report.violations.push("no proof commitment carries an aggregate".into());
+    }
+    o
 }
 
 /// Generation of every life zone's best-known committed state.

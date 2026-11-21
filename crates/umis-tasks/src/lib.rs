@@ -3,7 +3,9 @@
 //! - `mock`: signature-only proofs (any task);
 //! - `plonky3`: one STARK prover per task ([`umis_proof::MultiBackend`]),
 //!   water3d and life2d, both with the genesis `stark_config_id`
-//!   (`koalabear-keccak*`: life2d with Keccak Merkle trees, water3d unchanged).
+//!   (`koalabear-keccak*`: life2d with Keccak Merkle trees, water3d unchanged;
+//!   `koalabear-agg*`: life2d commitments aggregated recursively, native only, water3d on
+//!   `koalabear*`).
 
 use std::sync::Arc;
 use umis_core::genesis::Genesis;
@@ -33,18 +35,36 @@ pub fn backend_for(g: &Genesis) -> Result<Arc<dyn ProofBackend>, String> {
             let id = g.stark_config_id.as_deref();
             // `koalabear-keccak[-test]` switches life2d to Keccak Merkle trees; water3d
             // keeps its Poseidon2 config with the same FRI preset.
-            let water_id = id
-                .map(|i| if i.starts_with("koalabear-keccak") { i.replacen("-keccak", "", 1) } else { i.to_string() });
+            let water_id = id.map(|i| {
+                if i.starts_with("koalabear-keccak") || i.starts_with("koalabear-agg") {
+                    i.replacen("-keccak", "", 1).replacen("-agg", "", 1)
+                } else {
+                    i.to_string()
+                }
+            });
             let water = task_water3d::air::Water3dStark::from_config_id(water_id.as_deref())?;
-            let life = task_life2d::air::Life2dStark::from_config_id(id)?;
+            let life: Arc<dyn ProofBackend> = match id {
+                Some(agg) if agg.starts_with("koalabear-agg") => life_agg(agg)?,
+                _ => Arc::new(task_life2d::air::Life2dStark::from_config_id(id)?),
+            };
             Ok(Arc::new(
                 MultiBackend::new(task_water3d::air::BACKEND_ID)
                     .with(task_water3d::TASK_ID, Arc::new(water))
-                    .with(task_life2d::TASK_ID, Arc::new(life)),
+                    .with(task_life2d::TASK_ID, life),
             ))
         }
         other => Err(format!("unknown proof backend {other}")),
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn life_agg(id: &str) -> Result<Arc<dyn ProofBackend>, String> {
+    Ok(Arc::new(umis_agg::backend::LifeAggBackend::from_config_id(id)?))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn life_agg(id: &str) -> Result<Arc<dyn ProofBackend>, String> {
+    Err(format!("stark_config_id {id}: recursive aggregation is native only"))
 }
 
 /// Task id and borsh params of a new zone proposed on `layer` at `point`,

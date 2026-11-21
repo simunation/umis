@@ -90,3 +90,17 @@ fn life_stark_junk() {
 fn life_stark_l0() {
     ok("life-stark-l0", 20);
 }
+
+// Recursive aggregation (koalabear-agg-test): about 100 s each in release, far longer in
+// debug, so release only (`cargo test --release -p umis-simnet`).
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn life_agg() {
+    ok("life-agg", 20);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn life_agg_junk() {
+    ok("life-agg-junk", 20);
+}

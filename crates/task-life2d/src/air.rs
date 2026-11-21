@@ -115,6 +115,22 @@ pub enum ProofTag {
     BatchHead = 2,
     /// Another member of a batch: the head's keccak hash and the member index.
     BatchRef = 3,
+    /// An advancing slot whose commitment's advancing slots are proved by one recursive
+    /// aggregate (`umis-agg`, KoalaBear⁵): the member statement addresses and the aggregate
+    /// follow, as for [`ProofTag::BatchHead`].
+    AggHead = 4,
+    /// Another member of an aggregate: the head's keccak hash and the member index.
+    AggRef = 5,
+}
+
+/// The native part of an advancing slot's claim, after every native check
+/// ([`Life2dStark::native_claim`]): the shape, the extended board `E`, the `absent` flags and
+/// the claimed inner board `X_out`.
+pub struct NativeClaim {
+    pub shape: Shape,
+    pub ext: Board,
+    pub absent: [bool; 8],
+    pub x_out: Board,
 }
 
 pub use crate::shape::Shape;
@@ -686,6 +702,23 @@ impl Life2dStark {
         pd: &PublicData<'_>,
         proof: &[u8],
     ) -> Result<Option<(LifeAir, Vec<Val>, usize)>, ProofError> {
+        let Some(c) = self.native_claim(stmt, pd, proof)? else { return Ok(None) };
+        let z =
+            self.setup(pd.params.expect("checked"), &pd.genesis_seed.expect("checked")).map_err(ProofError::Invalid)?;
+        let (per, public) = claim_data(&c.shape, &z.params_hash, stmt.from_slot, &c.ext, &c.absent, &c.x_out);
+        Ok(Some((LifeAir { shape: c.shape, periodic: per }, public, c.shape.height.trailing_zeros() as usize)))
+    }
+
+    /// Every native check of a slot (roots, canonical states, outputs, inputs, the decision,
+    /// the header). Hold and birth slots are fully checked here (`proof` must be
+    /// `[ProofTag::Native]`) and give `None`; an advancing slot gives the board claim that a
+    /// STARK (or an aggregate) must prove.
+    pub fn native_claim(
+        &self,
+        stmt: &TransitionStatement,
+        pd: &PublicData<'_>,
+        proof: &[u8],
+    ) -> Result<Option<NativeClaim>, ProofError> {
         let bad = |m: &str| Err(ProofError::Invalid(m.into()));
         let (Some(params), Some(seed), Some(prev), Some(next), Some(inputs), Some(refs)) =
             (pd.params, pd.genesis_seed, pd.prev_state, pd.next_state, pd.inputs, pd.input_refs)
@@ -726,8 +759,25 @@ impl Life2dStark {
         if !header_matches(&s_out, &expect) {
             return bad("advanced state header/prev board");
         }
-        let (per, public) = claim_data(&z.shape, &z.params_hash, stmt.from_slot, &ext, &absent, &s_out.grid);
-        Ok(Some((LifeAir { shape: z.shape, periodic: per }, public, z.shape.height.trailing_zeros() as usize)))
+        Ok(Some(NativeClaim { shape: z.shape, ext, absent, x_out: s_out.grid }))
+    }
+
+    /// The advancing claim a prover proves for a slot (shape, `E`, `absent`), or `None` for a
+    /// hold/birth slot (its proof is `[ProofTag::Native]`).
+    pub fn advance_claim(
+        &self,
+        stmt: &TransitionStatement,
+        w: &Witness<'_>,
+    ) -> Result<Option<(Shape, Board, [bool; 8])>, ProofError> {
+        let z = self.setup(w.params, &w.genesis_seed).map_err(ProofError::Prover)?;
+        if stmt.to_slot != stmt.from_slot + 1 || stmt.params_hash != z.params_hash {
+            return Err(ProofError::Prover("statement must cover one slot of this zone".into()));
+        }
+        let s_in = decode_state(&z.ctx.p, w.prev_state).ok_or_else(|| ProofError::Prover("prev state".into()))?;
+        Ok(match decide(&z.ctx, &s_in, w.inputs, stmt.from_slot) {
+            Decision::Advance { ext, absent } => Some((z.shape, ext, absent)),
+            _ => None,
+        })
     }
 
     fn verify_inner(
@@ -740,6 +790,9 @@ impl Life2dStark {
         let Some((&tag, body)) = proof.split_first() else { return Err(ProofError::Invalid("empty proof".into())) };
         if tag == ProofTag::BatchHead as u8 || tag == ProofTag::BatchRef as u8 {
             return Err(ProofError::Invalid("a batched proof verifies only with its group".into()));
+        }
+        if tag == ProofTag::AggHead as u8 || tag == ProofTag::AggRef as u8 {
+            return Err(ProofError::Invalid("an aggregated proof needs the aggregation backend and its group".into()));
         }
         if tag != ProofTag::Stark as u8 {
             return Err(ProofError::Invalid("advancing slot needs a STARK".into()));
@@ -832,7 +885,13 @@ pub const MAX_BATCH: usize = 32;
 
 /// `ProofTag::BatchHead ‖ count (u16 BE) ‖ count member statement addresses ‖ postcard batch proof`.
 fn batch_head(members: &[Hash], body: &[u8]) -> Bytes {
-    let mut out = vec![ProofTag::BatchHead as u8];
+    group_head(ProofTag::BatchHead, members, body)
+}
+
+/// `tag ‖ count (u16 BE) ‖ count member statement addresses ‖ body`: the head of a proof group
+/// (a batch STARK or a recursive aggregate).
+pub fn group_head(tag: ProofTag, members: &[Hash], body: &[u8]) -> Bytes {
+    let mut out = vec![tag as u8];
     out.extend((members.len() as u16).to_be_bytes());
     for m in members {
         out.extend_from_slice(&m.0);
@@ -842,13 +901,18 @@ fn batch_head(members: &[Hash], body: &[u8]) -> Bytes {
 }
 
 fn parse_batch_head(p: &[u8]) -> Result<(Vec<Hash>, &[u8]), ProofError> {
-    let bad = || ProofError::Malformed("batch head".into());
-    let (&tag, rest) = p.split_first().ok_or_else(bad)?;
-    if tag != ProofTag::BatchHead as u8 || rest.len() < 2 {
+    parse_group_head(ProofTag::BatchHead, MAX_BATCH, p)
+}
+
+/// Parses a [`group_head`] of `tag` with `2..=max` members.
+pub fn parse_group_head(tag: ProofTag, max: usize, p: &[u8]) -> Result<(Vec<Hash>, &[u8]), ProofError> {
+    let bad = || ProofError::Malformed("group head".into());
+    let (&t, rest) = p.split_first().ok_or_else(bad)?;
+    if t != tag as u8 || rest.len() < 2 {
         return Err(bad());
     }
     let n = u16::from_be_bytes([rest[0], rest[1]]) as usize;
-    if !(2..=MAX_BATCH).contains(&n) || rest.len() < 2 + 32 * n {
+    if !(2..=max).contains(&n) || rest.len() < 2 + 32 * n {
         return Err(bad());
     }
     let members = (0..n).map(|k| Hash(rest[2 + 32 * k..2 + 32 * (k + 1)].try_into().expect("32"))).collect();
@@ -857,7 +921,12 @@ fn parse_batch_head(p: &[u8]) -> Result<(Vec<Hash>, &[u8]), ProofError> {
 
 /// `ProofTag::BatchRef ‖ keccak(head proof bytes) ‖ member index (u16 BE)`.
 fn batch_ref(head_hash: &Hash, index: usize) -> Bytes {
-    let mut out = vec![ProofTag::BatchRef as u8];
+    group_ref(ProofTag::BatchRef, head_hash, index)
+}
+
+/// `tag ‖ keccak(head proof bytes) ‖ member index (u16 BE)`: a member of a proof group.
+pub fn group_ref(tag: ProofTag, head_hash: &Hash, index: usize) -> Bytes {
+    let mut out = vec![tag as u8];
     out.extend_from_slice(&head_hash.0);
     out.extend((index as u16).to_be_bytes());
     out

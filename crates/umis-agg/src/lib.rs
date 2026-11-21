@@ -14,6 +14,8 @@
 //!
 //! Plonky3-recursion is unaudited (its README says so); this crate is pinned to one commit.
 
+pub mod backend;
+
 use p3_circuit_prover::BatchStarkProof;
 use p3_circuit_prover::batch_stark_prover::CircuitVerifier;
 use p3_recursion::builtin_config::{
@@ -160,7 +162,12 @@ impl DigestLeaf {
 /// Proves one advancing slot of a zone with layout `p` on the extended board `ext` with the
 /// digest AIR.
 pub fn digest_leaf(cfg: &AggConfig, p: &Life2dParams, ext: &Board, absent: &[bool; 8]) -> DigestLeaf {
-    let air = LifeDigestAir::new(Shape::of(p));
+    digest_leaf_of(cfg, Shape::of(p), ext, absent)
+}
+
+/// [`digest_leaf`] for a zone shape.
+pub fn digest_leaf_of(cfg: &AggConfig, shape: Shape, ext: &Board, absent: &[bool; 8]) -> DigestLeaf {
+    let air = LifeDigestAir::new(shape);
     let (life, x_out) = generate_trace(&air.shape.life, ext, absent);
     let trace = extend_trace(&air.shape, life);
     let public = public_values(&air.shape, ext, absent, &x_out);

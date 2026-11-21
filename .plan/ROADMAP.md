@@ -109,7 +109,13 @@ roots (P2).
 - Acceptance: an aggregate over a 4-slot commitment verifies against the commitment's first and last state digests;
   a gap or reordering is rejected.
 
-**A4. Protocol integration (2–3 sessions).** Behind a genesis flag (`aggregation: true`), keep the per-leaf path as
+**A4 step 1 — done 2026-11-21:** `umis_agg::backend::LifeAggBackend` (`koalabear-agg[-test]`), aggregated proof
+commitments in the batch head format (spec §4d INV-LIFE-AGG-1..3), the verifier's own owner trees, SimNet
+`life-agg` / `life-agg-junk`, and backend tests with forged groups. **Step 2 (next):** a Poseidon2 board root in
+the zone block header (dual roots, signed by the minter; a mismatch is fault evidence). The beacon checks
+`chain(statement)` against those roots and `d_halo` against input payloads. Then `LeafData` states are dropped for
+aggregated commitments, and the aggregator becomes a separate role with its own deadline.
+**A4 (original plan, 2–3 sessions).** Behind a genesis flag (`aggregation: true`), keep the per-leaf path as
 the fallback:
 - Record `AggregateProof { beacon_slot, zones_root, statement_root, proof }`; an aggregation deadline `L_agg` after
   `L`; aggregator role = native full nodes (ranked like provers).
