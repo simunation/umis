@@ -1,5 +1,7 @@
 # umis — notes for Claude sessions
 
+- **After a context reset start with `.plan/HANDOFF.md`** (state, how to run, quirks, decisions), then
+  `.plan/ROADMAP.md` (goals, remaining steps, schedule). Keep both current when finishing a step.
 - Design plan: `.plan/simunation-poc-plan.md`. As-built architecture: `docs/ARCHITECTURE.md`.
 - **Proof / STARK work:** before touching `crates/task-water3d/src/air.rs`, `crates/umis-stark`, `crates/umis-proof`, proof paths
   in `crates/umis-protocol`, or genesis proof settings, read `docs/zk/README.md`, then `docs/zk/air-spec.md`. Cite the `INV-*`

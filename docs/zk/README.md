@@ -6,6 +6,8 @@ Start here before changing anything that touches proofs: `crates/task-water3d/sr
 
 This was built on 2026-11-03 against commit `4c26c42` (Plonky3 0.8.0). File:line references are a snapshot of that commit.
 
+The live plan and session handoff: `.plan/ROADMAP.md`, `.plan/HANDOFF.md`.
+
 ## Map
 
 | Document | Use it for |

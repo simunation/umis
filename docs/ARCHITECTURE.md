@@ -222,7 +222,10 @@ The genesis selects the backend (`proof_backend`: `mock` or `plonky3`, plus
 variants = 4 queries, insecure, for tests, allowed only with the genesis
 opt-in `insecure_proofs` and `umis-cli node --allow-insecure-proofs`). Every
 node, native or browser, builds it with `umis_tasks::backend_for(genesis)`.
-The tables below were measured with the older benchmark preset.
+The tables below were measured with the older benchmark preset. Plonky3 is pinned
+`=0.9.0-rc.2`. Recursive aggregation (prototype, not in the protocol):
+`crates/umis-agg`, Plonky3-recursion pinned to `3a69ba6`, KoalaBear⁵
+(`docs/zk/aggregation.md`). Plan: `.plan/ROADMAP.md`.
 
 **Field: KoalaBear** (7a). The toy AIR (`umis-stark::toy`, a 1D stencil with a
 LogUp memory bus, a range-check lookup and periodic public columns, 50

@@ -336,6 +336,13 @@ That's infeasible. The bounds that limit this are (a) proof count × proof size,
 
 ## 8. Recommended roadmap
 
+> **Status 2026-11-21:** Phase 1 is done except the items listed as B1–B8 in `.plan/ROADMAP.md` (shares on
+> `/out`, failed-verification memo, off-loop share verification, worker secret key, STARK scenarios in the test
+> suite). The security preset differs from item 2 below: leaves verified natively use P100 (grinding at every
+> site, ≥ 101 UDR bits); aggregation runs over KoalaBear⁵ (`docs/zk/aggregation.md`). Phase 2.1 (Plonky3 0.9 rc.2,
+> p3-security asserts in tests) is done. Phase 3 has a working prototype (`crates/umis-agg`). The live plan is
+> `.plan/ROADMAP.md`.
+
 ### Phase 1: hygiene and quick wins (days, no protocol changes)
 
 1. **Build flags (≈4× native prove time).**
@@ -411,11 +418,11 @@ The details are in `protocol-proof-flow.md` §8:
 
 ## 9. Decisions needed from you
 
-1. **Security target.** Is ≥100 proven bits enough, or must it be 128? 128 means switching the extension to KoalaBear⁵ and widening the digest.
+1. **Security target.** *Decided 2026-11-19: 100 proven bits.* (Aggregation now uses KoalaBear⁵ anyway, for a different reason: no batch grinding in-circuit.)
 2. **Swarm compatibility of state roots.** Keep keccak BMT as the canonical root (dual roots), or make Poseidon2 canonical and use the keccak BMT only for storage?
 3. **Browser role.** Leaf provers only, or also verifiers of every proof? That decides how much browser optimization is worth: SIMD and threads, versus moving to Stwo.
 4. **Physics roadmap.** Is nonlinear advection or pressure planned? It changes the constraint degree and with it the FRI parameters.
-5. **Version policy.** Track Plonky3 main or git commits (for the fixes and recursion), or only stable crates.io releases (0.9 isn't stable yet)?
+5. **Version policy.** Track Plonky3 main or git commits (for the fixes and recursion), or only stable crates.io releases (0.9 isn't stable yet)? *Now: pinned `=0.9.0-rc.2` and Plonky3-recursion `3a69ba6`.*
 
 ---
 

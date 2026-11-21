@@ -201,12 +201,14 @@ line shows the generation spread and the client-side check that adjacent zones a
 
 - **GPU batching.** The GPU prover makes the same batch STARK as the CPU (INV-LIFE-BATCH-1..3): at k = 1 (the
   default), 256×256 costs 1.7 ms per slot in batches of 4 and 0.83 ms with three concurrent batch provers of 16,
-  1.3× the native step ([`gpu.md`](gpu.md)). FRI folding on the GPU is the next lever.
+  1.3× the native step ([`gpu.md`](gpu.md)); with P100 0.77 ms/slot. FRI on the GPU was measured at ≤ 3 % gain
+  and not built (`gpu.md`); the remaining costs are the transcript and the PCIe link.
 - **Batching across zones.** Batches cover one zone's commitment (4 slots on the devnet). A prover holding several
   zones' commitments could batch them (×16 measured: 1.5 ms per slot at `n = 64`); this needs proof commitments
   to reference proofs outside their own envelope.
-- Periodic columns hold per-claim data (generation 0 and `X_out`), so these proofs are not ready for recursion yet
-  (INV-LIFE-FS-2).
+- Periodic columns hold per-claim data (generation 0 and `X_out`), so each slot needs its own recursive verifier
+  circuit (INV-LIFE-FS-2). Aggregation works over KoalaBear⁵ (`zk/aggregation.md`); making the circuit
+  claim-independent is ROADMAP step A2.
 - Batched shares (tags 2 and 3) do not verify on their own, so other nodes drop them on receipt; only the
   committer (or a backup prover after `slot / 4`) assembles the proof commitment.
 - The native step is byte-per-cell. A bit-sliced step would be about 30–60× faster and would make the prove/step
