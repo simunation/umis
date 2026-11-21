@@ -116,10 +116,12 @@ verifier and recurse. Until then aggregation leaves prove on the CPU (16.8–23 
 - **B1** Report the P3R bug upstream: `RecursiveAir::declares_interactions` omits `num_periodic_columns`
   (`recursion/src/traits/air.rs:236` at `3a69ba6`); our workaround is in `LifeAir::eval`. Draft the issue text for
   the owner (do not post without asking).
-- **B2** Add the STARK SimNet scenarios to `crates/umis-simnet/tests/scenarios.rs` (today they only run via the CLI
-  sweep): `stark`, `life-stark-keccak`, `life-stark-junk`, `life-stark-l0`.
-- **B3** Stop gossiping proof shares on `ZoneOut` topics (consumers never use them; bandwidth). `node/duties.rs:335,416`.
-- **B4** Memoize failed proof verifications in `Ctx` (keyed by statement + proof address) so junk is not re-verified.
+- ~~**B2**~~ Done 2026-11-21: `stark`, `life-stark-keccak`, `life-stark-junk`, `life-stark-l0` run in
+  `crates/umis-simnet/tests/scenarios.rs` (about 11 s together in debug).
+- ~~**B3**~~ Done 2026-11-21: shares go on `zone/<z>/proof` only; a share on `zone/<z>/out` is ignored.
+- ~~**B4**~~ Done 2026-11-21: `Ctx::verify_proof` memoizes failures keyed by statement, proof address **and** a keyed
+  fingerprint of the public data (a copied honest proof with wrong states must not condemn the right states); test
+  `ctx::tests::failed_verifications_are_memoized_per_public_data`. Grouped batch verification is not memoized.
 - **B5** Browser prover: stop posting the secret key to workers (`crates/umis-web/src/prover.rs:24`); pass only what the
   job needs (async backends do not sign).
 - **B6** Measure P100 in wasm for life2d (browser leaf cost) and EF5 leaves in wasm; record in `docs/life2d.md`.
@@ -147,7 +149,7 @@ verifier and recurse. Until then aggregation leaves prove on the CPU (16.8–23 
 
 | order | step | sessions | needs |
 |---|---|---|---|
-| 1 | B2, B3, B4 (quick, de-risk protocol work) | 0.5 | — |
+| 1 | ~~B2, B3, B4~~ (done 2026-11-21) | 0.5 | — |
 | 2 | A1 measure | 0.5 | — |
 | 3 | A2 claim-independent leaf circuit | 1–2 | A1 |
 | 4 | B1 draft upstream issue, B5 | 0.25 | — |

@@ -64,6 +64,10 @@ pub struct Ctx {
     /// pins every root the public data is checked against, so a verified
     /// pair stays verified.
     proofs: Mutex<HashMap<(Hash, Hash), NodeId>>,
+    /// Failed verifications: `(statement address, proof address, public-data fingerprint)` →
+    /// the error. The public data are part of the key: a copied honest proof shipped with
+    /// wrong states fails, and that must not condemn the same proof with the right states.
+    failed: Mutex<HashMap<(Hash, Hash, u64, u64), umis_proof::ProofError>>,
     /// Keyed-SipHash fingerprint of proof bytes → their bmt address (a STARK
     /// proof is ~200 KB, and block building re-applies bodies many times).
     addresses: Mutex<HashMap<(usize, u64, u64), Hash>>,
@@ -94,6 +98,7 @@ impl Ctx {
             sigs: Arc::new(DirectVerifier),
             instances: Mutex::new(HashMap::new()),
             proofs: Mutex::new(HashMap::new()),
+            failed: Mutex::new(HashMap::new()),
             addresses: Mutex::new(HashMap::new()),
             fp_keys: (RandomState::new(), RandomState::new()),
         }
@@ -127,6 +132,51 @@ impl Ctx {
         }
         c.insert(key, a);
         a
+    }
+
+    /// Two randomly keyed SipHashes over every field of `pd` (length-prefixed).
+    fn public_fingerprint(&self, pd: &umis_proof::PublicData<'_>) -> (u64, u64) {
+        let fp = |k: &RandomState| {
+            let mut h = k.build_hasher();
+            let mut bytes = |b: Option<&[u8]>| match b {
+                None => h.write_u8(0),
+                Some(b) => {
+                    h.write_u8(1);
+                    h.write_usize(b.len());
+                    h.write(b);
+                }
+            };
+            bytes(pd.task_id.map(str::as_bytes));
+            bytes(pd.params);
+            bytes(pd.genesis_seed.as_ref().map(|s| s.as_bytes().as_slice()));
+            bytes(pd.prev_state);
+            bytes(pd.next_state);
+            match pd.inputs {
+                None => h.write_u8(0),
+                Some(m) => {
+                    h.write_u8(1);
+                    h.write_usize(m.len());
+                    for (port, b) in m {
+                        h.write_u32(*port);
+                        h.write_usize(b.len());
+                        h.write(b);
+                    }
+                }
+            }
+            match pd.input_refs {
+                None => h.write_u8(0),
+                Some(r) => {
+                    h.write_u8(1);
+                    h.write_usize(r.len());
+                    for i in r {
+                        use umis_core::SegRecord;
+                        h.write(i.address().as_bytes());
+                    }
+                }
+            }
+            h.finish()
+        };
+        (fp(&self.fp_keys.0), fp(&self.fp_keys.1))
     }
 
     /// Verifies several proofs at once so the sequential checks that follow hit
@@ -176,7 +226,23 @@ impl Ctx {
         if let Some(n) = self.proofs.lock().expect("proof cache").get(&key) {
             return Ok(*n);
         }
-        let n = self.backend.verify(stmt, pd, proof)?;
+        let (f0, f1) = self.public_fingerprint(pd);
+        let fkey = (key.0, key.1, f0, f1);
+        if let Some(e) = self.failed.lock().expect("failure cache").get(&fkey) {
+            return Err(e.clone());
+        }
+        let n = match self.backend.verify(stmt, pd, proof) {
+            Ok(n) => n,
+            Err(e @ (umis_proof::ProofError::Invalid(_) | umis_proof::ProofError::Malformed(_))) => {
+                let mut c = self.failed.lock().expect("failure cache");
+                if c.len() > 10_000 {
+                    c.clear();
+                }
+                c.insert(fkey, e.clone());
+                return Err(e);
+            }
+            Err(e) => return Err(e),
+        };
         let mut c = self.proofs.lock().expect("proof cache");
         if c.len() > 100_000 {
             c.clear();
@@ -213,5 +279,85 @@ impl Ctx {
     /// `W_z` in ms.
     pub fn zone_window_ms(&self, slot_ticks: u64) -> u64 {
         self.timing(slot_ticks).fallback_window_ms(self.p.tick_ms, self.p.max_zone_rank)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use umis_core::records::TransitionStatement;
+    use umis_proof::{ProofError, PublicData, Witness};
+
+    /// Accepts the proof `b"ok"` and counts every verification.
+    #[derive(Default)]
+    struct Counting(AtomicUsize);
+
+    impl ProofBackend for Counting {
+        fn id(&self) -> &'static str {
+            "counting"
+        }
+        fn prove(
+            &self,
+            _: &TransitionStatement,
+            _: &Witness<'_>,
+            _: &umis_core::SecretKey,
+        ) -> Result<Vec<u8>, ProofError> {
+            unreachable!()
+        }
+        fn verify(&self, _: &TransitionStatement, pd: &PublicData<'_>, proof: &[u8]) -> Result<NodeId, ProofError> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            if proof == b"ok" && pd.prev_state == Some(b"good".as_slice()) {
+                Ok(NodeId::default())
+            } else {
+                Err(ProofError::Invalid("no".into()))
+            }
+        }
+    }
+
+    fn stmt() -> TransitionStatement {
+        TransitionStatement {
+            zone: 1,
+            from_slot: 2,
+            to_slot: 3,
+            params_hash: Hash::ZERO,
+            prev_state_root: Hash::ZERO,
+            state_root: Hash::ZERO,
+            inputs_commitment: Hash::ZERO,
+            outputs_root: Hash::ZERO,
+        }
+    }
+
+    #[test]
+    fn failed_verifications_are_memoized_per_public_data() {
+        let mut reg = TaskRegistry::new();
+        task_water3d::register(&mut reg);
+        let o = task_water3d::devnet::DevnetOptions::new(
+            umis_core::keccak256(b"r"),
+            0,
+            umis_core::SecretKey::from_label("f").node_id(),
+        );
+        let backend = Arc::new(Counting::default());
+        let ctx = Ctx::new(task_water3d::devnet::devnet_genesis(o), reg, backend.clone());
+        let calls = || backend.0.load(Ordering::Relaxed);
+        let (s, bad, good) = (
+            stmt(),
+            PublicData { prev_state: Some(b"bad"), ..Default::default() },
+            PublicData { prev_state: Some(b"good"), ..Default::default() },
+        );
+
+        // Junk proof: verified once, then answered from the memo.
+        assert!(ctx.verify_proof(&s, &good, b"junk").is_err());
+        assert!(ctx.verify_proof(&s, &good, b"junk").is_err());
+        assert_eq!(calls(), 1);
+
+        // An honest proof shipped with wrong public data fails, but the same proof with
+        // the right data is verified again and accepted (the memo keys on the data too).
+        assert!(ctx.verify_proof(&s, &bad, b"ok").is_err());
+        assert!(ctx.verify_proof(&s, &bad, b"ok").is_err());
+        assert_eq!(calls(), 2);
+        assert!(ctx.verify_proof(&s, &good, b"ok").is_ok());
+        assert!(ctx.verify_proof(&s, &good, b"ok").is_ok());
+        assert_eq!(calls(), 3);
     }
 }

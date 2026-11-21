@@ -41,7 +41,7 @@ Read this first after a context reset, then `ROADMAP.md` (what to do next) and, 
 
 ## How to build, test, verify
 
-- Gate (must pass before every commit): `scripts/check.sh` (fmt, clippy -D warnings, native tests, wasm32 check and
+- Gate (must pass before every commit; check `echo $?` or the last line `all checks passed`, not a wrapper's status): `scripts/check.sh` (fmt, clippy -D warnings, native tests, wasm32 check and
   clippy, wasm tests under node, web type check). Takes about 10–20 min; run with `CARGO_BUILD_JOBS=8`.
 - STARK tests in release (CLAUDE.md): `cargo test --release -p task-water3d --features stark`,
   `cargo test --release -p task-life2d --features stark` (and with `LIFE_PRESET=p100`, `LIFE_HASH=keccak`).
@@ -51,7 +51,7 @@ Read this first after a context reset, then `ROADMAP.md` (what to do next) and, 
   `UMIS_GPU_PROFILE=1`.
 - Aggregation: `cargo test --release -p umis-agg`; bench `PARAMS=j101|u101 cargo run --release -p umis-agg --example agg_bench -- 64,1,4,2 256,1,8,3`.
 - SimNet sweep: `cargo build --release -p umis-simnet && target/release/umis-simnet --scenario all --seeds 5 --slots 60 --threads 10`
-  (24 scenarios × 5 seeds, about 2.5 min; last result 120/120 OK).
+  (24 scenarios × 5 seeds, about 4 min at 6 threads; last result 120/120 OK, 2026-11-21).
 - Security numbers: always `umis_stark::security` or the secprobe; never `queries × log_blowup + PoW`.
 - Mutation-check every new negative test (disable the check, see the test fail, restore). Soundness tests must
   reject in the **verifier in release mode**; a debug-build prover panic is not a rejection, and tests must also
@@ -85,5 +85,5 @@ aggregation default because it is ~1.6× faster with half-size proofs; U101 kept
 
 ## Next action
 
-`ROADMAP.md` §5 order 1: B2 (STARK scenarios into `tests/scenarios.rs`), B3, B4; then A1 (measure layer-1 build
-vs prove). Pending owner decision before A3: P2 (state roots).
+B2–B4 done (2026-11-21). Next: `ROADMAP.md` A1 (measure layer-1 circuit build vs prove, EF5 CPU leaf vs GPU EF4
+leaf, circuit sizes), then A2. Pending owner decision before A3: P2 (state roots).

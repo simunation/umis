@@ -68,3 +68,25 @@ fn same_seed_same_trace() {
     let c = scenarios::run(Scenario::Basic, 8, 15);
     assert_ne!(a.trace, c.trace);
 }
+
+// Real Plonky3 proofs (test FRI preset). Each scenario proves every advancing slot, so they
+// are the slowest here; `slots` is the minimum each scenario clamps to.
+#[test]
+fn stark() {
+    ok("stark", 20);
+}
+
+#[test]
+fn life_stark_keccak() {
+    ok("life-stark-keccak", 20);
+}
+
+#[test]
+fn life_stark_junk() {
+    ok("life-stark-junk", 20);
+}
+
+#[test]
+fn life_stark_l0() {
+    ok("life-stark-l0", 20);
+}

@@ -332,7 +332,6 @@ impl Node {
                 crate::zone::ProveOut::Share(s) => {
                     let g = Gossip::ProofShare(Box::new(s));
                     self.publish(Topic::ZoneProof(z), &g, out);
-                    self.publish(Topic::ZoneOut(z), &g, out);
                 }
                 crate::zone::ProveOut::Job(j) => self.job_queue.push((z, *j)),
             }
@@ -413,7 +412,6 @@ impl Node {
                     self.stats.proved += 1;
                     let g = Gossip::ProofShare(Box::new(s));
                     self.publish(Topic::ZoneProof(z), &g, out);
-                    self.publish(Topic::ZoneOut(z), &g, out);
                 }
             }
             Err(e) => {

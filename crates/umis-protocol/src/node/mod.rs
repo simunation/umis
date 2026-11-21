@@ -469,16 +469,16 @@ impl Node {
             (Topic::ZoneBlock(z), Gossip::ZoneBlock(b)) if b.header().zone == z => {
                 self.on_zone_block(now, Arc::new(*b), Some(from), out)
             }
-            (Topic::ZoneProof(z) | Topic::ZoneOut(z), Gossip::ProofShare(s)) if s.leaf.zone == z => {
-                match self.engines.get_mut(&z) {
-                    Some(e) => match e.on_share(&self.ctx, &self.chain, *s) {
-                        crate::zone::ShareVerdict::Stored => Validation::Accept,
-                        crate::zone::ShareVerdict::Ignored => Validation::Ignore,
-                        crate::zone::ShareVerdict::Bad => Validation::Reject,
-                    },
-                    None => Validation::Accept,
-                }
-            }
+            (Topic::ZoneProof(z), Gossip::ProofShare(s)) if s.leaf.zone == z => match self.engines.get_mut(&z) {
+                Some(e) => match e.on_share(&self.ctx, &self.chain, *s) {
+                    crate::zone::ShareVerdict::Stored => Validation::Accept,
+                    crate::zone::ShareVerdict::Ignored => Validation::Ignore,
+                    crate::zone::ShareVerdict::Bad => Validation::Reject,
+                },
+                None => Validation::Accept,
+            },
+            // Shares travel on the zone's proof topic only; consumers never used them here.
+            (Topic::ZoneOut(_), Gossip::ProofShare(_)) => Validation::Ignore,
             (Topic::ZoneOut(z), Gossip::Output(b)) if b.producer.header.zone == z => self.on_output(*b),
             (Topic::ZoneVote(z), Gossip::Vote(v)) if v.vote.zone == z => {
                 if !v.verify_sig() {

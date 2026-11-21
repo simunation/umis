@@ -128,7 +128,8 @@ Three call sites:
 
 How many times each proof crosses the network:
 1. The share goes out on `zone/<z>/proof`.
-2. The same share goes out again on `zone/<z>/out`. Consumers download it there and never use it.
+2. (Removed 2026-11-21, ROADMAP B3.) The share used to go out again on `zone/<z>/out`, where consumers never used it;
+   shares now travel on `zone/<z>/proof` only and a share on the output topic is ignored.
 3. The proof commitment is gossiped on `commit`.
 4. The proof commitment is embedded again in the beacon block, which full nodes fetch again during sync.
 
@@ -327,7 +328,7 @@ Related malleability: `LeafData` and the proof bytes inside a beacon block are n
    - checking `identifies_prover` in mock `on_share`;
    - returning `Reject` for provably bad items.
 2. **STARK verification on the event loop.** `on_share` verifies synchronously (about 11 ms per share). `warm_proofs` blocks the loop while it uses the global rayon pool, which competes with the "2-thread prover" isolation. In wasm, every beacon block's leaves are verified sequentially on the page thread, about 120 ms per block for 11 leaves at n_loc=16.
-3. **Bandwidth.** Each proof crosses the network about 4 times: two share topics, the proof commitment gossip and the beacon block. Consumers receive producers' shares on `zone/<p>/out` and never use them. Beacon blocks carry about 1 MiB of LeafData states per 4 s.
+3. **Bandwidth.** Each proof crosses the network about 3 times: the share topic, the proof commitment gossip and the beacon block (the duplicate on `zone/<p>/out` was removed 2026-11-21). Beacon blocks carry about 1 MiB of LeafData states per 4 s.
 4. **Re-execution is still mandatory for members under Plonky3**, so proofs serve only the beacon. Fault evidence is re-execution only.
 5. **Failed verifications are not memoized**, so block building re-verifies a bad proof commitment on every trial `apply_body`.
 6. **The SimNet `stark` scenario shares one Ctx and one memo, is not in CI, and has no adversarial coverage under plonky3.** The oracle does not check proofs.
