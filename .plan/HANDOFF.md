@@ -89,11 +89,13 @@ aggregation leaves use one strip per zone (2026-11-21).
 
 ## Owner constraint (2026-11-21)
 
-No Game-of-Life-specific work: life2d is a test case; future simulations differ. See ROADMAP §0.
+life2d and water3d are frozen toys; build a generic local-rule (stencil) framework with fast toy examples. See
+ROADMAP §0.
 
 ## Next action
 
 B2–B5, A1, A2, the A3 core and A4 step 1 done (2026-11-21). Life commitments can be aggregated in the protocol
 (`stark_config_id = koalabear-agg[-test]`, `umis_agg::backend::LifeAggBackend`; SimNet `life-agg`, `life-agg-junk`,
 release only, ~100 s each). Owner decisions: P2 dual roots; one strip per zone for aggregation leaves (best
-`rpr = 2`). Next: ROADMAP §0 order: G4 spike (leaves with lookups via P3R low-level path, water3d), G2, G3, G1, G5; B6/B6a.
+`rpr = 2`). Next: ROADMAP §0 order: S1 stencil AIR framework (life as toy 1), S2 fixed-point diffusion toy, S3 generic root and
+statement, S4 generic aggregation backend, S5 lookups, S6 stateless beacon; B6/B6a.

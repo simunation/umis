@@ -5,28 +5,38 @@ the design, acceptance criteria and its dependencies. Session handoff (how to re
 Original design: `simunation-poc-plan.md` (its milestones M0–M8 are done; this file continues from there).
 
 
-## 0. Constraint (owner, 2026-11-21): no Game-of-Life-specific work
+## 0. Direction (owner, 2026-11-21): a generic local-rule framework, toys only
 
-Other simulations will replace life2d. Life is a **test case**, not a target: no decisions, settings or optimizations
-that only pay off for life. Consequences:
-- **Frozen as reference examples** (keep them working, stop extending them): `LifeDigestAir`, `LifeAggBackend`,
-  the "one strip per zone" and `rpr = 2` choices, `board_root` (its value depends on the life trace layout), the
-  life GPU trace kernels and life benchmarks.
-- **Kept, because they are generic:** P100, EF5 aggregation (J101/U101), the P3R pin, reusable owners and cached
-  owner trees per (shape, m), the group head format, the chain check, the proof-pool DoS fixes, the failure memo,
-  and the in-trace Poseidon2 sponge technique.
-- **Next steps (replaces A3+/A4 step 2 ordering):**
-  1. **G4 spike: leaves with lookups.** Verify a batch-STARK leaf with LogUp (water3d) through P3R's low-level
-     `verify_batch_circuit` path. Most real simulations need buses, and the trusted uni-STARK owner rejects them.
-     Biggest risk, so it goes first.
-  2. **G2 sponge gadget:** move the in-trace Poseidon2 sponge out of `digest.rs` into `umis-stark` (absorb any
-     limb expressions, gated, chained), with its tests.
-  3. **G3 generic state root:** a Poseidon2 root over the task's canonical state bytes, independent of any AIR
-     layout; tasks' AIRs absorb in that order. Replaces `board_root`.
-  4. **G1 generic aggregation backend:** a task-side trait (leaf AIR, statement derivation `[d_prev, d_in, d_next,
-     d_out, extras]`, shape key). `AggBackend<T>`; life is the first impl, water the second (G6 = old A6).
-  5. **G5 stateless beacon** (old A4 step 2) on the generic statement: header root, outputs digest, fault evidence.
-  6. B6/B6a (browser cost, e2e rollbacks): generic, keep.
+The final simulation will be far more complex than life2d or water3d (physics, fluids), but it will be built from
+**local rules**: each cell's next state is a function of a bounded neighbourhood, with halos exchanged between
+zones. life2d and water3d are **both frozen toys**: keep them working as regression tests, never optimize for them.
+Wanted: fast toy examples on a framework that extends to complex rules.
+
+Generic pieces to keep: P100 / EF5 aggregation presets (J101), the P3R pin, reusable owners and cached owner trees,
+the group proof format, the chain check, the proof-pool DoS fixes and the failure memo, and the in-trace Poseidon2
+sponge technique.
+
+**Plan (in order):**
+1. **S1 stencil AIR framework** (`umis-stencil`, new crate). A task declares: the cell state (`V` field elements),
+   the radius `r`, the update as polynomial constraints over the neighbourhood (degree budget from the preset),
+   and auxiliary witness columns. The framework provides the layout (rows × generations, halo, padding), a
+   prev / halo / next binding by in-trace Poseidon2 sponges, shape-only periodic columns and public parameters.
+   This generalises `LifeDigestAir`. Life is re-expressed on it as toy 1, the acceptance test.
+2. **S2 toy 2: fixed-point diffusion / advection** (multi-value state, integer arithmetic with rounding). It needs
+   range checks, done first with bit-decomposition columns (stays a uni-STARK, so the trusted P3R owner works).
+3. **S3 generic state root and statement**: a Poseidon2 root over the canonical state encoding, independent of
+   the AIR layout. Leaf statement `[d_prev, d_in, d_next, d_out, params]`; `chain()` and the halo / face checks on
+   it. Replaces `board_root`.
+4. **S4 generic aggregation backend** `AggBackend<T: StencilTask>`, replacing `LifeAggBackend`. Protocol config
+   per task.
+5. **S5 lookups in leaves** (P3R low-level `verify_batch_circuit` path) once a toy needs range checks or tables at
+   scale. This is the efficiency path for real physics; spike it right after S2 if bit decomposition proves too
+   wide.
+6. **S6 stateless beacon** (old A4 step 2) on the S3 statement: header root, outputs digest, fault evidence.
+7. B6/B6a (browser cost, e2e rollbacks): generic, keep.
+
+Owner questions still open: P3 nonlinear rules (the constraint degree sets the blowup: P100's blowup 4 allows
+degree ≤ 5; more needs blowup 8 or auxiliary columns), and P1 browser role.
 
 ## 1. Goals
 
