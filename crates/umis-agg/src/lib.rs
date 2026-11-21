@@ -26,6 +26,7 @@ use p3_recursion::{
 };
 use p3_uni_stark::{Proof, prove, verify};
 use task_life2d::Life2dParams;
+use task_life2d::air::digest::{LifeDigestAir, extend_trace, public_values};
 use task_life2d::air::{LifeAir, Shape, claim_data, generate_trace};
 use task_life2d::board::Board;
 use umis_core::Hash;
@@ -131,6 +132,124 @@ pub fn leaf(cfg: &AggConfig, p: &Life2dParams, slot: u64, ext: &Board, absent: &
     let proof = prove(cfg, &air, trace, &public).expect("leaf proves");
     verify(cfg, &air, &proof, &public).expect("leaf verifies natively");
     Leaf { air, proof, public }
+}
+
+/// One life2d slot proved with the claim-independent [`LifeDigestAir`] (ROADMAP A2): its
+/// statement is the Poseidon2 digest of the claim and the `absent` flags, and one AIR (so one
+/// layer-1 circuit) serves every slot of a zone shape.
+pub struct DigestLeaf {
+    pub air: LifeDigestAir,
+    pub proof: Proof<AggConfig>,
+    pub public: Vec<Val>,
+}
+
+impl DigestLeaf {
+    /// The leaf's shape for the security calculator.
+    pub fn shape(&self) -> ProofShape {
+        let d = self.air.shape;
+        ProofShape {
+            log_height: d.life.height.trailing_zeros() as usize,
+            num_constraints: d.num_constraints(),
+            max_degree: 3,
+            batched_openings: 2 * d.width() + 2 * 5,
+            logup: None,
+        }
+    }
+}
+
+/// Proves one advancing slot of a zone with layout `p` on the extended board `ext` with the
+/// digest AIR.
+pub fn digest_leaf(cfg: &AggConfig, p: &Life2dParams, ext: &Board, absent: &[bool; 8]) -> DigestLeaf {
+    let air = LifeDigestAir::new(Shape::of(p));
+    let (life, x_out) = generate_trace(&air.shape.life, ext, absent);
+    let trace = extend_trace(&air.shape, life, ext, &x_out);
+    let public = public_values(&air.shape, ext, absent, &x_out);
+    let proof = prove(cfg, &air, trace, &public).expect("digest leaf proves");
+    verify(cfg, &air, &proof, &public).expect("digest leaf verifies natively");
+    DigestLeaf { air, proof, public }
+}
+
+/// A layer-1 owner built once per zone shape (from any representative leaf) that proves the
+/// recursive proof of every digest leaf of that shape.
+pub struct Layer1Owner<'a> {
+    owner: TrustedPreparedLayer<'a, AggConfig, AggConfig, LifeDigestAir, Backend, 5>,
+    pub build: std::time::Duration,
+}
+
+impl<'a> Layer1Owner<'a> {
+    pub fn new(p: &AggParams, representative: &'a DigestLeaf) -> Result<Self, String> {
+        let t = std::time::Instant::now();
+        let owner = TrustedPreparedLayer::new(
+            TrustedPreparedSource::UniStark {
+                config: config(p),
+                air: &representative.air,
+                preprocessed_commit: None,
+                proof: &representative.proof,
+                public_inputs: &representative.public,
+            },
+            config(p),
+            backend(),
+            params(),
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        Ok(Self { owner, build: t.elapsed() })
+    }
+
+    /// The recursive proof of `leaf` (its statement: the leaf's public values).
+    pub fn prove(&self, leaf: &DigestLeaf) -> Result<Recursive, String> {
+        let t = std::time::Instant::now();
+        let out = self
+            .owner
+            .prove(TrustedPreparedInput::UniStark { proof: &leaf.proof, public_inputs: &leaf.public })
+            .map_err(|e| format!("{e:?}"))?;
+        let timing = Timing { build: std::time::Duration::ZERO, prove: t.elapsed() };
+        Ok(Recursive { out, statement: leaf.public.clone(), verifier: self.owner.verifier(), timing })
+    }
+}
+
+/// A 2-to-1 owner built once (from representative children) that aggregates any two
+/// recursive proofs with the same verifiers as those children.
+pub struct AggOwner {
+    owner: TrustedPreparedAggregation<'static, 'static, AggConfig, AggConfig, BatchOnly, BatchOnly, Backend, 5>,
+    pub build: std::time::Duration,
+}
+
+impl AggOwner {
+    pub fn new(p: &AggParams, left: &Recursive, right: &Recursive) -> Result<Self, String> {
+        let t = std::time::Instant::now();
+        let owner = TrustedPreparedAggregation::new(
+            TrustedPreparedSource::BatchStark {
+                verifier: left.verifier.clone(),
+                proof: &left.out.0,
+                statement: &left.statement,
+            },
+            TrustedPreparedSource::BatchStark {
+                verifier: right.verifier.clone(),
+                proof: &right.out.0,
+                statement: &right.statement,
+            },
+            config(p),
+            backend(),
+            params(),
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        Ok(Self { owner, build: t.elapsed() })
+    }
+
+    /// The 2-to-1 proof of `left` and `right` (statement: left's, then right's).
+    pub fn prove(&self, left: &Recursive, right: &Recursive) -> Result<Recursive, String> {
+        let t = std::time::Instant::now();
+        let out = self
+            .owner
+            .prove(
+                TrustedPreparedInput::BatchStark { proof: &left.out.0, statement: &left.statement },
+                TrustedPreparedInput::BatchStark { proof: &right.out.0, statement: &right.statement },
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let statement = [left.statement.as_slice(), right.statement.as_slice()].concat();
+        let timing = Timing { build: std::time::Duration::ZERO, prove: t.elapsed() };
+        Ok(Recursive { out, statement, verifier: self.owner.verifier(), timing })
+    }
 }
 
 /// A recursive proof and the statement it carries.

@@ -31,8 +31,10 @@ Read this first after a context reset, then `ROADMAP.md` (what to do next) and, 
 - `crates/task-life2d/src/{lib.rs,shape.rs,air.rs,air/gpu.rs,air/tests.rs}`: life task, shape envelope (`MIN/MAX_*`),
   AIR, `MAX_BATCH = 32`, GPU prover glue, tests (`LIFE_PRESET=p100`, `LIFE_HASH=keccak` switches).
 - `crates/umis-gpu`: generic GPU-resident prover (`prover.rs`, JIT `jit.rs`, `resident.rs` + `cuda/*.cu`, `pow.rs`).
-- `crates/umis-agg`: aggregation over EF5 (`AggParams::{J101,U101,TEST}`, `config`, `leaf`, `layer1`, `aggregate`,
-  `Recursive::verify`, `recursive_shape`), `tests/agg.rs`, `examples/agg_bench.rs`.
+- `crates/umis-agg`: aggregation over EF5 (`AggParams::{J101,U101,TEST}`, `config`, per-claim `leaf`/`layer1`/`aggregate`,
+  claim-independent `digest_leaf` + reusable `Layer1Owner`/`AggOwner`, `Recursive::{verify,timing}`, `recursive_shape`),
+  `tests/agg.rs`, `examples/agg_bench.rs` (`DIGEST=1`).
+- `crates/task-life2d/src/air/digest.rs` (+ `digest_tests.rs`): claim-independent digest AIR (inline Poseidon2 sponge).
 - `crates/umis-core/src/genesis.rs`: `insecure_proofs`, `SECURE_STARK_CONFIGS`.
 - `crates/umis-protocol/src/node/{mod.rs,duties.rs}`: pools (`pc_pool`, `pc_trusted`, `pc_alts`, `zc_awaiting`),
   `check_pc`, `check_pc_candidates`, `evict_pc`, junk adversary; `zone/engine.rs`: `trusted` shares, `ShareVerdict`;
@@ -85,7 +87,7 @@ aggregation default because it is ~1.6× faster with half-size proofs; U101 kept
 
 ## Next action
 
-B2–B4 and A1 done (2026-11-21). Next: `ROADMAP.md` A2 (claim-independent life leaf circuit; required, since
-per-claim circuits make every aggregation owner and the checker rebuild circuits). First check what P3R offers
-(`recursion/src/prepared/trusted.rs`, `StateTransitionLayout` / `StatementSchema`), then decide between a Poseidon2
-sponge AIR + bus or inline Poseidon2 columns. Pending owner decision before A3: P2 (state roots).
+B2–B4, A1 and A2 done (2026-11-21; A2 = `task_life2d::air::digest::LifeDigestAir`, `umis_agg::{digest_leaf,
+Layer1Owner, AggOwner}`). Next: B1/B5 (small), then A3. A3 first needs a layout decision for binding the previous
+board separately from the halo (ROADMAP A3 "Prerequisite", spec §4c "Open for A3"). Ask the owner P2 (state roots)
+together with that choice before coding A3.

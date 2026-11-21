@@ -54,7 +54,13 @@ an EF5 leaf on the CPU vs the EF4 GPU leaf, and the layer-1 circuit size (rows p
 `docs/zk/aggregation.md`. Decides how urgent A2 is: if the build is a small share, per-claim circuits are tolerable
 for a first protocol version.
 
-**A2. Make the life leaf circuit claim-independent (1–2 sessions).** Today the periodic columns carry claim data
+**A2. ~~Make the life leaf circuit claim-independent~~ — done 2026-11-21** with option 2 (inline Poseidon2 sponge,
+one combined digest of `E` and `X_out` + public `absent`; `task_life2d::air::digest`, spec §4c INV-LIFE-DIG-1..4;
+`umis_agg::{digest_leaf, Layer1Owner, AggOwner}`; one owner per shape proves many slots; per leaf in a tree about
+2.3 s → 1.6 s; numbers in `docs/zk/aggregation.md`). Option 1 was not taken: P3R's trusted owners accept uni-STARK
+leaves or recursive batch proofs only. Moving the hashing into layer 1 would need a P3R fork (periodic columns are
+circuit constants). The original plan follows.
+**A2 (original plan, 1–2 sessions).** Today the periodic columns carry claim data
 (INV-LIFE-FS-2), so the recursive verifier circuit changes with every slot. Target: periodic columns that depend
 only on the shape, claim bound through public values.
 - Mask: replace `mask[o][class]` (built from the `absent` flags) by shape-only band indicators per neighbour
@@ -79,8 +85,14 @@ only on the shape, claim bound through public values.
   GPU prover (`air/gpu.rs`, `umis-gpu` JIT handles new constraints automatically; trace generation kernels may need
   the sponge columns), `umis-agg`.
 
-**A3. Statement schema and per-commitment aggregation (1 session).** Define what an aggregate proves, so the beacon
-can check it without states:
+**A3. Statement schema and per-commitment aggregation (1–2 sessions).** Define what an aggregate proves, so the
+beacon can check it without states. **Prerequisite found in A2:** the A2 digest binds `E` as a whole. Chaining needs
+`d_prev` = the digest of the previous inner board, separately from the halo. Strip halos duplicate cells of
+neighbouring strips, which sit `Y` stacked rows apart, so the AIR cannot tie them with local constraints. Options:
+(a) a LogUp copy argument, which needs the low-level P3R path; (b) a strip layout without halo duplicates, where
+the halo cells come only from the external halo and neighbouring strips read each other through extra columns;
+(c) the checker rebuilds `E`'s digest from per-region digests (inner board plus 8 neighbour faces), with each
+region absorbed by its own sponge (more permutations per row). Decide with P2.
 - Leaf statement: `[zone, from_slot, params_hash, d_prev, d_next, d_inputs..., absent]` as field elements, where the
   digests are the A2 Poseidon2 digests (or the beacon's state-root encoding, see P2 below).
 - Per zone commitment: chain the slots' layer-1 proofs with `TrustedPreparedAggregation::new_state_transition`
@@ -151,7 +163,7 @@ verifier and recurse. Until then aggregation leaves prove on the CPU (16.8–23 
 |---|---|---|---|
 | 1 | ~~B2, B3, B4~~ (done 2026-11-21) | 0.5 | — |
 | 2 | ~~A1 measure~~ (done 2026-11-21) | 0.5 | — |
-| 3 | A2 claim-independent leaf circuit | 1–2 | A1 |
+| 3 | ~~A2 claim-independent leaf circuit~~ (done 2026-11-21) | 1–2 | A1 |
 | 4 | B1 draft upstream issue, B5 | 0.25 | — |
 | 5 | A3 statement schema, per-commitment chaining | 1 | A2, P2 |
 | 6 | A4 protocol integration + SimNet | 2–3 | A3 |

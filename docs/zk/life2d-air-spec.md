@@ -90,9 +90,8 @@ below `p`, so the encoding of a root is injective and two different roots never 
 Grinding stays Poseidon2 (a Keccak transcript made proof-of-work grinding about 2 ms slower per proof). Water3d
 keeps Poseidon2 under this id. The whole negative-test suite runs on both configurations (`LIFE_HASH=keccak`).
 
-**INV-LIFE-FS-2.** Periodic data is per claim, so these proofs are not recursion-friendly as is (INV-PARAM-6):
-before aggregation, move the packed limbs into a committed preprocessed or main trace bound by the state
-commitment.
+**INV-LIFE-FS-2.** Periodic data is per claim, so these proofs are not recursion-friendly as is (INV-PARAM-6).
+For recursion, use the digest AIR (§4c, INV-LIFE-DIG-*), whose periodic data depend on the shape only.
 
 ## 4b. Batched proofs
 
@@ -121,6 +120,52 @@ asserts the bound at `MAX_BATCH`.
 `batched_slots_verify_only_as_a_group` covers: the honest group; each proof alone; a missing member; swapped
 references; a bit flip in the batch STARK; a member whose claimed next state is false (roots re-derived); replay
 into another zone; an unbatched proof in the same group.
+
+## 4c. The digest AIR (claim-independent, for recursion)
+
+`air::digest::LifeDigestAir` (ROADMAP A2) proves the same `k` masked generations as `LifeAir` with the same main
+columns and the same generation constraints (shared code: `Cells`, `eval_gen0_boolean`, `eval_generations`). Its
+periodic columns depend only on the shape, so one AIR, one verifier circuit and one recursive owner serve every
+slot of a zone shape (it resolves INV-LIFE-FS-2 for recursion). It is used by `umis-agg` only; the protocol's
+EF4 P100 backend keeps `LifeAir`.
+
+**INV-LIFE-DIG-1 (claim digest).** `public[0..8]` is a Poseidon2 (KoalaBear, width 16, rate 8, overwrite mode)
+sponge over every trace row's limbs, row 0 first: the row's `rpr·Ws` generation-0 cells in column order, then
+the `rpr·w` inner generation-`k` cells of each slot multiplied by `sel[i]`, packed 30 cells per limb and
+zero-padded to `P·8` limbs (`P = ⌈limbs/8⌉` permutations per row). Cells are boolean (INV-LIFE-ARITH-2), so the
+limbs fix every cell, and the sponge's 8-element capacity gives about 124-bit collision resistance. The verifier
+computes the digest natively from `E` and `X_out` (`digest::public_values`). Tests: `a_false_output_is_rejected`,
+`generation_zero_must_match_the_digest`, `tampered_sponge_columns_are_rejected`.
+
+**INV-LIFE-DIG-2 (sponge in the trace).** Each row carries `cap_in[8]` and, per permutation, its 128 full-round
+and 20 partial-round S-box outputs (degree-3 constraints, the rounds of `Poseidon2KoalaBear<16>`;
+`permutation_columns_match_the_native_permutation`). Permutation `m`'s input is `[limbs[8m..8m+8], capacity]`,
+the capacity being `cap_in` for `m = 0` and permutation `m − 1`'s output otherwise. `cap_in = 0` on the first row;
+on every transition, the next row's `cap_in` equals this row's last output `[8..16]`. The last row's last output
+`[0..8]` equals `public[0..8]`. Without the transition constraint, a prover could restart the chain after a
+tampered row (`generation_zero_must_match_the_digest`, checked by disabling it).
+
+**INV-LIFE-DIG-3 (mask from public flags).** `public[8..16]` are the `absent` flags, in port order. For each
+stacked-row offset `o`, eight shape-only indicators `L_b = [strip 0 ∧ row band b]` (b = 0, 1, 2),
+`C_b = [row band b]` (b = 0, 2), `R_b = [last strip ∧ row band b]` give the mask
+`m(o, inner) = C₀·a_N + C₂·a_S`, `m(o, left) = L₀·a_NW + L₁·a_W + L₂·a_SW + (C₀ − L₀)·a_N + (C₂ − L₂)·a_S`, and
+`m(o, right)` likewise with `R`. Exactly one term is active per cell, so `m ∈ {0, 1}` for boolean flags, and it
+equals INV-LIFE-ARITH-3's mask (`the_band_mask_equals_the_periodic_mask`, all 256 flag sets on 4 layouts). The
+constraint degree stays 3: periodic and public values are constants in the trace. The verifier derives the flags
+with `decide`, as for `LifeAir`. Test: `lying_about_absent_regions_is_rejected` (digest version).
+
+**INV-LIFE-DIG-4 (one circuit per shape).** `LifeDigestAir::new(shape)` takes nothing from the claim
+(`one_air_serves_every_claim_of_a_shape`). In `umis-agg`, `Layer1Owner` and `AggOwner` are built once and prove
+many slots (`one_owner_per_shape_proves_many_slots`). A leaf presented with another claim's statement, or with
+one flipped absent flag, does not recurse (`a_digest_leaf_with_a_wrong_claim_does_not_recurse`).
+
+Cost (256×256, k = 1): width 294 → 450 (one permutation per row), and the leaf proves about 2.5× slower over
+EF5 (`docs/zk/aggregation.md`). Security: `digest_leaf_shapes_are_secure` (J101 and U101 ≥ 101 bits).
+
+**Open for A3.** The digest binds `E` as a whole. To chain slots, and to let a checker without states bind leaves
+to state roots, the leaf needs separate digests of the previous inner board, of the halo and of `X_out`. Strip
+halos duplicate cells of neighbouring strips that are far apart in the trace, so a digest of the halo alone
+does not fix them without an extra copy argument. See ROADMAP A3.
 
 ## 5. I/O and tags (native, `verify_inner`)
 

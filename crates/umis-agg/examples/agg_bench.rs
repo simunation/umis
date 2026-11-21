@@ -1,10 +1,13 @@
 //! Aggregation cost over KoalaBear⁵: life2d leaf → layer-1 recursive proof → 2-to-1 aggregate.
 //! `cargo run --release -p umis-agg --example agg_bench -- n,k,strips,rpr ...` (default 64,1,4,2)
-//! `PARAMS=u101` (unique decoding), `j101` (Johnson, default) or `test`.
+//! `PARAMS=u101` (unique decoding), `j101` (Johnson, default) or `test`. `DIGEST=1`: the
+//! claim-independent digest leaf with owners built once and reused (steady state).
 use std::time::Instant;
 use task_life2d::Life2dParams;
 use task_life2d::board::Board;
-use umis_agg::{AggParams, aggregate, config, layer1, leaf, proof_bytes, recursive_shape};
+use umis_agg::{
+    AggOwner, AggParams, Layer1Owner, aggregate, config, digest_leaf, layer1, leaf, proof_bytes, recursive_shape,
+};
 
 fn main() {
     let p = match std::env::var("PARAMS").as_deref() {
@@ -27,6 +30,44 @@ fn main() {
             *c = ((i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 60 < 5) as u8;
         }
         let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
+        if std::env::var("DIGEST").is_ok_and(|v| v == "1") {
+            let mut ext2 = ext.clone();
+            ext2.cells.rotate_left(7);
+            let t = Instant::now();
+            let a = digest_leaf(&cfg, &lp, &ext, &[false; 8]);
+            let t_leaf = ms(t);
+            let b = digest_leaf(&cfg, &lp, &ext2, &[false; 8]);
+            let l1 = Layer1Owner::new(&p, &a).expect("layer-1 owner");
+            let (ra, rb) = (l1.prove(&a).expect("layer 1"), l1.prove(&b).expect("layer 1"));
+            ra.verify().expect("verifies");
+            rb.verify().expect("verifies");
+            let agg = AggOwner::new(&p, &ra, &rb).expect("2-to-1 owner");
+            let ab = agg.prove(&ra, &rb).expect("2-to-1");
+            let ba = agg.prove(&rb, &ra).expect("2-to-1");
+            ab.verify().expect("verifies");
+            ba.verify().expect("verifies");
+            let ms_d = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+            println!(
+                "{l:?} digest {:?}/{}q lb{}: leaf {t_leaf:.1} ms {} KB width {} bits {:.1} | layer1 build {:.0} prove {:.0}/{:.0} ms {} KB bits {:.1} | 2-to-1 build {:.0} prove {:.0}/{:.0} ms {} KB bits {:.1}",
+                p.regime,
+                p.fri.num_queries,
+                p.fri.log_blowup,
+                postcard::to_allocvec(&a.proof).unwrap().len() / 1024,
+                a.air.shape.width(),
+                p.bits(&a.shape()),
+                ms_d(l1.build),
+                ms_d(ra.timing.prove),
+                ms_d(rb.timing.prove),
+                proof_bytes(&ra.out.0) / 1024,
+                p.bits(&recursive_shape(&ra.out.0)),
+                ms_d(agg.build),
+                ms_d(ab.timing.prove),
+                ms_d(ba.timing.prove),
+                proof_bytes(&ab.out.0) / 1024,
+                p.bits(&recursive_shape(&ab.out.0)),
+            );
+            continue;
+        }
         let t = Instant::now();
         let a = leaf(&cfg, &lp, 1, &ext, &[false; 8]);
         let t_leaf = ms(t);

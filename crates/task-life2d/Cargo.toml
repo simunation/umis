@@ -10,7 +10,7 @@ license.workspace = true
 # Plonky3 AIR for k generations of Conway's rule and the `plonky3` proof backend.
 # GPU-resident prover for the Keccak config (`air::gpu`, `UMIS_GPU_PROVE=1`; needs CUDA to build).
 cuda = ["stark", "dep:umis-gpu", "dep:p3-commit", "dep:p3-dft", "dep:p3-fri", "dep:p3-symmetric"]
-stark = ["dep:umis-stark", "dep:umis-proof", "dep:p3-air", "dep:p3-uni-stark", "dep:p3-batch-stark", "dep:p3-field", "dep:p3-matrix", "dep:p3-maybe-rayon", "dep:postcard"]
+stark = ["dep:umis-stark", "dep:umis-proof", "dep:p3-air", "dep:p3-uni-stark", "dep:p3-batch-stark", "dep:p3-field", "dep:p3-matrix", "dep:p3-maybe-rayon", "dep:postcard", "dep:p3-koala-bear", "dep:p3-poseidon2", "dep:p3-symmetric"]
 
 [dependencies]
 umis-core.workspace = true
@@ -29,6 +29,8 @@ p3-commit = { version = "=0.9.0-rc.2", optional = true }
 p3-dft = { version = "=0.9.0-rc.2", optional = true }
 p3-fri = { version = "=0.9.0-rc.2", optional = true }
 p3-symmetric = { version = "=0.9.0-rc.2", optional = true }
+p3-koala-bear = { version = "=0.9.0-rc.2", optional = true }
+p3-poseidon2 = { version = "=0.9.0-rc.2", optional = true }
 p3-field = { version = "=0.9.0-rc.2", optional = true }
 p3-matrix = { version = "=0.9.0-rc.2", optional = true }
 # Parallel trace generation natively (umis-stark turns on `parallel` off wasm32).

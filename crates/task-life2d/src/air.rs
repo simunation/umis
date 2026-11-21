@@ -246,7 +246,7 @@ impl<AB: AirBuilder<F = Val>> Air<AB> for LifeAir {
     fn eval(&self, builder: &mut AB) {
         let s = self.shape;
         let main = builder.main();
-        let (cur, next) = (main.current_slice(), main.next_slice());
+        let cells = Cells::new(&s, main.current_slice(), main.next_slice());
         let mut per: Vec<AB::Expr> = builder.periodic_values().iter().map(|x| (*x).into()).collect();
         if per.is_empty() {
             // Plonky3-recursion's interaction probe (`RecursiveAir::declares_interactions`,
@@ -255,60 +255,97 @@ impl<AB: AirBuilder<F = Val>> Air<AB> for LifeAir {
             // them, and zeros in a real check would reject honest proofs, not accept others.
             per = vec![AB::Expr::ZERO; s.num_periodic()];
         }
-        let three = AB::Expr::from_u64(3);
-        let one = AB::Expr::ONE;
-        let bases: Vec<usize> = (0..=s.k).map(|t| if t == 0 { 0 } else { s.base(t) }).collect();
-        // Cell of generation t at slot j (0 ≤ j < rpr + 2; j ≥ rpr is the next
-        // trace row), strip column x.
-        let cell = |t: usize, j: usize, x: usize| -> AB::Expr {
-            let (row, j) = if j < s.rpr { (cur, j) } else { (next, j - s.rpr) };
-            let c = if t == 0 { s.col0(j, x) } else { bases[t] + 2 * (j * s.cone(t) + x - t) };
-            row[c].into()
-        };
-        // Σ_j 2^j·cells[j] (Horner, doublings only).
-        let pack = |cells: &mut dyn DoubleEndedIterator<Item = AB::Expr>| -> AB::Expr {
-            cells.rev().fold(AB::Expr::ZERO, |acc, b| acc.double() + b)
-        };
         // Generation 0: boolean, and equal to the claimed extended board.
         for i in 0..s.rpr {
-            for x in 0..s.ws {
-                let b = cell(0, i, x);
-                builder.assert_zero(b.clone() * (b - one.clone()));
-            }
+            eval_gen0_boolean(builder, &cells, i);
             for q in 0..s.limbs0() {
                 let xs = q * LIMB_BITS..((q + 1) * LIMB_BITS).min(s.ws);
-                let packed = pack(&mut xs.map(|x| cell(0, i, x)));
+                let packed = pack::<AB::Expr>(&mut xs.map(|x| cells.get(0, i, x)));
                 builder.assert_zero(packed - per[s.p_x0(i, q)].clone());
             }
         }
-        for t in 0..s.k {
-            for i in 0..s.rpr {
-                let masks = [0, 1, 2].map(|c| per[s.p_mask(t + 1 + i, c)].clone());
-                for x in (t + 1)..(s.ws - t - 1) {
-                    let mut c = AB::Expr::ZERO;
-                    for j in 0..3 {
-                        for dx in 0..3 {
-                            if j != 1 || dx != 1 {
-                                c += cell(t, i + j, x + dx - 1);
-                            }
-                        }
-                    }
-                    let a = cell(t, i + 1, x);
-                    let f = (c.clone() - three.clone()) * (c - three.clone() + a) + masks[s.class(x)].clone();
-                    let col = bases[t + 1] + 2 * (i * s.cone(t + 1) + x - t - 1);
-                    let an: AB::Expr = cur[col].into();
-                    let v: AB::Expr = cur[col + 1].into();
-                    builder.assert_zero(an.clone() * f.clone());
-                    builder.assert_zero(f * v - (one.clone() - an));
-                }
-            }
-        }
+        eval_generations(builder, &cells, |o, c| per[s.p_mask(o, c)].clone());
         // Generation k: the inner columns of inner rows equal the claimed X_out.
         for i in 0..s.rpr {
             for q in 0..s.limbs_out() {
                 let xs = q * LIMB_BITS..((q + 1) * LIMB_BITS).min(s.w);
-                let packed = pack(&mut xs.map(|x| cell(s.k, i, s.k + x)));
+                let packed = pack::<AB::Expr>(&mut xs.map(|x| cells.get(s.k, i, s.k + x)));
                 builder.assert_zero(per[s.p_sel(i)].clone() * (packed - per[s.p_out(i, q)].clone()));
+            }
+        }
+    }
+}
+
+/// The cells of the current and next trace row of a life trace (both AIRs).
+pub(crate) struct Cells<'a, V> {
+    s: &'a Shape,
+    cur: &'a [V],
+    next: &'a [V],
+    bases: Vec<usize>,
+}
+
+impl<'a, V: Copy> Cells<'a, V> {
+    pub(crate) fn new(s: &'a Shape, cur: &'a [V], next: &'a [V]) -> Self {
+        let bases = (0..=s.k).map(|t| if t == 0 { 0 } else { s.base(t) }).collect();
+        Self { s, cur, next, bases }
+    }
+
+    /// Cell of generation `t` at slot `j` (`j ≥ rpr` is the next trace row), strip column `x`.
+    pub(crate) fn get<E: From<V>>(&self, t: usize, j: usize, x: usize) -> E {
+        let s = self.s;
+        let (row, j) = if j < s.rpr { (self.cur, j) } else { (self.next, j - s.rpr) };
+        let c = if t == 0 { s.col0(j, x) } else { self.bases[t] + 2 * (j * s.cone(t) + x - t) };
+        row[c].into()
+    }
+
+    /// Main column of generation `t ≥ 1`, slot `i`, strip column `x` (its `v` is next).
+    fn col(&self, t: usize, i: usize, x: usize) -> usize {
+        self.bases[t] + 2 * (i * self.s.cone(t) + x - t)
+    }
+}
+
+/// `Σ_j 2^j·cells[j]` (Horner, doublings only).
+pub(crate) fn pack<E: PrimeCharacteristicRing>(cells: &mut dyn DoubleEndedIterator<Item = E>) -> E {
+    cells.rev().fold(E::ZERO, |acc, b| acc.double() + b)
+}
+
+/// Generation-0 cells of slot `i` are boolean (INV-LIFE-IN-1).
+pub(crate) fn eval_gen0_boolean<AB: AirBuilder<F = Val>>(builder: &mut AB, cells: &Cells<'_, AB::Var>, i: usize) {
+    for x in 0..cells.s.ws {
+        let b: AB::Expr = cells.get(0, i, x);
+        builder.assert_zero(b.clone() * (b - AB::Expr::ONE));
+    }
+}
+
+/// Generations `1..=k`: `a'·f = 0`, `f·v = 1 − a'` with `f = (c − 3)(c − 3 + a) + m`, where
+/// `mask(o, class)` is `m` at stacked-row offset `o` (INV-LIFE-ARITH-1..3).
+pub(crate) fn eval_generations<AB: AirBuilder<F = Val>>(
+    builder: &mut AB,
+    cells: &Cells<'_, AB::Var>,
+    mask: impl Fn(usize, usize) -> AB::Expr,
+) {
+    let s = cells.s;
+    let three = AB::Expr::from_u64(3);
+    let one = AB::Expr::ONE;
+    for t in 0..s.k {
+        for i in 0..s.rpr {
+            let masks = [0, 1, 2].map(|c| mask(t + 1 + i, c));
+            for x in (t + 1)..(s.ws - t - 1) {
+                let mut c = AB::Expr::ZERO;
+                for j in 0..3 {
+                    for dx in 0..3 {
+                        if j != 1 || dx != 1 {
+                            c += cells.get::<AB::Expr>(t, i + j, x + dx - 1);
+                        }
+                    }
+                }
+                let a: AB::Expr = cells.get(t, i + 1, x);
+                let f = (c.clone() - three.clone()) * (c - three.clone() + a) + masks[s.class(x)].clone();
+                let col = cells.col(t + 1, i, x);
+                let an: AB::Expr = cells.cur[col].into();
+                let v: AB::Expr = cells.cur[col + 1].into();
+                builder.assert_zero(an.clone() * f.clone());
+                builder.assert_zero(f * v - (one.clone() - an));
             }
         }
     }
@@ -1020,6 +1057,7 @@ pub fn halo(p: &Life2dParams, pi: usize) -> ([usize; 2], [usize; 2]) {
     halo_region(p, pi)
 }
 
+pub mod digest;
 #[cfg(test)]
 mod tests;
 

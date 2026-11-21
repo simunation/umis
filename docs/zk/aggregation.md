@@ -64,6 +64,23 @@ Each recursive step is two parts: building the prepared owner (the verifier circ
   latency is 3.7 ms at 256×256 (`docs/gpu.md`). Leaves are not the bottleneck: one 2-to-1 step costs as much as
   about 60 leaves.
 
+## Claim-independent leaves (A2, 2026-11-21)
+
+`task_life2d::air::digest::LifeDigestAir` (spec §4c, INV-LIFE-DIG-*) replaces the per-claim periodic data with a
+Poseidon2 sponge in the trace. Its statement is the digest plus the 8 `absent` flags. `umis_agg::digest_leaf`
+proves it; `Layer1Owner::new(p, representative)` and `AggOwner::new(p, left, right)` are built **once per zone
+shape** and then `prove` any slot (`DIGEST=1` in `agg_bench`). J101, load 10–15, two runs:
+
+| zone | leaf (width, size) | layer 1: build once, then prove | 2-to-1: build once, then prove | bits leaf / L1 / 2-to-1 |
+|---|---|---|---|---|
+| 64×64 | 28 ms (256 cols, 116 KB) | 123–126 ms, then 232–279 ms | 586–604 ms, then 1.15–1.25 s | 102.7 / 102.4 / 102.0 |
+| 256×256 | 61–84 ms (450 cols, 186 KB) | 167–177 ms, then 302–332 ms | 659–707 ms, then 1.18–1.32 s | 102.8 / 102.4 / 102.0 |
+
+The per-claim path measured back to back: leaf 11–28 ms, layer 1 0.20–0.44 s and 2-to-1 1.8–2.0 s, both
+including their builds. So per leaf in a binary tree (one layer-1 and about one 2-to-1 proof), the cost drops
+from about 2.3 s to about 1.6 s, and the checker has one fixed verifier per shape. The leaf itself costs about
+2.5× more, which is small against the recursion.
+
 ## Tests and tools
 
 - `tests/agg.rs` (test parameters): leaf → layer 1 → 2-to-1, each verified against its statement; a recursive
@@ -75,9 +92,11 @@ Each recursive step is two parts: building the prepared owner (the verifier circ
 
 ## Open
 
-- **Per-claim periodic columns** (INV-LIFE-FS-2): the life AIR's claim data are circuit constants, so every slot
-  needs its own layer-1 owner and circuit. Move them into committed columns or public values to reuse one prepared
-  circuit per zone shape.
+- ~~Per-claim periodic columns~~ (INV-LIFE-FS-2): solved for recursion by the digest leaf (above). The
+  per-claim `leaf`/`layer1`/`aggregate` functions remain for comparison.
+- **Statement for chaining (A3):** the digest binds `E` as a whole; chaining slots and binding to state roots
+  needs separate digests (previous inner board, halo, `X_out`) and a way to fix the strip-halo duplicates (spec
+  §4c "Open for A3").
 - **Protocol integration:** an aggregator role, an aggregation deadline after `L`, an aggregate record checked by the
   beacon chain, and leaves bound to the beacon's statements (today the leaf statement is the claim digest).
 - **GPU leaves:** the GPU prover's kernels are EF4; aggregation leaves need an EF5 port to use it.
