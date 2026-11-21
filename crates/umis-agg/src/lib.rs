@@ -26,7 +26,7 @@ use p3_recursion::{
 };
 use p3_uni_stark::{Proof, prove, verify};
 use task_life2d::Life2dParams;
-use task_life2d::air::digest::{LifeDigestAir, extend_trace, public_values};
+use task_life2d::air::digest::{DIGEST, LifeDigestAir, N_PUBLIC, extend_trace, public_values};
 use task_life2d::air::{LifeAir, Shape, claim_data, generate_trace};
 use task_life2d::board::Board;
 use umis_core::Hash;
@@ -162,7 +162,7 @@ impl DigestLeaf {
 pub fn digest_leaf(cfg: &AggConfig, p: &Life2dParams, ext: &Board, absent: &[bool; 8]) -> DigestLeaf {
     let air = LifeDigestAir::new(Shape::of(p));
     let (life, x_out) = generate_trace(&air.shape.life, ext, absent);
-    let trace = extend_trace(&air.shape, life, ext, &x_out);
+    let trace = extend_trace(&air.shape, life);
     let public = public_values(&air.shape, ext, absent, &x_out);
     let proof = prove(cfg, &air, trace, &public).expect("digest leaf proves");
     verify(cfg, &air, &proof, &public).expect("digest leaf verifies natively");
@@ -250,6 +250,26 @@ impl AggOwner {
         let timing = Timing { build: std::time::Duration::ZERO, prove: t.elapsed() };
         Ok(Recursive { out, statement, verifier: self.owner.verifier(), timing })
     }
+}
+
+/// The board digests that a run of consecutive digest-leaf statements (`N_PUBLIC` elements
+/// each, as an aggregate exports them, left to right) starts and ends with, if every leaf's
+/// `d_next` equals the next leaf's `d_prev` (INV-LIFE-DIG-5). The checker compares them with
+/// the zone commitment's Poseidon2 state roots; halos and absent flags are checked against
+/// the neighbours separately.
+pub fn chain(statement: &[Val]) -> Result<([Val; DIGEST], [Val; DIGEST]), String> {
+    if statement.is_empty() || statement.len() % N_PUBLIC != 0 {
+        return Err(format!("statement length {} is not a positive multiple of {N_PUBLIC}", statement.len()));
+    }
+    let leaves: Vec<&[Val]> = statement.chunks(N_PUBLIC).collect();
+    for (i, w) in leaves.windows(2).enumerate() {
+        if w[0][2 * DIGEST..3 * DIGEST] != w[1][..DIGEST] {
+            return Err(format!("leaf {} does not continue leaf {i}", i + 1));
+        }
+    }
+    let first = leaves[0][..DIGEST].try_into().expect("digest");
+    let last = leaves[leaves.len() - 1][2 * DIGEST..3 * DIGEST].try_into().expect("digest");
+    Ok((first, last))
 }
 
 /// A recursive proof and the statement it carries.

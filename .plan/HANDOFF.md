@@ -83,11 +83,13 @@ Read this first after a context reset, then `ROADMAP.md` (what to do next) and, 
 
 100 proven bits (not 128) · P100 for leaves verified natively · L = 0 allowed with STARKs · Plonky3 `=0.9.0-rc.2` ·
 P3R pinned `3a69ba6` · aggregation over KoalaBear⁵ (EF4 recursive layers cap at 93–96 bits) · J101 (Johnson) as the
-aggregation default because it is ~1.6× faster with half-size proofs; U101 kept · GPU FRI not built (≤ 3 % gain).
+aggregation default because it is ~1.6× faster with half-size proofs; U101 kept · GPU FRI not built (≤ 3 % gain) · P2 dual state roots (keccak BMT kept, Poseidon2 digest added; 2026-11-21) ·
+aggregation leaves use one strip per zone (2026-11-21).
 
 ## Next action
 
-B2–B4, A1 and A2 done (2026-11-21; A2 = `task_life2d::air::digest::LifeDigestAir`, `umis_agg::{digest_leaf,
-Layer1Owner, AggOwner}`). Next: B1/B5 (small), then A3. A3 first needs a layout decision for binding the previous
-board separately from the halo (ROADMAP A3 "Prerequisite", spec §4c "Open for A3"). Ask the owner P2 (state roots)
-together with that choice before coding A3.
+B2–B5, A1, A2 and the A3 core done (2026-11-21). The digest leaf (`task_life2d::air::digest`) exports `[d_prev,
+d_halo, d_next, absent]`; `umis_agg::{digest_leaf, Layer1Owner, AggOwner, chain}`. Owner decisions: P2 dual roots,
+one strip per zone for aggregation leaves (best `rpr = 2`). Next: A4 (ROADMAP §3: Poseidon2 roots in zone
+commitments, halo check from payloads, hold/birth slots, cross-zone 2-to-1, aggregator role behind a genesis flag),
+B1 (draft the P3R issue), B6/B6a (browser P100 cost, e2e rollbacks).

@@ -81,6 +81,24 @@ including their builds. So per leaf in a binary tree (one layer-1 and about one 
 from about 2.3 s to about 1.6 s, and the checker has one fixed verifier per shape. The leaf itself costs about
 2.5× more, which is small against the recursion.
 
+## Chained statements (A3, 2026-11-21)
+
+The digest leaf's statement is `[d_prev, d_halo, d_next, absent]` (spec INV-LIFE-DIG-1, -5). P3R's
+`new_state_transition` merger requires the statement to be exactly `[init, final, count]`, so aggregation stays
+plain 2-to-1 (statements concatenate). `umis_agg::chain` checks continuity natively and returns the first and last
+board roots. With one strip per zone (decision), the halo digest is recomputable from neighbour payloads. Cost by
+layout (J101, load about 10, owners built once):
+
+| zone, layout (k = 1) | leaf width | leaf | layer-1 prove | 2-to-1 prove | per leaf in a tree |
+|---|---|---|---|---|---|
+| 256×256, 8 strips, rpr 3 | 762 | 107 ms, 268 KB | 0.58 s | 1.2–1.3 s | ~1.8 s |
+| 256×256, 1 strip, rpr 2 | 2896 | 190 ms, 816 KB | 1.39–1.53 s | 0.93 s | ~2.4 s |
+| 256×256, 1 strip, rpr 3 | 4110 | 243 ms, 1.1 MB | 1.76–1.81 s | 0.95–1.0 s | ~2.8 s |
+| 256×256, 1 strip, rpr 5 | 6538 | 372 ms, 1.8 MB | 3.5–3.6 s | 1.24–1.30 s | ~4.8 s |
+| 64×64, 1 strip, rpr 2 | 856 | 65 ms, 262 KB | 0.52–0.57 s | 1.24–1.28 s | ~1.8 s |
+
+Layer-1 cost grows with the leaf's width (every query opens a whole row in-circuit), so prefer small `rpr`.
+
 ## Tests and tools
 
 - `tests/agg.rs` (test parameters): leaf → layer 1 → 2-to-1, each verified against its statement; a recursive
@@ -94,9 +112,9 @@ from about 2.3 s to about 1.6 s, and the checker has one fixed verifier per shap
 
 - ~~Per-claim periodic columns~~ (INV-LIFE-FS-2): solved for recursion by the digest leaf (above). The
   per-claim `leaf`/`layer1`/`aggregate` functions remain for comparison.
-- **Statement for chaining (A3):** the digest binds `E` as a whole; chaining slots and binding to state roots
-  needs separate digests (previous inner board, halo, `X_out`) and a way to fix the strip-halo duplicates (spec
-  §4c "Open for A3").
+- **Remaining for A4:** the checker's halo check (rebuild `d_halo` from input payloads, check them against the
+  neighbours' outputs), hold and birth slots inside a chain (native slots without a leaf), cross-zone 2-to-1
+  (owners per pair of shapes), and the Poseidon2 state roots in zone commitments.
 - **Protocol integration:** an aggregator role, an aggregation deadline after `L`, an aggregate record checked by the
   beacon chain, and leaves bound to the beacon's statements (today the leaf statement is the claim digest).
 - **GPU leaves:** the GPU prover's kernels are EF4; aggregation leaves need an EF5 port to use it.

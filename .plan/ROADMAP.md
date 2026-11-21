@@ -85,14 +85,22 @@ only on the shape, claim bound through public values.
   GPU prover (`air/gpu.rs`, `umis-gpu` JIT handles new constraints automatically; trace generation kernels may need
   the sponge columns), `umis-agg`.
 
-**A3. Statement schema and per-commitment aggregation (1–2 sessions).** Define what an aggregate proves, so the
+**A3 — core done 2026-11-21:** leaf statement `[d_prev, d_halo, d_next, absent]` (INV-LIFE-DIG-1, -5),
+`umis_agg::chain` over plain 2-to-1 aggregates (P3R's state-transition merger needs an exact `[init, final,
+count]` statement), test `consecutive_slots_chain_through_an_aggregate` (4-slot chain verifies against its first
+and last board roots; gap and reordering rejected). One-strip cost: ~2.4 s per leaf vs ~1.8 s with 8 strips
+(`docs/zk/aggregation.md`). Moved to A4: halo check from payloads, hold/birth slots in chains, cross-zone 2-to-1,
+Poseidon2 roots in zone commitments.
+**A3 (original text).** Define what an aggregate proves, so the
 beacon can check it without states. **Prerequisite found in A2:** the A2 digest binds `E` as a whole. Chaining needs
 `d_prev` = the digest of the previous inner board, separately from the halo. Strip halos duplicate cells of
 neighbouring strips, which sit `Y` stacked rows apart, so the AIR cannot tie them with local constraints. Options:
 (a) a LogUp copy argument, which needs the low-level P3R path; (b) a strip layout without halo duplicates, where
 the halo cells come only from the external halo and neighbouring strips read each other through extra columns;
 (c) the checker rebuilds `E`'s digest from per-region digests (inner board plus 8 neighbour faces), with each
-region absorbed by its own sponge (more permutations per row). Decide with P2.
+region absorbed by its own sponge (more permutations per row). **Decided 2026-11-21: one strip per zone for
+aggregation leaves** (no internal copies; only the 8 external neighbour regions need binding), with dual state
+roots (P2).
 - Leaf statement: `[zone, from_slot, params_hash, d_prev, d_next, d_inputs..., absent]` as field elements, where the
   digests are the A2 Poseidon2 digests (or the beacon's state-root encoding, see P2 below).
 - Per zone commitment: chain the slots' layer-1 proofs with `TrustedPreparedAggregation::new_state_transition`
@@ -155,7 +163,8 @@ verifier and recurse. Until then aggregation leaves prove on the CPU (16.8–23 
 ## 4. Pending owner decisions (ask when the step needs them)
 
 - **P1** Browser role: leaf prover only, or verifier of every proof? (decides B6 depth, wasm SIMD/threads work).
-- **P2** Canonical state roots: keep keccak BMT (Swarm-compatible) and add a Poseidon2 digest next to it (dual roots),
+- **P2 — DECIDED 2026-11-21: dual roots** (owner). Also decided: aggregation leaves use **one strip per zone**
+  (`strips = 1`), so the leaf has no internal halo copies (A3 layout). Was: Canonical state roots: keep keccak BMT (Swarm-compatible) and add a Poseidon2 digest next to it (dual roots),
   or make Poseidon2 canonical. Needed by A3/A4. Recommendation: dual roots (keccak for storage/DA, Poseidon2 for
   proofs), bound by the minter's signature and fault evidence.
 - **P3** Nonlinear physics: raises the constraint degree (P100's blowup 4 allows degree ≤ 5).
@@ -169,7 +178,7 @@ verifier and recurse. Until then aggregation leaves prove on the CPU (16.8–23 
 | 2 | ~~A1 measure~~ (done 2026-11-21) | 0.5 | — |
 | 3 | ~~A2 claim-independent leaf circuit~~ (done 2026-11-21) | 1–2 | A1 |
 | 4 | B1 draft upstream issue, ~~B5~~ (done) | 0.25 | — |
-| 5 | A3 statement schema, per-commitment chaining | 1 | A2, P2 |
+| 5 | ~~A3 statement schema, per-commitment chaining~~ (core done 2026-11-21) | 1 | A2, P2 |
 | 6 | A4 protocol integration + SimNet | 2–3 | A3 |
 | 7 | B6, B7 browser numbers, demo refresh | 0.5 | — |
 | 8 | A5 EF5 GPU leaves | 1–2 | A4 running |

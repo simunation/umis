@@ -41,15 +41,30 @@ fn accepted(air: &LifeDigestAir, trace: RowMajorMatrix<Val>, public: &[Val], cla
 fn honest(s: &Shape, ext: &Board, absent: &[bool; 8]) -> (LifeDigestAir, RowMajorMatrix<Val>, Vec<Val>, Board) {
     let air = LifeDigestAir::new(*s);
     let (life, x_out) = generate_trace(s, ext, absent);
-    let trace = extend_trace(&air.shape, life, ext, &x_out);
+    let trace = extend_trace(&air.shape, life);
     let public = public_values(&air.shape, ext, absent, &x_out);
     (air, trace, public, x_out)
+}
+
+/// The digests the trace's own sponge columns end in (last row, last permutation).
+fn trace_digests(d: &DigestShape, t: &RowMajorMatrix<Val>) -> Vec<Val> {
+    let w = t.width();
+    let last = &t.values[(d.life.height - 1) * w..][..w];
+    REGIONS
+        .iter()
+        .flat_map(|g| {
+            let o = d.perm(*g, d.perms(*g) - 1) + PERM_COLS - WIDTH;
+            last[o..o + DIGEST].to_vec()
+        })
+        .collect()
 }
 
 #[test]
 fn honest_digest_proofs_verify() {
     let mut rng = ChaCha8Rng::seed_from_u64(3);
-    for (n, k, strips, rpr) in [(16, 2, 1, 2), (16, 2, 2, 3), (16, 3, 4, 4), (24, 4, 3, 2), (64, 1, 4, 2)] {
+    for (n, k, strips, rpr) in
+        [(16, 2, 1, 2), (16, 2, 2, 3), (16, 3, 4, 4), (24, 2, 3, 2), (64, 1, 4, 2), (32, 2, 1, 5)]
+    {
         let (p, s) = shape(n, k, strips, rpr);
         let e = p.n() + 2 * p.k();
         for round in 0..3 {
@@ -58,8 +73,42 @@ fn honest_digest_proofs_verify() {
             let (air, trace, public, x_out) = honest(&s, &ext, &absent);
             assert_eq!(x_out, run_extended_masked(&ext, p.k(), &crate::absent_mask(&p, &absent)));
             assert_eq!(trace.width(), air.shape.width());
+            // The trace's sponges end in the natively computed digests.
+            assert_eq!(trace_digests(&air.shape, &trace), public[..ABSENT].to_vec());
             assert!(accepted(&air, trace, &public, &public), "{n},{k},{strips},{rpr} round {round}");
         }
+    }
+}
+
+#[test]
+fn consecutive_slots_chain() {
+    // Slot t + 1 starts from slot t's output (any halo): d_next(t) = d_prev(t + 1), and
+    // both are the board root (INV-LIFE-DIG-5). A different board breaks the link.
+    let mut rng = ChaCha8Rng::seed_from_u64(5);
+    for (n, k, strips, rpr) in [(16, 2, 1, 2), (32, 1, 1, 3), (16, 2, 2, 3)] {
+        let (p, s) = shape(n, k, strips, rpr);
+        let e = p.n() + 2 * p.k();
+        let d = DigestShape::new(s);
+        let mut ext = board(&mut rng, e, 35);
+        let mut prev_next: Option<Vec<Val>> = None;
+        for _ in 0..3 {
+            let (_, _, public, x_out) = honest(&s, &ext, &[false; 8]);
+            assert_eq!(public[..DIGEST], board_root(&d, &inner(s.n, s.k, &ext)));
+            assert_eq!(public[2 * DIGEST..3 * DIGEST], board_root(&d, &x_out));
+            if let Some(pn) = &prev_next {
+                assert_eq!(pn[..], public[..DIGEST], "{n},{k},{strips},{rpr}");
+            }
+            prev_next = Some(public[2 * DIGEST..3 * DIGEST].to_vec());
+            // next slot: fresh halo, inner = this output
+            let mut next = board(&mut rng, e, 35);
+            for y in 0..s.n {
+                next.cells[(y + s.k) * e + s.k..][..s.n].copy_from_slice(&x_out.cells[y * s.n..][..s.n]);
+            }
+            ext = next;
+        }
+        let mut other = inner(s.n, s.k, &ext);
+        other.cells[3] ^= 1;
+        assert_ne!(board_root(&d, &other), board_root(&d, &inner(s.n, s.k, &ext)));
     }
 }
 
@@ -78,8 +127,8 @@ fn one_air_serves_every_claim_of_a_shape() {
 
 #[test]
 fn a_false_output_is_rejected() {
-    // The prover commits to the sponge of the false claim (E, X_out') with one output cell
-    // flipped in the trace too: only the Conway constraints stand (INV-LIFE-DIG-1).
+    // The trace's output cell is flipped too, so its sponge ends in the false claim's d_next:
+    // only the Conway constraints stand (INV-LIFE-DIG-1).
     let (p, s) = shape(16, 2, 2, 3);
     let mut rng = ChaCha8Rng::seed_from_u64(11);
     let ext = board(&mut rng, p.n() + 2 * p.k(), 30);
@@ -88,13 +137,13 @@ fn a_false_output_is_rejected() {
     let mut lie = x_out.clone();
     lie.cells[5 * s.n + 3] ^= 1;
     // Output cell (row 5, column 3) of strip 0: stacked row k + 5, generation k column k + 3.
-    let y = s.k + 5;
-    let (r, i) = ((y - s.k) / s.rpr, (y - s.k) % s.rpr);
+    let (r, i) = (5 / s.rpr, 5 % s.rpr);
     let w = life.width();
     let c = s.col(s.k, i, s.k + 3);
     life.values[r * w + c] = Val::ONE - life.values[r * w + c];
     let claim = public_values(&air.shape, &ext, &[false; 8], &lie);
-    let trace = extend_trace(&air.shape, life, &ext, &lie);
+    let trace = extend_trace(&air.shape, life);
+    assert_eq!(trace_digests(&air.shape, &trace), claim[..ABSENT].to_vec(), "the sponge matches the lie");
     assert!(!accepted(&air, trace, &claim, &claim));
     // The honest trace against the false claim's digest.
     let (_, honest_trace, _, _) = honest(&s, &ext, &[false; 8]);
@@ -102,14 +151,28 @@ fn a_false_output_is_rejected() {
 }
 
 #[test]
+fn a_false_previous_board_is_rejected() {
+    // The honest run of E against a claim whose previous board differs in one cell.
+    let (p, s) = shape(16, 2, 1, 2);
+    let mut rng = ChaCha8Rng::seed_from_u64(12);
+    let ext = board(&mut rng, p.n() + 2 * p.k(), 30);
+    let (air, trace, public, x_out) = honest(&s, &ext, &[false; 8]);
+    let mut ext2 = ext.clone();
+    ext2.cells[(2 + s.k) * ext.w + 7 + s.k] ^= 1;
+    let claim = public_values(&air.shape, &ext2, &[false; 8], &x_out);
+    assert_eq!(claim[DIGEST..], public[DIGEST..], "only d_prev differs");
+    assert!(!accepted(&air, trace, &claim, &claim));
+}
+
+#[test]
 fn generation_zero_must_match_the_digest() {
     // A gen-0 cell switched on in a dead padding row keeps every later generation valid (a
-    // lone live cell dies and wakes nobody); only the sponge absorption catches it.
+    // lone live cell dies and wakes nobody); only the halo sponge catches it.
     let (p, s) = shape(16, 2, 2, 3);
     assert!(s.rows() > s.strips * s.y + 4 * s.k, "the layout has padding rows");
     let mut rng = ChaCha8Rng::seed_from_u64(13);
     let ext = board(&mut rng, p.n() + 2 * p.k(), 30);
-    let (air, mut trace, public, x_out) = honest(&s, &ext, &[false; 8]);
+    let (air, mut trace, public, _) = honest(&s, &ext, &[false; 8]);
     let y = s.strips * s.y + 2 * s.k + 1;
     let (r, i) = (y / s.rpr, y % s.rpr);
     let w = trace.width();
@@ -130,29 +193,27 @@ fn generation_zero_must_match_the_digest() {
     // Row r re-absorbed from the tampered cells, row r + 1 restarting from the honest
     // capacity: the chain constraint fails (INV-LIFE-DIG-2).
     assert!(!accepted(&air, forged, &public, &public));
-    assert_eq!(x_out, generate_trace(&s, &ext, &[false; 8]).1);
 }
 
-/// `trace` with row `r`'s permutations recomputed from its own cells (and its honest
+/// `trace` with row `r`'s halo permutations recomputed from its own cells (and its honest
 /// `cap_in`), every other row unchanged.
 fn responge_row(d: &DigestShape, trace: &RowMajorMatrix<Val>, r: usize) -> RowMajorMatrix<Val> {
     let s = &d.life;
-    let w = trace.width();
+    let (w, lw) = (trace.width(), s.width());
     let mut t = trace.clone();
+    let cur: Vec<Val> = t.values[r * w..][..lw].to_vec();
+    let next: Vec<Val> = t.values[((r + 1) % s.height) * w..][..lw].to_vec();
+    let cells = Cells::new(s, &cur, &next);
+    let sel = |i: usize| Val::from_bool(d.sel(r, i));
+    let sel0 = |i: usize| Val::from_bool(d.sel0(r, i));
+    let g = Region::Halo;
+    let limbs = limbs(&d.row_cells::<Val, Val>(g, &cells, &sel, &sel0), d.perms(g));
     let row = &mut t.values[r * w..(r + 1) * w];
-    let g0: Vec<u8> = (0..s.rpr * s.ws).map(|c| (row[c] == Val::ONE) as u8).collect();
-    let out: Vec<u8> = (0..s.rpr)
-        .flat_map(|i| (0..s.w).map(move |x| (i, x)))
-        .map(|(i, x)| if d.sel(r, i) { (row[s.col(s.k, i, s.k + x)] == Val::ONE) as u8 } else { 0 })
-        .collect();
-    let mut limbs: Vec<Val> =
-        g0.chunks(LIMB_BITS).chain(out.chunks(LIMB_BITS)).map(|c| super::super::pack_limb(c.iter().copied())).collect();
-    limbs.resize(d.perms() * RATE, Val::ZERO);
     let mut st = [Val::ZERO; WIDTH];
-    st[RATE..].copy_from_slice(&row[d.cap_in()..d.cap_in() + WIDTH - RATE]);
-    for m in 0..d.perms() {
+    st[RATE..].copy_from_slice(&row[d.base(g)..d.base(g) + CAP]);
+    for m in 0..d.perms(g) {
         st[..RATE].copy_from_slice(&limbs[m * RATE..][..RATE]);
-        st = permute_into(st, &mut row[d.perm(m)..d.perm(m) + PERM_COLS]);
+        st = permute_into(st, &mut row[d.perm(g, m)..d.perm(g, m) + PERM_COLS]);
     }
     t
 }
@@ -161,7 +222,7 @@ fn responge_row(d: &DigestShape, trace: &RowMajorMatrix<Val>, r: usize) -> RowMa
 fn lying_about_absent_regions_is_rejected() {
     // A corner zone: the prover evolves its absent halo regions freely and claims the
     // resulting board with the verifier's (true) absent flags in its public values.
-    let (p, s) = shape(16, 4, 2, 2);
+    let (p, s) = shape(16, 4, 2, 4);
     let mut absent = [false; 8];
     for (i, port) in crate::PORTS.iter().enumerate() {
         let d = port_dir(*port).expect("port");
@@ -179,12 +240,10 @@ fn lying_about_absent_regions_is_rejected() {
         }
         caught += 1;
         let claim = public_values(&air.shape, &ext, &absent, &x_free);
-        let trace = extend_trace(&air.shape, life, &ext, &x_free);
-        assert!(!accepted(&air, trace, &claim, &claim));
+        let trace = extend_trace(&air.shape, life);
+        assert!(!accepted(&air, trace.clone(), &claim, &claim));
         // Sanity: the same unmasked run with the lie in the public flags would verify.
-        let (life, _) = generate_trace(&s, &ext, &[false; 8]);
         let lie = public_values(&air.shape, &ext, &[false; 8], &x_free);
-        let trace = extend_trace(&air.shape, life, &ext, &x_free);
         assert!(accepted(&air, trace, &lie, &lie));
         assert_ne!(lie, claim);
     }
@@ -199,14 +258,40 @@ fn tampered_sponge_columns_are_rejected() {
     let (air, trace, public, _) = honest(&s, &ext, &[false; 8]);
     let d = air.shape;
     let w = trace.width();
-    for (row, col) in [(0, d.cap_in()), (5, d.cap_in() + 3), (7, d.perm(0) + 40), (d.life.height - 1, w - 1)] {
+    for (row, col) in [
+        (0, d.base(Region::Prev)),
+        (5, d.base(Region::Halo) + 3),
+        (7, d.perm(Region::Next, 0) + 40),
+        (d.life.height - 1, w - 1),
+    ] {
         let mut t = trace.clone();
         t.values[row * w + col] += Val::ONE;
         assert!(!accepted(&air, t, &public, &public), "row {row} col {col}");
     }
-    // A wrong digest in the public values.
-    let mut bad = public.clone();
-    bad[2] += Val::ONE;
-    assert!(!accepted(&air, trace.clone(), &bad, &bad));
+    // A wrong digest in the public values, in each of the three digests.
+    for g in REGIONS {
+        let mut bad = public.clone();
+        bad[g as usize * DIGEST + 2] += Val::ONE;
+        assert!(!accepted(&air, trace.clone(), &bad, &bad), "{g:?}");
+    }
     assert!(accepted(&air, trace, &public, &public));
+}
+
+#[test]
+fn with_one_strip_the_halo_digest_ignores_the_zone_board() {
+    // strips = 1: d_halo depends only on E's halo (the neighbour regions), so a checker
+    // without the zone's state rebuilds it from the input payloads. With several strips the
+    // strip copies of the zone's own cells enter it too.
+    let mut rng = ChaCha8Rng::seed_from_u64(23);
+    for (strips, independent) in [(1, true), (2, false)] {
+        let (p, s) = shape(16, 2, strips, 2);
+        let d = DigestShape::new(s);
+        let e = p.n() + 2 * p.k();
+        let ext = board(&mut rng, e, 40);
+        let mut blank = ext.clone();
+        for y in 0..s.n {
+            blank.cells[(y + s.k) * e + s.k..][..s.n].fill(0);
+        }
+        assert_eq!(halo_digest(&d, &ext) == halo_digest(&d, &blank), independent, "strips {strips}");
+    }
 }

@@ -1,20 +1,26 @@
-//! A claim-independent life2d AIR for recursion (ROADMAP A2, INV-LIFE-DIG-*).
+//! A claim-independent life2d AIR for recursion (ROADMAP A2/A3, INV-LIFE-DIG-*).
 //!
 //! [`LifeAir`](super::LifeAir) binds its claim through periodic columns (packed generation 0,
 //! packed `X_out`, the absent mask), so its verifier circuit is a different circuit for every
 //! slot (INV-LIFE-FS-2). [`LifeDigestAir`] proves the same `k` masked generations with
-//! periodic columns that depend on the shape only, and binds the claim through public values:
+//! periodic columns that depend on the shape only, and binds the claim through public values
+//! (INV-LIFE-DIG-1):
 //!
-//! - `public[0..8]`: a Poseidon2 sponge digest of every trace row's packed generation-0 cells
-//!   and packed, `sel`-gated generation-`k` inner cells ([`digest`], INV-LIFE-DIG-1). The
-//!   sponge runs inside the trace: each row carries `P` width-16 permutations absorbing that
-//!   row's limbs, chained row to row through the capacity (INV-LIFE-DIG-2).
-//! - `public[8..16]`: the eight `absent` flags. The mask of each cell is a linear combination
+//! - `public[0..8]` `d_prev`: the Poseidon2 [`board_root`] of the previous board (the inner
+//!   generation-0 cells);
+//! - `public[8..16]` `d_halo`: the digest of every other generation-0 cell (the halo, the strip
+//!   copies and the padding; [`halo_digest`]);
+//! - `public[16..24]` `d_next`: the [`board_root`] of `X_out` (the inner generation-`k` cells);
+//! - `public[24..32]`: the eight `absent` flags. The mask of each cell is a linear combination
 //!   of shape-only band indicators with these flags (INV-LIFE-DIG-3).
 //!
-//! The verifier computes both from the claim (`E`, `X_out`, `absent`), as for [`LifeAir`].
+//! `d_prev` and `d_next` absorb the same board positions (a board row's cells at the same
+//! trace row and slot), so consecutive slots of a zone chain: `d_next(t) = d_prev(t + 1)` iff
+//! the boards are equal (INV-LIFE-DIG-5). With one strip per zone (`strips = 1`) the halo
+//! digest covers only the 8 neighbour regions and the padding, so a checker can recompute it
+//! from the neighbours' face payloads without any state.
 //!
-//! # Sponge layout (columns after the life columns)
+//! # Sponge layout (columns after the life columns, per digest in the order above)
 //!
 //! - `cap_in[8]`: the capacity entering the row's first permutation; `0` on row 0, and the
 //!   previous row's last permutation output `[8..16]` on every other row.
@@ -23,7 +29,7 @@
 //!   S-box degree 3, no S-box registers). Its input is `[limbs[8m..8m+8], capacity]`, the
 //!   capacity being `cap_in` for `m = 0` and permutation `m − 1`'s output `[8..16]` otherwise
 //!   (overwrite-mode sponge, as `p3_symmetric::PaddingFreeSponge`).
-//! - The digest is the last row's last permutation output `[0..8]`.
+//! - The digest is the last row's last permutation output `[0..8]` (INV-LIFE-DIG-2).
 
 use super::{Cells, LIMB_BITS, Shape, Val, eval_gen0_boolean, eval_generations, ext_value, pack};
 use crate::PORTS;
@@ -44,15 +50,27 @@ use umis_task::topology::port_dir;
 const WIDTH: usize = 16;
 pub const RATE: usize = 8;
 pub const DIGEST: usize = 8;
+const CAP: usize = WIDTH - RATE;
 const HALF_FULL: usize = 4;
 const PARTIAL: usize = 20;
 /// Columns of one permutation: every full-round output and every partial-round S-box output.
 pub const PERM_COLS: usize = 2 * HALF_FULL * WIDTH + PARTIAL;
 /// Constraints of one permutation (one per column).
 const PERM_CONSTRAINTS: usize = PERM_COLS;
-pub const N_PUBLIC: usize = DIGEST + 8;
+/// Offset of the `absent` flags in the public values.
+pub const ABSENT: usize = 3 * DIGEST;
+pub const N_PUBLIC: usize = ABSENT + 8;
 /// Band indicators per stacked-row offset: `L₀ L₁ L₂ C₀ C₂ R₀ R₁ R₂` (see [`DigestShape::bands`]).
 const BANDS: usize = 8;
+
+/// The three digests of a claim, in public-value order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Region {
+    Prev = 0,
+    Halo = 1,
+    Next = 2,
+}
+pub const REGIONS: [Region; 3] = [Region::Prev, Region::Halo, Region::Next];
 
 /// The digest layout of a life shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,39 +79,52 @@ pub struct DigestShape {
 }
 
 impl DigestShape {
+    /// Panics unless `k ≤ rpr`: `d_prev` reads generation 0 `k` rows down, at most one trace
+    /// row ahead.
     pub fn new(life: Shape) -> Self {
+        assert!(Self::supports(&life), "the digest AIR needs gens ≤ rows_per_trace_row");
         Self { life }
     }
 
-    /// Packed limbs per trace row: generation 0 (`rpr·Ws` cells), then the `sel`-gated
-    /// generation-`k` inner cells (`rpr·w`), 30 cells per limb, in column order.
-    pub fn limbs0(&self) -> usize {
-        (self.life.rpr * self.life.ws).div_ceil(LIMB_BITS)
-    }
-    pub fn limbs_out(&self) -> usize {
-        (self.life.rpr * self.life.w).div_ceil(LIMB_BITS)
-    }
-    /// Permutations per trace row.
-    pub fn perms(&self) -> usize {
-        (self.limbs0() + self.limbs_out()).div_ceil(RATE)
+    pub fn supports(life: &Shape) -> bool {
+        life.k <= life.rpr
     }
 
-    fn cap_in(&self) -> usize {
-        self.life.width()
+    /// Cells absorbed per trace row: `rpr·w` for the boards, `rpr·Ws` for the halo.
+    fn cells(&self, g: Region) -> usize {
+        let s = &self.life;
+        match g {
+            Region::Halo => s.rpr * s.ws,
+            _ => s.rpr * s.w,
+        }
     }
-    fn perm(&self, m: usize) -> usize {
-        self.cap_in() + (WIDTH - RATE) + m * PERM_COLS
+    /// Permutations per trace row of digest `g` (30 cells per limb, 8 limbs per permutation).
+    pub fn perms(&self, g: Region) -> usize {
+        self.cells(g).div_ceil(LIMB_BITS).div_ceil(RATE)
+    }
+    fn region_cols(&self, g: Region) -> usize {
+        CAP + self.perms(g) * PERM_COLS
+    }
+    /// First column of digest `g` (its `cap_in`).
+    fn base(&self, g: Region) -> usize {
+        self.life.width() + REGIONS[..g as usize].iter().map(|r| self.region_cols(*r)).sum::<usize>()
+    }
+    fn perm(&self, g: Region, m: usize) -> usize {
+        self.base(g) + CAP + m * PERM_COLS
     }
     pub fn width(&self) -> usize {
-        self.perm(self.perms())
+        self.base(Region::Next) + self.region_cols(Region::Next)
     }
 
-    // periodic columns: sel[i], then BANDS indicators per offset o ∈ [1, k + rpr)
+    // periodic columns: sel[i], sel0[i], then BANDS indicators per offset o ∈ [1, k + rpr)
     fn p_sel(&self, i: usize) -> usize {
         i
     }
+    fn p_sel0(&self, i: usize) -> usize {
+        self.life.rpr + i
+    }
     fn p_band(&self, o: usize, b: usize) -> usize {
-        self.life.rpr + (o - 1) * BANDS + b
+        2 * self.life.rpr + (o - 1) * BANDS + b
     }
     pub fn num_periodic(&self) -> usize {
         self.p_band(self.life.k + self.life.rpr, 0)
@@ -102,13 +133,21 @@ impl DigestShape {
     pub fn num_constraints(&self) -> usize {
         let s = &self.life;
         let cells: usize = (1..=s.k).map(|t| s.cone(t)).sum();
-        s.rpr * (s.ws + 2 * cells) + self.perms() * PERM_CONSTRAINTS + 3 * (WIDTH - RATE)
+        let perms: usize = REGIONS.iter().map(|g| self.perms(*g)).sum();
+        s.rpr * (s.ws + 2 * cells) + perms * PERM_CONSTRAINTS + REGIONS.len() * 3 * CAP
     }
 
-    /// Whether slot `i` of generation `k` at trace row `r` is an inner row (INV-LIFE-OUT-1).
+    /// Whether stacked row `rpr·r + i + k` is an inner row: slot `i` of generation `k` at trace
+    /// row `r` (INV-LIFE-OUT-1), and the generation-0 row that `d_prev` reads there.
     fn sel(&self, r: usize, i: usize) -> bool {
         let s = &self.life;
         s.locate(s.rpr * r + i + s.k).is_some_and(|(_, yy)| s.row_band(yy) == 1)
+    }
+
+    /// Whether stacked row `rpr·r + i` (slot `i` of generation 0 at trace row `r`) is inner.
+    fn sel0(&self, r: usize, i: usize) -> bool {
+        let s = &self.life;
+        s.locate(s.rpr * r + i).is_some_and(|(_, yy)| s.row_band(yy) == 1)
     }
 
     /// The band indicators of stacked row `y`: `L_b = [strip 0 ∧ row band b]`,
@@ -137,6 +176,7 @@ impl DigestShape {
         for r in 0..s.height {
             for i in 0..s.rpr {
                 per[self.p_sel(i)][r] = Val::from_bool(self.sel(r, i));
+                per[self.p_sel0(i)][r] = Val::from_bool(self.sel0(r, i));
             }
             for o in 1..s.k + s.rpr {
                 for (b, v) in self.bands(s.rpr * r + o).into_iter().enumerate() {
@@ -147,28 +187,31 @@ impl DigestShape {
         per
     }
 
-    /// One trace row's limbs, zero-padded to `perms() · RATE`.
-    fn row_limbs(&self, ext: &Board, x_out: &Board, r: usize) -> Vec<Val> {
+    /// The cells digest `g` absorbs at trace row `r` (`cur`, and `next` for `d_prev`), in
+    /// absorption order: the native counterpart of the AIR's limbs (INV-LIFE-DIG-1).
+    fn row_cells<E: PrimeCharacteristicRing + From<V>, V: Copy>(
+        &self,
+        g: Region,
+        cells: &Cells<'_, V>,
+        sel: &dyn Fn(usize) -> E,
+        sel0: &dyn Fn(usize) -> E,
+    ) -> Vec<E> {
         let s = &self.life;
-        let g0 =
-            (0..s.rpr).flat_map(|i| (0..s.ws).map(move |x| (i, x))).map(|(i, x)| ext_value(s, ext, s.rpr * r + i, x));
-        let out: Vec<u8> = (0..s.rpr)
-            .flat_map(|i| {
-                let row = s
-                    .locate(s.rpr * r + i + s.k)
-                    .filter(|_| self.sel(r, i))
-                    .map(|(st, yy)| &x_out.cells[(yy - s.k) * s.n + st * s.w..][..s.w]);
-                (0..s.w).map(move |x| row.map_or(0, |row| row[x]))
-            })
-            .collect();
-        let g0: Vec<u8> = g0.collect();
-        let mut limbs: Vec<Val> =
-            g0.chunks(LIMB_BITS).chain(out.chunks(LIMB_BITS)).map(|c| super::pack_limb(c.iter().copied())).collect();
-        limbs.resize(self.perms() * RATE, Val::ZERO);
-        limbs
+        let mut out = Vec::with_capacity(self.cells(g));
+        for i in 0..s.rpr {
+            match g {
+                Region::Prev => out.extend((0..s.w).map(|x| sel(i) * cells.get::<E>(0, i + s.k, s.k + x))),
+                Region::Next => out.extend((0..s.w).map(|x| sel(i) * cells.get::<E>(s.k, i, s.k + x))),
+                Region::Halo => out.extend((0..s.ws).map(|x| {
+                    let c = cells.get::<E>(0, i, x);
+                    if (s.k..s.k + s.w).contains(&x) { (E::ONE - sel0(i)) * c } else { c }
+                })),
+            }
+        }
+        out
     }
 
-    /// The port index of extended-board band `(row band, column band)`, if a port has it.
+    /// The port index of extended-board band `(row band, column band)`.
     fn port(by: usize, bx: usize) -> usize {
         PORTS
             .iter()
@@ -178,6 +221,13 @@ impl DigestShape {
             })
             .expect("every non-centre band is a port")
     }
+}
+
+/// Packs cells 30 per limb and zero-pads to whole permutations.
+fn limbs<E: PrimeCharacteristicRing + Clone>(cells: &[E], perms: usize) -> Vec<E> {
+    let mut l: Vec<E> = cells.chunks(LIMB_BITS).map(|c| pack::<E>(&mut c.iter().cloned())).collect();
+    l.resize(perms * RATE, E::ZERO);
+    l
 }
 
 /// The permutation of `input` with every round's committed values in `cols` (`PERM_COLS`);
@@ -246,44 +296,129 @@ fn eval_permutation<AB: AirBuilder<F = Val>>(
     st
 }
 
-/// The sponge digest of a claim (INV-LIFE-DIG-1) and, if `cols` is given, every row's sponge
-/// columns (`width() − life width` per row, row-major).
-fn sponge(d: &DigestShape, ext: &Board, x_out: &Board, mut cols: Option<&mut [Val]>) -> [Val; DIGEST] {
-    let per_row = d.width() - d.cap_in();
+/// Runs digest `g`'s sponge over `rows` (each row's limbs); fills `cols` (the region's
+/// columns, `region_cols(g)` per row) when given.
+fn sponge(d: &DigestShape, g: Region, rows: &[Vec<Val>], mut cols: Option<&mut [Val]>) -> [Val; DIGEST] {
+    let per_row = d.region_cols(g);
     let mut st = [Val::ZERO; WIDTH];
     let mut scratch = vec![Val::ZERO; per_row];
-    for r in 0..d.life.height {
-        let limbs = d.row_limbs(ext, x_out, r);
+    for (r, limbs) in rows.iter().enumerate() {
         let row: &mut [Val] = match cols.as_deref_mut() {
             Some(c) => &mut c[r * per_row..][..per_row],
             None => &mut scratch,
         };
-        row[..WIDTH - RATE].copy_from_slice(&st[RATE..]);
-        for m in 0..d.perms() {
+        row[..CAP].copy_from_slice(&st[RATE..]);
+        for m in 0..d.perms(g) {
             st[..RATE].copy_from_slice(&limbs[m * RATE..][..RATE]);
-            let off = WIDTH - RATE + m * PERM_COLS;
+            let off = CAP + m * PERM_COLS;
             st = permute_into(st, &mut row[off..off + PERM_COLS]);
         }
     }
     st[..DIGEST].try_into().expect("digest")
 }
 
-/// The public values of a claim: its digest and the `absent` flags.
-pub fn public_values(d: &DigestShape, ext: &Board, absent: &[bool; 8], x_out: &Board) -> Vec<Val> {
-    let digest = sponge(d, ext, x_out, None);
-    digest.into_iter().chain(absent.iter().map(|a| Val::from_bool(*a))).collect()
+/// A board's limbs per trace row as `d_prev`/`d_next` absorb them.
+fn board_rows(d: &DigestShape, board: &Board) -> Vec<Vec<Val>> {
+    let s = &d.life;
+    (0..s.height)
+        .map(|r| {
+            let mut cells = Vec::with_capacity(d.cells(Region::Next));
+            for i in 0..s.rpr {
+                let row = s
+                    .locate(s.rpr * r + i + s.k)
+                    .filter(|_| d.sel(r, i))
+                    .map(|(st, yy)| &board.cells[(yy - s.k) * s.n + st * s.w..][..s.w]);
+                cells.extend((0..s.w).map(|x| Val::from_u8(row.map_or(0, |row| row[x]))));
+            }
+            limbs(&cells, d.perms(Region::Next))
+        })
+        .collect()
 }
 
-/// The digest AIR's trace: `life` (from [`super::generate_trace`]) with the sponge columns.
-pub fn extend_trace(d: &DigestShape, life: RowMajorMatrix<Val>, ext: &Board, x_out: &Board) -> RowMajorMatrix<Val> {
-    let (lw, w, h) = (d.cap_in(), d.width(), d.life.height);
+/// The Poseidon2 root of a zone board (`n × n`) under the digest layout: `d_prev` of a slot
+/// that starts from `board`, and `d_next` of one that ends in it (P2 dual roots: the
+/// Poseidon2 root next to the keccak state root; it depends on the zone's layout params).
+pub fn board_root(d: &DigestShape, board: &Board) -> [Val; DIGEST] {
+    sponge(d, Region::Next, &board_rows(d, board), None)
+}
+
+/// The digest of every generation-0 cell outside the zone board (`E`'s halo, strip copies
+/// and padding).
+pub fn halo_digest(d: &DigestShape, ext: &Board) -> [Val; DIGEST] {
+    let s = &d.life;
+    let rows: Vec<Vec<Val>> = (0..s.height)
+        .map(|r| {
+            let mut cells = Vec::with_capacity(d.cells(Region::Halo));
+            for i in 0..s.rpr {
+                let inner = d.sel0(r, i);
+                cells.extend((0..s.ws).map(|x| {
+                    let v = ext_value(s, ext, s.rpr * r + i, x);
+                    Val::from_u8(if inner && (s.k..s.k + s.w).contains(&x) { 0 } else { v })
+                }));
+            }
+            limbs(&cells, d.perms(Region::Halo))
+        })
+        .collect();
+    sponge(d, Region::Halo, &rows, None)
+}
+
+/// The inner `n × n` board of an extended board.
+pub fn inner(n: usize, k: usize, ext: &Board) -> Board {
+    let mut b = Board::dead(n, n);
+    for y in 0..n {
+        b.cells[y * n..][..n].copy_from_slice(&ext.cells[(y + k) * ext.w + k..][..n]);
+    }
+    b
+}
+
+/// The public values of a claim: `d_prev`, `d_halo`, `d_next` and the `absent` flags.
+pub fn public_values(d: &DigestShape, ext: &Board, absent: &[bool; 8], x_out: &Board) -> Vec<Val> {
+    let s = &d.life;
+    let prev = board_root(d, &inner(s.n, s.k, ext));
+    let halo = halo_digest(d, ext);
+    let next = board_root(d, x_out);
+    prev.into_iter().chain(halo).chain(next).chain(absent.iter().map(|a| Val::from_bool(*a))).collect()
+}
+
+/// Every digest's limbs per row, read from a trace's own cells (`life` columns): exactly what
+/// the AIR absorbs.
+fn trace_rows(d: &DigestShape, g: Region, life: &RowMajorMatrix<Val>) -> Vec<Vec<Val>> {
+    let s = &d.life;
+    let w = life.width();
+    (0..s.height)
+        .into_par_iter()
+        .map(|r| {
+            let cur = &life.values[r * w..][..w];
+            let next = &life.values[((r + 1) % s.height) * w..][..w];
+            let cells = Cells::new(s, cur, next);
+            let sel = |i: usize| Val::from_bool(d.sel(r, i));
+            let sel0 = |i: usize| Val::from_bool(d.sel0(r, i));
+            limbs(&d.row_cells::<Val, Val>(g, &cells, &sel, &sel0), d.perms(g))
+        })
+        .collect()
+}
+
+/// The digest AIR's trace: `life` (from [`super::generate_trace`], or any life trace) with the
+/// sponge columns over its own cells.
+pub fn extend_trace(d: &DigestShape, life: RowMajorMatrix<Val>) -> RowMajorMatrix<Val> {
+    let (lw, w, h) = (d.life.width(), d.width(), d.life.height);
     assert_eq!(life.width(), lw);
-    let mut sp = Val::zero_vec(h * (w - lw));
-    let _ = sponge(d, ext, x_out, Some(&mut sp));
+    let blocks: Vec<Vec<Val>> = REGIONS
+        .iter()
+        .map(|g| {
+            let mut b = Val::zero_vec(h * d.region_cols(*g));
+            let _ = sponge(d, *g, &trace_rows(d, *g, &life), Some(&mut b));
+            b
+        })
+        .collect();
     let mut v = Val::zero_vec(h * w);
     v.par_chunks_mut(w).enumerate().for_each(|(r, row)| {
         row[..lw].copy_from_slice(&life.values[r * lw..][..lw]);
-        row[lw..].copy_from_slice(&sp[r * (w - lw)..][..w - lw]);
+        for (g, b) in REGIONS.iter().zip(&blocks) {
+            let rc = d.region_cols(*g);
+            let o = d.base(*g);
+            row[o..o + rc].copy_from_slice(&b[r * rc..][..rc]);
+        }
     });
     RowMajorMatrix::new(v, w)
 }
@@ -296,6 +431,7 @@ pub struct LifeDigestAir {
 }
 
 impl LifeDigestAir {
+    /// Panics unless [`DigestShape::supports`] the shape.
     pub fn new(life: Shape) -> Self {
         let shape = DigestShape::new(life);
         Self { shape, periodic: shape.periodic() }
@@ -336,7 +472,7 @@ impl<AB: AirBuilder<F = Val>> Air<AB> for LifeDigestAir {
             per = vec![AB::Expr::ZERO; d.num_periodic()];
         }
         let public: Vec<AB::Expr> = builder.public_values().iter().map(|x| (*x).into()).collect();
-        let absent = |by: usize, bx: usize| public[DIGEST + DigestShape::port(by, bx)].clone();
+        let absent = |by: usize, bx: usize| public[ABSENT + DigestShape::port(by, bx)].clone();
 
         for i in 0..s.rpr {
             eval_gen0_boolean(builder, &cells, i);
@@ -364,35 +500,29 @@ impl<AB: AirBuilder<F = Val>> Air<AB> for LifeDigestAir {
             }
         });
 
-        // The row's limbs (INV-LIFE-DIG-1): generation 0 in column order, then the inner
-        // generation-k cells of each slot, gated by sel.
-        let g0 = (0..s.rpr).flat_map(|i| (0..s.ws).map(move |x| (i, x)));
-        let g0: Vec<AB::Expr> = g0.map(|(i, x)| cells.get(0, i, x)).collect();
-        let out: Vec<AB::Expr> = (0..s.rpr)
-            .flat_map(|i| (0..s.w).map(move |x| (i, x)))
-            .map(|(i, x)| per[d.p_sel(i)].clone() * cells.get::<AB::Expr>(s.k, i, s.k + x))
-            .collect();
-        let mut limbs: Vec<AB::Expr> = g0
-            .chunks(LIMB_BITS)
-            .chain(out.chunks(LIMB_BITS))
-            .map(|c| pack::<AB::Expr>(&mut c.iter().cloned()))
-            .collect();
-        limbs.resize(d.perms() * RATE, AB::Expr::ZERO);
-
-        // The sponge (INV-LIFE-DIG-2).
-        let cap_in = d.cap_in();
-        let mut cap: Vec<AB::Expr> = (0..WIDTH - RATE).map(|j| cur[cap_in + j].into()).collect();
-        let mut st: [AB::Expr; WIDTH] = core::array::from_fn(|_| AB::Expr::ZERO);
-        for m in 0..d.perms() {
-            let input: [AB::Expr; WIDTH] =
-                core::array::from_fn(|j| if j < RATE { limbs[m * RATE + j].clone() } else { cap[j - RATE].clone() });
-            st = eval_permutation(builder, input, &cur[d.perm(m)..d.perm(m) + PERM_COLS]);
-            cap = st[RATE..].to_vec();
-        }
-        for j in 0..WIDTH - RATE {
-            builder.when_first_row().assert_zero(cur[cap_in + j]);
-            builder.when_transition().assert_eq(next[cap_in + j], st[RATE + j].clone());
-            builder.when_last_row().assert_eq(st[j].clone(), public[j].clone());
+        // The three sponges (INV-LIFE-DIG-1, -2).
+        let sel = |i: usize| per[d.p_sel(i)].clone();
+        let sel0 = |i: usize| per[d.p_sel0(i)].clone();
+        for g in REGIONS {
+            let cells_g = d.row_cells::<AB::Expr, AB::Var>(g, &cells, &sel, &sel0);
+            let limbs = limbs(&cells_g, d.perms(g));
+            let cap_in = d.base(g);
+            let mut cap: Vec<AB::Expr> = (0..CAP).map(|j| cur[cap_in + j].into()).collect();
+            let mut st: [AB::Expr; WIDTH] = core::array::from_fn(|_| AB::Expr::ZERO);
+            for m in 0..d.perms(g) {
+                let input: [AB::Expr; WIDTH] =
+                    core::array::from_fn(
+                        |j| if j < RATE { limbs[m * RATE + j].clone() } else { cap[j - RATE].clone() },
+                    );
+                st = eval_permutation(builder, input, &cur[d.perm(g, m)..d.perm(g, m) + PERM_COLS]);
+                cap = st[RATE..].to_vec();
+            }
+            let out = g as usize * DIGEST;
+            for j in 0..CAP {
+                builder.when_first_row().assert_zero(cur[cap_in + j]);
+                builder.when_transition().assert_eq(next[cap_in + j], st[RATE + j].clone());
+                builder.when_last_row().assert_eq(st[j].clone(), public[out + j].clone());
+            }
         }
     }
 }

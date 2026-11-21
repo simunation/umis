@@ -129,13 +129,21 @@ periodic columns depend only on the shape, so one AIR, one verifier circuit and 
 slot of a zone shape (it resolves INV-LIFE-FS-2 for recursion). It is used by `umis-agg` only; the protocol's
 EF4 P100 backend keeps `LifeAir`.
 
-**INV-LIFE-DIG-1 (claim digest).** `public[0..8]` is a Poseidon2 (KoalaBear, width 16, rate 8, overwrite mode)
-sponge over every trace row's limbs, row 0 first: the row's `rpr·Ws` generation-0 cells in column order, then
-the `rpr·w` inner generation-`k` cells of each slot multiplied by `sel[i]`, packed 30 cells per limb and
-zero-padded to `P·8` limbs (`P = ⌈limbs/8⌉` permutations per row). Cells are boolean (INV-LIFE-ARITH-2), so the
-limbs fix every cell, and the sponge's 8-element capacity gives about 124-bit collision resistance. The verifier
-computes the digest natively from `E` and `X_out` (`digest::public_values`). Tests: `a_false_output_is_rejected`,
-`generation_zero_must_match_the_digest`, `tampered_sponge_columns_are_rejected`.
+**INV-LIFE-DIG-1 (claim digests).** The public values are `[d_prev, d_halo, d_next, absent]` (8 + 8 + 8 + 8).
+Each digest is a Poseidon2 (KoalaBear, width 16, rate 8, overwrite mode) sponge over every trace row's limbs, row
+0 first, with 30 boolean cells per limb, zero-padded to whole permutations:
+- `d_next`: the inner generation-`k` cells of each slot `i`, times `sel[i]`.
+- `d_prev`: the generation-0 cells of the **same stacked rows**: slot `i + k`, read from the next trace row when
+  `i + k ≥ rpr`, which needs `k ≤ rpr`, inner columns, times `sel[i]`. So `d_prev` and `d_next` absorb a board at
+  identical positions, and both equal `digest::board_root(board)`.
+- `d_halo`: every other generation-0 cell, at its own position (inner columns times `1 − sel0[i]`, side columns
+  always): the halo, the strip copies and the padding.
+
+Every generation-0 cell is in exactly one of `d_prev`, `d_halo`. Cells are boolean (INV-LIFE-ARITH-2), so the limbs
+fix every cell, and the 8-element capacity gives about 124-bit collision resistance. The verifier computes the
+digests natively (`digest::public_values`). Tests: `a_false_output_is_rejected`,
+`a_false_previous_board_is_rejected`, `generation_zero_must_match_the_digest`,
+`tampered_sponge_columns_are_rejected`.
 
 **INV-LIFE-DIG-2 (sponge in the trace).** Each row carries `cap_in[8]` and, per permutation, its 128 full-round
 and 20 partial-round S-box outputs (degree-3 constraints, the rounds of `Poseidon2KoalaBear<16>`;
@@ -162,10 +170,17 @@ one flipped absent flag, does not recurse (`a_digest_leaf_with_a_wrong_claim_doe
 Cost (256×256, k = 1): width 294 → 450 (one permutation per row), and the leaf proves about 2.5× slower over
 EF5 (`docs/zk/aggregation.md`). Security: `digest_leaf_shapes_are_secure` (J101 and U101 ≥ 101 bits).
 
-**Open for A3.** The digest binds `E` as a whole. To chain slots, and to let a checker without states bind leaves
-to state roots, the leaf needs separate digests of the previous inner board, of the halo and of `X_out`. Strip
-halos duplicate cells of neighbouring strips that are far apart in the trace, so a digest of the halo alone
-does not fix them without an extra copy argument. See ROADMAP A3.
+**INV-LIFE-DIG-5 (chaining, A3).** `d_next(t) = d_prev(t + 1)` exactly when slot `t + 1` starts from slot `t`'s
+output (`consecutive_slots_chain`). `umis_agg::chain` checks this over an aggregate's exported statement (the leaf
+statements, left to right) and returns the first `d_prev` and the last `d_next`. The checker compares them with the
+zone commitment's Poseidon2 state roots (P2 dual roots; `board_root` depends on the zone's layout params). Test:
+`consecutive_slots_chain_through_an_aggregate` (chain verifies; gap and reordering rejected).
+
+**Aggregation leaves use one strip** (`strips = 1`, owner decision 2026-11-21). Then `d_halo` depends only on the
+neighbour regions and padding (`with_one_strip_the_halo_digest_ignores_the_zone_board`), so a checker without the
+zone's state recomputes it from the input payloads. With several strips, the strip copies of the zone's own cells
+enter `d_halo` and only a checker holding the state can recompute it. Best layout at 256×256, k = 1: `rpr = 2`
+(width 2896, height 256).
 
 ## 5. I/O and tags (native, `verify_inner`)
 

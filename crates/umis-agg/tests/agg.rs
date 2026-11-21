@@ -130,7 +130,8 @@ fn task_life2d_one() -> p3_koala_bear::KoalaBear {
 #[test]
 fn digest_leaf_shapes_are_secure() {
     use task_life2d::air::digest::DigestShape;
-    for (n, k, strips, rpr) in [(16, 2, 1, 2), (64, 1, 4, 2), (256, 1, 8, 3), (256, 8, 8, 3)] {
+    // Aggregation leaves use one strip per zone (owner decision, 2026-11-21) and k ≤ rpr.
+    for (n, k, strips, rpr) in [(16, 2, 1, 2), (64, 1, 1, 2), (256, 1, 1, 5), (256, 4, 1, 4), (256, 1, 8, 3)] {
         let mut lp = Life2dParams::default_for([1, 1, 0], 4);
         (lp.n, lp.gens, lp.strips, lp.rows_per_trace_row) = (n, k, strips, rpr);
         let d = DigestShape::new(task_life2d::air::Shape::of(&lp));
@@ -146,4 +147,53 @@ fn digest_leaf_shapes_are_secure() {
             assert!(bits >= 101.0, "{n}/{k}/{strips}/{rpr} {p:?}: {bits:.1}");
         }
     }
+}
+
+/// Consecutive slots of one zone chain through an aggregate tree (INV-LIFE-DIG-5): the top
+/// statement starts at the first slot's board and ends at the last slot's output; a gap or a
+/// reordering breaks the chain.
+#[test]
+fn consecutive_slots_chain_through_an_aggregate() {
+    use task_life2d::air::digest::{DigestShape, board_root, inner};
+    use umis_agg::{AggOwner, Layer1Owner, chain, digest_leaf};
+    let (p, lp) = (AggParams::TEST, small());
+    let cfg = config(&p);
+    let (n, k) = (lp.n as usize, lp.gens as usize);
+    let e = n + 2 * k;
+    let d = DigestShape::new(task_life2d::air::Shape::of(&lp));
+    // Five slots: each starts from the previous output, with a fresh halo.
+    let mut ext = board(&lp, 1);
+    let mut leaves = Vec::new();
+    let mut boards = vec![inner(n, k, &ext)];
+    for t in 0..5u64 {
+        let leaf = digest_leaf(&cfg, &lp, &ext, &[false; 8]);
+        let (_, x_out) = task_life2d::air::generate_trace(&d.life, &ext, &[false; 8]);
+        let mut next = board(&lp, 100 + t);
+        for y in 0..n {
+            next.cells[(y + k) * e + k..][..n].copy_from_slice(&x_out.cells[y * n..][..n]);
+        }
+        boards.push(x_out);
+        leaves.push(leaf);
+        ext = next;
+    }
+    let l1 = Layer1Owner::new(&p, &leaves[0]).unwrap();
+    let rs: Vec<_> = leaves.iter().map(|l| l1.prove(l).unwrap()).collect();
+    let pair = AggOwner::new(&p, &rs[0], &rs[1]).unwrap();
+    let (a01, a23) = (pair.prove(&rs[0], &rs[1]).unwrap(), pair.prove(&rs[2], &rs[3]).unwrap());
+    let quad = AggOwner::new(&p, &a01, &a23).unwrap();
+    let top = quad.prove(&a01, &a23).unwrap();
+    top.verify().unwrap();
+    let (first, last) = chain(&top.statement).unwrap();
+    assert_eq!(first, board_root(&d, &boards[0]));
+    assert_eq!(last, board_root(&d, &boards[4]));
+
+    // A gap (slots 0, 1, then 3, 4) and a reordering (1, 0) verify as proofs but do not chain.
+    let a34 = pair.prove(&rs[3], &rs[4]).unwrap();
+    let gap = quad.prove(&a01, &a34).unwrap();
+    gap.verify().unwrap();
+    assert!(chain(&gap.statement).is_err());
+    let a10 = pair.prove(&rs[1], &rs[0]).unwrap();
+    a10.verify().unwrap();
+    assert!(chain(&a10.statement).is_err());
+    assert!(chain(&a01.statement).is_ok());
 }
