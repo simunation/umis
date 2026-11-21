@@ -4,6 +4,30 @@ Status of the proof system against the project goals, and every remaining step i
 the design, acceptance criteria and its dependencies. Session handoff (how to resume, run, verify): `HANDOFF.md`.
 Original design: `simunation-poc-plan.md` (its milestones M0–M8 are done; this file continues from there).
 
+
+## 0. Constraint (owner, 2026-11-21): no Game-of-Life-specific work
+
+Other simulations will replace life2d. Life is a **test case**, not a target: no decisions, settings or optimizations
+that only pay off for life. Consequences:
+- **Frozen as reference examples** (keep them working, stop extending them): `LifeDigestAir`, `LifeAggBackend`,
+  the "one strip per zone" and `rpr = 2` choices, `board_root` (its value depends on the life trace layout), the
+  life GPU trace kernels and life benchmarks.
+- **Kept, because they are generic:** P100, EF5 aggregation (J101/U101), the P3R pin, reusable owners and cached
+  owner trees per (shape, m), the group head format, the chain check, the proof-pool DoS fixes, the failure memo,
+  and the in-trace Poseidon2 sponge technique.
+- **Next steps (replaces A3+/A4 step 2 ordering):**
+  1. **G4 spike: leaves with lookups.** Verify a batch-STARK leaf with LogUp (water3d) through P3R's low-level
+     `verify_batch_circuit` path. Most real simulations need buses, and the trusted uni-STARK owner rejects them.
+     Biggest risk, so it goes first.
+  2. **G2 sponge gadget:** move the in-trace Poseidon2 sponge out of `digest.rs` into `umis-stark` (absorb any
+     limb expressions, gated, chained), with its tests.
+  3. **G3 generic state root:** a Poseidon2 root over the task's canonical state bytes, independent of any AIR
+     layout; tasks' AIRs absorb in that order. Replaces `board_root`.
+  4. **G1 generic aggregation backend:** a task-side trait (leaf AIR, statement derivation `[d_prev, d_in, d_next,
+     d_out, extras]`, shape key). `AggBackend<T>`; life is the first impl, water the second (G6 = old A6).
+  5. **G5 stateless beacon** (old A4 step 2) on the generic statement: header root, outputs digest, fault evidence.
+  6. B6/B6a (browser cost, e2e rollbacks): generic, keep.
+
 ## 1. Goals
 
 From the POC plan and the owner's decisions since:

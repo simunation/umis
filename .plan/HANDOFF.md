@@ -87,10 +87,13 @@ P3R pinned `3a69ba6` · aggregation over KoalaBear⁵ (EF4 recursive layers cap 
 aggregation default because it is ~1.6× faster with half-size proofs; U101 kept · GPU FRI not built (≤ 3 % gain) · P2 dual state roots (keccak BMT kept, Poseidon2 digest added; 2026-11-21) ·
 aggregation leaves use one strip per zone (2026-11-21).
 
+## Owner constraint (2026-11-21)
+
+No Game-of-Life-specific work: life2d is a test case; future simulations differ. See ROADMAP §0.
+
 ## Next action
 
 B2–B5, A1, A2, the A3 core and A4 step 1 done (2026-11-21). Life commitments can be aggregated in the protocol
 (`stark_config_id = koalabear-agg[-test]`, `umis_agg::backend::LifeAggBackend`; SimNet `life-agg`, `life-agg-junk`,
 release only, ~100 s each). Owner decisions: P2 dual roots; one strip per zone for aggregation leaves (best
-`rpr = 2`). Next: A4 step 2 (ROADMAP: Poseidon2 board root in zone headers, beacon chain/halo checks, drop
-LeafData states), B6/B6a (browser P100 cost, e2e rollbacks).
+`rpr = 2`). Next: ROADMAP §0 order: G4 spike (leaves with lookups via P3R low-level path, water3d), G2, G3, G1, G5; B6/B6a.
