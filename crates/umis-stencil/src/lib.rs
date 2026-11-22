@@ -25,6 +25,9 @@ mod batch_tests;
 pub mod heat;
 #[cfg(test)]
 mod heat_tests;
+pub mod lbm;
+#[cfg(test)]
+mod lbm_tests;
 pub mod life;
 pub mod poseidon;
 #[cfg(test)]

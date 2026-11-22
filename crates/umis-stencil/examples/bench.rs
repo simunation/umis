@@ -10,6 +10,7 @@ use umis_stencil::Rule;
 use umis_stencil::air::{StencilAir, public_values};
 use umis_stencil::batch::StencilBatch;
 use umis_stencil::heat::Heat;
+use umis_stencil::lbm::{Lbm, U};
 use umis_stencil::life::Life;
 
 fn main() {
@@ -20,6 +21,18 @@ fn main() {
     for l in layouts {
         let batch = std::env::var("BATCH").is_ok_and(|v| v == "1");
         let heat = std::env::var("RULE").as_deref() == Ok("heat");
+        if std::env::var("RULE").as_deref() == Ok("lbm") {
+            // rest fluid with a density bump in the middle
+            let we = l[0] + 2 * l[1];
+            let fill = move |i: usize| {
+                let (cell, j) = (i / 9, i % 9);
+                let (x, y) = ((cell % we) as i64 - we as i64 / 2, (cell / we) as i64 - we as i64 / 2);
+                let rho = if x * x + y * y <= 9 { U + 150 } else { U };
+                Lbm::equilibrium(rho, (0, 0))[j]
+            };
+            run_batch(Lbm::default(), &l, fill);
+            continue;
+        }
         if batch {
             if heat {
                 run_batch(Heat::new(16, 3, 4, 1000).with_lookups(), &l, |i| {
@@ -71,7 +84,7 @@ fn run<R: Rule + Clone>(cfg: &koala_bear::Config, rule: R, l: &[usize], fill: im
 fn run_batch<R: Rule + Clone>(rule: R, l: &[usize], fill: impl Fn(usize) -> u32) {
     let b = StencilBatch::new(rule, l[0], l[1], l[2], FriPreset::P100).unwrap();
     let s = b.shape;
-    let mut ext = Grid::filled(s.we, s.we, &[0]);
+    let mut ext = Grid::filled(s.we, s.we, &vec![0; s.spec.values]);
     for (i, c) in ext.data.iter_mut().enumerate() {
         *c = fill(i);
     }

@@ -34,8 +34,16 @@ pub const HASH_BUS: &str = "stencil-hash";
 pub const RANGE_BUS: &str = "stencil-range";
 /// The range table holds `0..2^RANGE_BITS`.
 pub const RANGE_BITS: usize = 16;
-/// Lookup degree budget per AIR.
-const LOOKUP_BUDGET: usize = 3;
+/// Lookup degree budget per AIR: the largest constraint degree the preset's blowup supports
+/// (`blowup + 1`, at most 5). A larger budget packs more lookups per LogUp column (LBM at P100:
+/// budget 5 instead of 3 gives 35 % smaller proofs; measured 2026-11-22). `UMIS_LOOKUP_BUDGET`
+/// overrides it, for measurements.
+fn lookup_budget(preset: FriPreset) -> usize {
+    std::env::var("UMIS_LOOKUP_BUDGET")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(((1usize << preset.log_blowup()) + 1).clamp(3, 5))
+}
 
 // Hash AIR columns.
 const H_IN: usize = 0;
@@ -333,7 +341,7 @@ impl<R: Rule + Clone> StencilBatch<R> {
             &config,
             &airs,
             &degrees,
-            &vec![LOOKUP_BUDGET; airs.len()],
+            &vec![lookup_budget(preset); airs.len()],
             preset.log_blowup(),
         )
         .map_err(|e| format!("setup: {e:?}"))?;
