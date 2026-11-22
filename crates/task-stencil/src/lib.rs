@@ -2,7 +2,8 @@
 //!
 //! A zone is an `n × n` board of cells at lattice point `(px, py, 0)`; its cells sit at global
 //! coordinates `(px·n + x, py·n + y)`. One zone slot runs `k` generations of the zone's
-//! [`RuleId`] (Game of Life, heat diffusion or a lattice Boltzmann fluid). The world is the union
+//! [`RuleId`] (Game of Life, heat diffusion, a lattice Boltzmann fluid or Gray–Scott
+//! reaction–diffusion). The world is the union
 //! of the active zones; outside it, cells hold the rule's boundary value (dead cells, a wall
 //! temperature, fluid at rest) at the start of every slot.
 //!
@@ -29,6 +30,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use umis_core::Hash;
+use umis_stencil::grayscott::GrayScott;
 use umis_stencil::heat::Heat;
 use umis_stencil::lbm::Lbm;
 use umis_stencil::life::Life;
@@ -55,6 +57,9 @@ pub enum RuleId {
     Heat { a: u32, s: u32, wall: u32 },
     /// D2Q9 lattice Boltzmann fluid, relaxation `ω = a / 2^t`.
     Lbm { a: u32, t: u32 },
+    /// Gray–Scott reaction–diffusion: `Du = du/2^s`, `Dv = dv/2^s`, feed `f/2^s`, kill `k/2^s`.
+    #[serde(rename = "grayscott")]
+    GrayScott { du: u32, dv: u32, f: u32, k: u32, s: u32 },
 }
 
 impl RuleId {
@@ -63,6 +68,9 @@ impl RuleId {
             RuleId::Life => AnyRule::Life(Life),
             RuleId::Heat { a, s, wall } => AnyRule::Heat(Heat::new(16, a, s as usize, wall).with_lookups()),
             RuleId::Lbm { a, t } => AnyRule::Lbm(Lbm::new(a as i64, t as usize)),
+            RuleId::GrayScott { du, dv, f, k, s } => {
+                AnyRule::GrayScott(GrayScott::new(du as i64, dv as i64, f as i64, k as i64, s as usize))
+            }
         }
     }
     pub fn name(&self) -> &'static str {
@@ -70,6 +78,7 @@ impl RuleId {
             RuleId::Life => "life",
             RuleId::Heat { .. } => "heat",
             RuleId::Lbm { .. } => "lbm",
+            RuleId::GrayScott { .. } => "grayscott",
         }
     }
     fn check(&self) -> Result<(), String> {
@@ -81,6 +90,12 @@ impl RuleId {
             RuleId::Lbm { a, t } => ((1..=8).contains(&t) && a > 0 && (a as u64) < 2 << t)
                 .then_some(())
                 .ok_or_else(|| "lbm: 1 ≤ t ≤ 8, 0 < a < 2^(t+1)".into()),
+            RuleId::GrayScott { du, dv, f, k, s } => {
+                let one = 1u64 << s.min(13);
+                ((2..=13).contains(&s) && one >= 4 * du as u64 + f as u64 && one >= 4 * dv as u64 + f as u64 + k as u64)
+                    .then_some(())
+                    .ok_or_else(|| "grayscott: 2 ≤ s ≤ 13, 4du + f ≤ 2^s, 4dv + f + k ≤ 2^s".into())
+            }
         }
     }
 }
@@ -91,6 +106,7 @@ pub enum AnyRule {
     Life(Life),
     Heat(Heat),
     Lbm(Lbm),
+    GrayScott(GrayScott),
 }
 
 macro_rules! each {
@@ -99,6 +115,7 @@ macro_rules! each {
             AnyRule::Life($r) => $e,
             AnyRule::Heat($r) => $e,
             AnyRule::Lbm($r) => $e,
+            AnyRule::GrayScott($r) => $e,
         }
     };
 }

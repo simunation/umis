@@ -38,6 +38,11 @@ pub fn rgb(rule: &RuleId, w: &Grid, scale: usize) -> (usize, usize, Vec<u8>) {
             let lo = *wall as f32;
             w.data.iter().map(|v| ramp(((*v as f32 - lo) / (60_000.0 - lo)).sqrt())).collect()
         }
+        RuleId::GrayScott { .. } => {
+            // catalyst v as a colour ramp (u is mostly its complement)
+            let one = umis_stencil::grayscott::U as f32;
+            w.data.chunks_exact(2).map(|c| ramp((c[1] as f32 / one * 3.0).sqrt())).collect()
+        }
         RuleId::Lbm { .. } => {
             let vel: Vec<(f32, f32)> = w
                 .data
@@ -103,6 +108,12 @@ pub fn summary(rule: &RuleId, w: &Grid) -> String {
         RuleId::Heat { .. } => {
             let mean = w.data.iter().map(|v| *v as f64).sum::<f64>() / w.data.len() as f64;
             format!("mean temperature {mean:.0}")
+        }
+        RuleId::GrayScott { .. } => {
+            let one = umis_stencil::grayscott::U as f64;
+            let (n, sv) = (w.data.len() / 2, w.data.chunks_exact(2).map(|c| c[1] as f64).sum::<f64>());
+            let spots = w.data.chunks_exact(2).filter(|c| c[1] as f64 > 0.1 * one).count();
+            format!("mean catalyst {:.4}, cells with v > 0.1: {spots}", sv / one / n as f64)
         }
         RuleId::Lbm { .. } => {
             let (mut mass, mut ke) = (0i64, 0f64);

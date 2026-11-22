@@ -67,7 +67,7 @@ a few natural helper columns; every row also pays fixed-point rounding range che
 | Wave equation | sound, vibrating membrane | 1 + rounding | easy | two values per cell (height, velocity) |
 | Advection, upwind | stuff carried by a flow | 2 (a direction-selector bit) | easy | the selector is a boolean helper column |
 | Burgers equation | simplest nonlinear flow, shocks | 2 (`u·∂u/∂x`) | easy | first nonlinear fluid toy |
-| Reaction–diffusion (Gray–Scott) | chemical patterns (spots, stripes) | 3 (`u·v²`) | easy, visually rich | two values per cell |
+| Reaction–diffusion (Gray–Scott) | chemical patterns (spots, stripes) | 2 with a helper `w = v²` (3 without) | easy, visually rich; **built** (toy 4) | two values per cell |
 | **Lattice Boltzmann (D2Q9, BGK)** | fluids (incompressible flow, vortices) | 3–4: the equilibrium is quadratic in velocity times density ([1](https://arxiv.org/pdf/1501.00515), [2](https://arxiv.org/pdf/2212.06124), [Dellar](https://people.maths.ox.ac.uk/dellar/papers/DSFD04reprint.pdf)); `u = m/ρ` is one division via a helper | **best fluid candidate** | purely local (stream + collide), 9 values per cell, standard method; reproduces Navier–Stokes at second order ([2](https://arxiv.org/pdf/2212.06124)) |
 | Shallow water | waves, floods, tides | 3 (division by depth `h` via a helper) | good | 3 values per cell |
 | Compressible Euler (finite volume) | gas dynamics, shocks | 3–4, plus sqrt (sound speed) and min/max (limiters) | medium | sqrt and limiters need range checks |
@@ -79,7 +79,8 @@ a few natural helper columns; every row also pays fixed-point rounding range che
 
 1. **Life** (done, `umis_stencil::life`): bits, degree 3; the framework acceptance test.
 2. **Heat diffusion** (done, `heat`): one fixed-point value per cell; rounding and range checks.
-3. **Gray–Scott reaction–diffusion** (not yet): two values, degree 3, still simple. A good speed benchmark.
+3. **Gray–Scott reaction–diffusion** (built 2026-11-22, `umis_stencil::grayscott`): two values; the helper
+   `w = v²/U` keeps the degree at 2. A good speed benchmark.
 4. **Lattice Boltzmann D2Q9** (done, `lbm`): 9 values per cell, divisions by constants (staged so every
    integer stays far below `p`), exact mass conservation; the first real fluid. Shear layers roll up into
    vortices.

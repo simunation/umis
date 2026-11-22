@@ -22,6 +22,9 @@ pub mod air;
 pub mod batch;
 #[cfg(test)]
 mod batch_tests;
+pub mod grayscott;
+#[cfg(test)]
+mod grayscott_tests;
 pub mod heat;
 #[cfg(test)]
 mod heat_tests;

@@ -143,9 +143,29 @@ Measured (P100, CPU):
 | life 64×64 | 53 ms, 53 ms, 803 KB | 9.3 ms, 8.0 ms, 410 KB |
 | life 256×256 | 114 ms, 118 ms, 1.9 MB | 28 ms, 24 ms, 1.1 MB |
 
-For heat, the fixed 2^16-row range table dominates small zones. A byte table plus a split (more helper columns)
-trades that cost; worth it if the zones stay small. Trace generation of the batch leaf is still sequential per
-row (`assemble`, 73 ms at 256×256).
+For heat, the fixed 2^16-row range table dominates small zones; multi-slot leaves (below) amortise it.
+
+**Multi-slot leaves (INV-STENCIL-BATCH-4, `StencilBatch::new_multi`, 2026-11-22):** `m` slots of one zone in one
+proof: `m` cells AIRs (one per slot), one hash table holding the `3m` sponges slot by slot, one range table.
+- Cells AIR `j` sends its blocks with tag `3j + region`; the hash table's preprocessed tag column carries the same
+  tag per span, so a slot's blocks reach only its own sponges (`slots_cannot_swap_their_blocks`: the table
+  absorbing slot 1's cells into slot 0's digests is rejected; mutation-checked by dropping the slot from the tag).
+- The hash table has one last-row flag per (slot, region) and `24m` public values, slot `j` at `[24j, 24j + 24)`.
+- For `m = 1` the AIRs and preprocessed data are exactly the single-slot leaf's.
+- Per-slot cells traces are assembled in parallel.
+
+Measured per slot (P100, CPU, load about 8; `M=m RULE=… BATCH=1 bench`):
+
+| zone | m = 1 | m = 2 | m = 4 | m = 8 |
+|---|---|---|---|---|
+| heat 32² prove / verify / proof | 79 ms / 15 ms / 783 KB | 41 / 11 / 577 | 24 / 8.7 / 481 | 21 / 7.2 / 401 |
+| LBM 32² | 313 ms / 179 ms / 5.9 MB | 201 / 146 / 5.7 | 153 / 144 / 5.5 | 134 / 144 / 5.5 |
+| LBM 16² | 179 ms / 71 ms / 3.2 MB | | 77 / 64 / 2.9 | |
+
+Where the rest goes (LBM 32², m = 1, `TRACE=1`): the cells AIR's symbolic degree inference runs on every prove
+(~75–94 ms) and every verify (~70 ms) in p3-batch-stark 0.9.0-rc.2, which has no API to pass a cached degree; the
+cells quotient ~72–80 ms; the 32² zone fills 17 of its 64 trace rows (`MIN_HEIGHT`). Caching the degree needs a
+Plonky3 patch (not done: needs the owner's OK).
 
 ## 6d. Toy 3: lattice Boltzmann (`lbm.rs`)
 
@@ -166,9 +186,22 @@ Range table choice (INV-STENCIL-BATCH-3): `Pairs` (`(v, b)` rows, one lookup per
 form has its own mutation-checked attack tests (`both_range_tables_are_covered_by_the_attack_tests`). Lookup
 degree budget = the preset's maximum degree (P100: 5; LBM proofs 35 % smaller than with 3).
 
+## 6d'. Toy 4: Gray–Scott reaction–diffusion (`grayscott.rs`)
+
+Two 14-bit values `u, v` per cell in units of `U = 2^13`, radius 1, explicit Euler with the 5-point Laplacian.
+The reaction `R = u·v²/U²` is two exact staged divisions (`v² = w·2^13 + r1`, `u·w = R·2^13 + r2`, both below
+2^29); the updates use nearest rounding (`N + 2^(s−1) = x'·2^s + rem`). Every equation's sides are integers of
+magnitude below `p/2`, so each helper and next value is unique given its range (RULE-2). Degree 2; 4 constraints,
+2 + 8 range requests per cell. The steady state `(U, 0)` is the boundary and an exact fixed point;
+`GrayScott::provable` checks that next values stay in `[0, 2^14)`.
+
+Forgeries (mutation-checked): `v_squared_cannot_shift_into_its_remainder` (`(w − 1, r1 + 2^13)`, stopped only by
+`r1`'s range) and `the_update_cannot_round_the_other_way` (stopped only by `ru`'s range). P100 clears the target
+at 32² (`gray_scott_clears_the_target_at_p100`).
+
 ## 6e. The zone task (`crates/task-stencil`, INV-STENCIL-TASK-*)
 
-`stencil2d@1`, layer `stencil`: an `n × n` zone of any rule (`RuleId::{Life, Heat, Lbm}`). Its protocol
+`stencil2d@1`, layer `stencil`: an `n × n` zone of any rule (`RuleId::{Life, Heat, Lbm, GrayScott}`). Its protocol
 semantics are life2d's, generalised:
 - generation-tagged payloads of `k·r`-wide edges and corners;
 - hold and birth, so committed states are globally exact;
@@ -179,6 +212,11 @@ Missing neighbours are the rule's boundary cells.
   decision recomputed, and every header field. Hold and birth slots are checked natively only (proof `[0]`).
 - **TASK-2 (STARK):** for an advance, the verifier builds `E` itself and verifies the batch leaf against
   `public_values(E, next.grid)`.
+- **TASK-3 (multi-slot groups):** a commitment's advancing slots of one zone (up to `MAX_MULTI = 8`) share one
+  multi-slot leaf: head `2 ‖ m ‖ member addresses ‖ proof`, references `3 ‖ keccak(head) ‖ index`
+  (`umis_proof::group`). The verifier runs TASK-1 for every member, derives each statement, and verifies the leaf
+  against their concatenation. Tests `tests/multi.rs` (another node verifies; a foreign body or reordered members
+  are rejected, mutation-checked).
 
 Tests:
 - `tests/global.rs`: lockstep zones equal one monolithic world (3 rules, k = 1, 2), and the LBM demo stays
@@ -186,7 +224,8 @@ Tests:
 - `tests/proofs.rs`: real slots prove and verify; a false board with re-derived roots is rejected
   (mutation-checked); hold slots are native.
 
-SimNet: `stencil-{life,heat,lbm}` (mock), `stencil-{life,lbm}-stark`, `stencil-lbm-junk`.
+SimNet: `stencil-{life,heat,lbm,gs}` (mock), `stencil-{life,lbm,gs}-stark` (they require a multi-slot proof on
+chain), `stencil-lbm-junk`.
 
 ## 6f. Recursion and aggregation (`crates/umis-agg`, S5b + S4; INV-AGG-NB-*, INV-STENCIL-AGG-*)
 

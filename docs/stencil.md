@@ -2,13 +2,17 @@
 
 A **rule** says how one cell's next value follows from its neighbourhood. The framework proves that every zone
 of the network applied the rule exactly, slot after slot, with ≥ 100-bit STARKs, and native nodes verify the
-proofs. Three toy rules ship:
+proofs. Four toy rules ship:
 
 | rule | what it simulates | cell | proof cost per zone slot (P100, 16-core CPU) |
 |---|---|---|---|
 | `life` | Conway's Game of Life | 1 bit | 64×64: 18 ms prove, 9 ms verify, 0.4 MB |
 | `heat` | heat diffusion (explicit, fixed point) | 16-bit temperature | 64×64: 90 ms, 24 ms, 1.1 MB |
 | `lbm` | a 2D fluid (lattice Boltzmann D2Q9, incompressible BGK) | 9 × 16-bit distributions | 32×32: 358 ms, 159 ms, 5.9 MB |
+| `grayscott` | Gray–Scott reaction–diffusion (spots that grow and split) | 2 × 14-bit concentrations | 64×64: 170 ms, 43 ms, 2.0 MB (8 slots per proof: 48 ms, 43 ms, 1.7 MB per slot; load ≈ 10) |
+
+A proof commitment's advancing slots of one zone are proved together (up to 8 per proof, shared tables): per slot
+heat 32² drops from 79 to 21 ms, LBM 32² from 313 to 134 ms (P100, CPU, 2026-11-22).
 
 Why these and what comes next: `docs/simulation-fit.md` (intuitive). How the proofs work and what they check:
 `docs/zk/stencil-spec.md`.
@@ -24,6 +28,7 @@ All commands from the repository root; build once with `cargo build --release -p
 cargo run --release -p task-stencil --example world -- --rule lbm --n 32 --region 4,2 --slots 40 --frames out/lbm
 cargo run --release -p task-stencil --example world -- --rule life --n 64 --region 2,2 --slots 20 --frames out/life
 cargo run --release -p task-stencil --example world -- --rule heat --n 64 --region 2,2 --slots 20 --frames out/heat
+cargo run --release -p task-stencil --example world -- --rule grayscott --n 32 --region 2,2 --slots 20 --frames out/gs
 ```
 
 Each slot: every zone steps with its neighbours' borders, its transition is proved through the protocol's proof
@@ -48,7 +53,7 @@ energy.
 
 ```sh
 cargo build --release -p umis-simnet
-target/release/umis-simnet --scenario stencil --seeds 3 --slots 40     # all six stencil scenarios
+target/release/umis-simnet --scenario stencil --seeds 3 --slots 40     # all eleven stencil scenarios
 target/release/umis-simnet --scenario stencil-lbm-stark --seeds 1 --slots 30
 ```
 

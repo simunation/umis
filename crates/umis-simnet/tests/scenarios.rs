@@ -158,3 +158,15 @@ fn stencil_agg_lbm() {
 fn stencil_agg_junk() {
     ok("stencil-agg-junk", 20);
 }
+
+// Gray–Scott (toy 4).
+#[test]
+fn stencil_gs() {
+    ok("stencil-gs", 30);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_gs_stark() {
+    ok("stencil-gs-stark", 20);
+}

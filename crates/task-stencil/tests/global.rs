@@ -82,9 +82,16 @@ fn monolithic_step(w: &Grid, rule: &impl Rule, k: usize) -> Grid {
 
 #[test]
 fn zones_compute_the_monolithic_world() {
-    for (name, k, slots) in
-        [("life", 1, 6), ("life", 2, 4), ("heat", 1, 5), ("heat", 2, 3), ("lbm", 1, 5), ("lbm", 2, 3)]
-    {
+    for (name, k, slots) in [
+        ("life", 1, 6),
+        ("life", 2, 4),
+        ("heat", 1, 5),
+        ("heat", 2, 3),
+        ("lbm", 1, 5),
+        ("lbm", 2, 3),
+        ("grayscott", 1, 5),
+        ("grayscott", 2, 3),
+    ] {
         let rule_id = default_rule(name).unwrap();
         let rule = rule_id.rule();
         let mut world = World::new(rule_id, 8, k, [3, 2], 0);

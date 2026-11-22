@@ -1,6 +1,6 @@
 //! `cargo run --release -p umis-stencil --example bench -- n,k,rpr ...` (default 64,1,2 256,1,2):
 //! trace generation, P100 prove and verify of one slot on the stencil framework.
-//! `RULE=heat` (16-bit fixed-point diffusion) or `life` (default); `BATCH=1`: the batch leaf with
+//! `RULE=heat` (16-bit fixed-point diffusion), `lbm`, `gs` (Gray–Scott; batch only) or `life` (default); `BATCH=1`: the batch leaf with
 //! lookups (range table, separate hash table; `heat` then uses lookup range checks). `TRACE=1`:
 //! Plonky3's prover span timings.
 use p3_uni_stark::{prove, verify};
@@ -39,6 +39,19 @@ fn main() {
                 Lbm::equilibrium(rho, (0, 0))[j]
             };
             run_batch(Lbm::default(), &l, fill);
+            continue;
+        }
+        if std::env::var("RULE").as_deref() == Ok("gs") {
+            // substrate with a catalyst square in the middle
+            let we = l[0] + 2 * l[1];
+            let fill = move |i: usize| {
+                let (cell, j) = (i / 2, i % 2);
+                let (x, y) = ((cell % we) as i64 - we as i64 / 2, (cell / we) as i64 - we as i64 / 2);
+                let seed = x.abs() <= 3 && y.abs() <= 3;
+                let u = umis_stencil::grayscott::U as u32;
+                [if seed { u / 2 } else { u }, if seed { u / 4 } else { 0 }][j]
+            };
+            run_batch(umis_stencil::grayscott::GrayScott::default(), &l, fill);
             continue;
         }
         if batch {

@@ -81,9 +81,26 @@ pub fn genesis_board(seed: &Hash, p: &StencilParams, point: [i32; 3]) -> Grid {
             }
             g
         }
+        RuleId::GrayScott { .. } => {
+            // All substrate with a few catalyst squares (pattern 1: one per zone, centred).
+            let gs = umis_stencil::grayscott::U as u32;
+            let mut g = Grid::filled(n, n, &[gs, 0]);
+            let seeds: Vec<(usize, usize)> = if p.pattern == 1 {
+                vec![(n / 2, n / 2)]
+            } else {
+                (0..3).map(|_| (r.next_u32() as usize % n, r.next_u32() as usize % n)).collect()
+            };
+            for (cx, cy) in seeds {
+                for y in cy.saturating_sub(2)..(cy + 2).min(n) {
+                    for x in cx.saturating_sub(2)..(cx + 2).min(n) {
+                        g.cell_mut(x, y).copy_from_slice(&[gs / 2, gs / 4]);
+                    }
+                }
+            }
+            g
+        }
     }
 }
-
 /// Display channels of a board.
 pub fn render_channels(rule: &RuleId, g: &Grid) -> (u32, Vec<f32>) {
     match rule {
@@ -96,6 +113,10 @@ pub fn render_channels(rule: &RuleId, g: &Grid) -> (u32, Vec<f32>) {
                 out.extend([(rho - U) as f32 / U as f32, mx as f32 / U as f32, my as f32 / U as f32]);
             }
             (3, out)
+        }
+        RuleId::GrayScott { .. } => {
+            let one = umis_stencil::grayscott::U as f32;
+            (2, g.data.iter().map(|v| *v as f32 / one).collect())
         }
     }
 }

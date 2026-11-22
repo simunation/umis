@@ -49,6 +49,8 @@ pub enum Scenario {
     StencilAgg,
     StencilAggLbm,
     StencilAggJunk,
+    StencilGs,
+    StencilGsStark,
 }
 
 /// The Game of Life scenarios (globally exact zones, see `task_life2d`).
@@ -69,7 +71,7 @@ pub const LIFE: [&str; 13] = [
 ];
 
 /// The generic local-rule scenarios (`task-stencil`).
-pub const STENCIL: [&str; 9] = [
+pub const STENCIL: [&str; 11] = [
     "stencil-life",
     "stencil-heat",
     "stencil-lbm",
@@ -79,6 +81,8 @@ pub const STENCIL: [&str; 9] = [
     "stencil-agg",
     "stencil-agg-lbm",
     "stencil-agg-junk",
+    "stencil-gs",
+    "stencil-gs-stark",
 ];
 
 pub const ALL: [&str; 13] = [
@@ -136,6 +140,8 @@ impl std::str::FromStr for Scenario {
             "stencil-agg" => Scenario::StencilAgg,
             "stencil-agg-lbm" => Scenario::StencilAggLbm,
             "stencil-agg-junk" => Scenario::StencilAggJunk,
+            "stencil-gs" => Scenario::StencilGs,
+            "stencil-gs-stark" => Scenario::StencilGsStark,
             _ => return Err(format!("unknown scenario {s}")),
         })
     }
@@ -192,8 +198,23 @@ pub fn run(s: Scenario, seed: u64, slots: u64) -> Outcome {
         Scenario::StencilLife => stencil_checked(basic(SimConfig::stencil(seed, "life"), slots.max(30))),
         Scenario::StencilHeat => stencil_checked(basic(SimConfig::stencil(seed, "heat"), slots.max(30))),
         Scenario::StencilLbm => stencil_checked(basic(SimConfig::stencil(seed, "lbm"), slots.max(30))),
-        Scenario::StencilLifeStark => stencil_checked(stark(SimConfig::stencil(seed, "life"), slots.clamp(20, 40))),
-        Scenario::StencilLbmStark => stencil_checked(stark(SimConfig::stencil(seed, "lbm"), slots.clamp(20, 40))),
+        Scenario::StencilGs => stencil_checked(basic(SimConfig::stencil(seed, "grayscott"), slots.max(30))),
+        Scenario::StencilGsStark => carries(
+            stencil_checked(stark(SimConfig::stencil(seed, "grayscott"), slots.clamp(20, 40))),
+            2,
+            "a multi-slot proof",
+        ),
+        // Commitments' advancing slots share one multi-slot proof (tag 2, INV-STENCIL-TASK-3).
+        Scenario::StencilLifeStark => carries(
+            stencil_checked(stark(SimConfig::stencil(seed, "life"), slots.clamp(20, 40))),
+            2,
+            "a multi-slot proof",
+        ),
+        Scenario::StencilLbmStark => carries(
+            stencil_checked(stark(SimConfig::stencil(seed, "lbm"), slots.clamp(20, 40))),
+            2,
+            "a multi-slot proof",
+        ),
         Scenario::StencilLbmJunk => {
             let mut cfg = SimConfig::stencil(seed, "lbm");
             cfg.proof_backend = task_stencil::air::BACKEND_ID.into();
@@ -243,17 +264,23 @@ pub fn run(s: Scenario, seed: u64, slots: u64) -> Outcome {
 
 /// Requires that some proof commitment on the archive's canonical chain carries a recursive
 /// aggregate (`ProofTag::AggHead`).
-fn aggregated(mut o: Outcome) -> Outcome {
+fn aggregated(o: Outcome) -> Outcome {
+    carries(o, task_life2d::air::ProofTag::AggHead as u8, "an aggregate")
+}
+
+/// Requires that some proof commitment on the archive's canonical chain carries a proof with
+/// leading tag `tag`.
+fn carries(mut o: Outcome, tag: u8, what: &str) -> Outcome {
     let a = o.sim.node(o.sim.archive);
     let n = a
         .chain
         .canonical()
         .filter_map(|e| e.block.as_ref())
         .flat_map(|b| b.body.proof_commitments.iter())
-        .filter(|pce| pce.proofs.iter().any(|p| p.first() == Some(&(task_life2d::air::ProofTag::AggHead as u8))))
+        .filter(|pce| pce.proofs.iter().any(|p| p.first() == Some(&tag)))
         .count();
     if n == 0 {
-        o.report.violations.push("no proof commitment carries an aggregate".into());
+        o.report.violations.push(format!("no proof commitment carries {what}"));
     }
     o
 }

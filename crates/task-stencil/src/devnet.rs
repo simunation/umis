@@ -31,6 +31,8 @@ pub fn default_rule(name: &str) -> Option<RuleId> {
         "heat" => RuleId::Heat { a: 3, s: 4, wall: 1000 },
         // ω = 1.875: viscosity (1/ω − 1/2)/3 ≈ 0.011, so shear layers roll up into vortices
         "lbm" => RuleId::Lbm { a: 30, t: 4 },
+        // Du 0.16, Dv 0.08, F 0.037, k 0.06: catalyst spots that grow and split
+        "grayscott" | "gs" => RuleId::GrayScott { du: 655, dv: 328, f: 152, k: 246, s: 12 },
         _ => return None,
     })
 }

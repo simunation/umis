@@ -134,7 +134,7 @@ impl Slot {
 #[test]
 fn honest_slots_verify_and_false_boards_do_not() {
     let backend = StencilStark::from_config_id(Some("koalabear-test"));
-    for name in ["life", "heat", "lbm"] {
+    for name in ["life", "heat", "lbm", "grayscott"] {
         let rule = default_rule(name).unwrap();
         let mut s = slot_of(rule, 3, false);
         let proof = s.prove(&backend);
