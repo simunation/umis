@@ -26,6 +26,16 @@ exclude = ["vendor"]
 # Larger per-channel read buffer for browser WebRTC (see vendor/README.md).
 libp2p-webrtc-websys = { path = "vendor/libp2p-webrtc-websys" }
 
+# Plonky3-recursion at the pinned rev plus local patches (vendor/README.md); the directory is
+# built by scripts/vendor-p3r.sh (gitignored).
+[patch."https://github.com/Plonky3/Plonky3-recursion"]
+p3-recursion = { path = "vendor/plonky3-recursion/recursion" }
+p3-circuit = { path = "vendor/plonky3-recursion/circuit" }
+p3-circuit-prover = { path = "vendor/plonky3-recursion/circuit-prover" }
+p3-poseidon-circuit-cols = { path = "vendor/plonky3-recursion/poseidon-circuit-cols" }
+p3-poseidon1-circuit-air = { path = "vendor/plonky3-recursion/poseidon1-circuit-air" }
+p3-poseidon2-circuit-air = { path = "vendor/plonky3-recursion/poseidon2-circuit-air" }
+
 [workspace.package]
 version = "0.1.0"
 edition = "2024"

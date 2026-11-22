@@ -18,6 +18,9 @@ WASM_TESTS=("umis-core" "task-water3d --features stark" "umis-stark")
 
 step() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 
+step "vendored Plonky3-recursion (scripts/vendor-p3r.sh)"
+scripts/vendor-p3r.sh
+
 step "cargo fmt --check"
 cargo fmt --all -- --check
 

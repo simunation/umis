@@ -10,3 +10,4 @@
 /web/spike/pkg
 /.demo
 /tmp
+/vendor/plonky3-recursion

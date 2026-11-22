@@ -21,7 +21,7 @@
 
   | preset | regime | blowup | queries | leaf / layer 1 / 2-to-1 proven bits |
   |---|---|---|---|---|
-  | `J101` (default) | Johnson (DKT26 line count, `fri-soundness-foundations.md` §3.6) | 8 | 58 | 102.9 / 102.4 / 102.0 |
+  | `J101` (default) | Johnson (DKT26 line count, `fri-soundness-foundations.md` §3.6) | 8 | 60 (58 until 2026-11-22) | 102.9 / 102.4 / 102.0 (58 queries) |
   | `U101` | unique decoding only | 4 | 128 | 102.7 / 102.8 / 102.8 |
 
   Over EF4 the Johnson regime gave nothing (the batch term bound in both); over EF5 it needs about half the queries,
@@ -107,6 +107,52 @@ INV-LIFE-AGG-1..3). Each verifier builds its own owner tree per (shape, member c
 `life-agg` and `life-agg-junk` pass (0 rollbacks, exact life state; about 100 s each, dominated by proving). The
 beacon still receives the states. Next (step 2): Poseidon2 roots in zone commitments, the halo check from input
 payloads, and leaving the states off the beacon chain.
+
+## Native batch leaves (S5b, 2026-11-22)
+
+Stencil leaves (`umis-stencil` `StencilBatch`) are native `p3_batch_stark` proofs of three AIRs (cells, Poseidon2
+hash table, range table) joined by LogUp buses. P3R's trusted owners accept only uni-STARK leaves or P3R's own
+circuit proofs, so `umis_agg::native` builds the same trusted construction from P3R's public pieces:
+
+- `NativeRelation`: the AIRs (`StencilBatch::airs()`), heights and the EF5 setup (`ProverData`) of one relation;
+  `prove` gives a `NativeLeaf`.
+- `NativeLayer1::new(params, relation, representative)`: `prepare_circuit_for_verification`,
+  `BatchStarkVerifierInputsBuilder::allocate`, `verify_batch_circuit` (AIRs and FRI parameters are circuit
+  structure), then:
+  - **INV-AGG-NB-1 (VK pin):** the `CommonData` preprocessed-commitment targets are constrained to the relation's
+    commitment (`ConstrainConstantCommitment`). Needs the local P3R patch below.
+  - **INV-AGG-NB-2 (statement):** `set_statement_exports` exports exactly the leaf's AIR public values (24 for a
+    stencil leaf: `d_prev, d_halo, d_next`). Every other circuit input, including the leaf's commitments and
+    openings allocated with `public_input()`, is witness: `CircuitVerifier::verify(proof, statement)` checks only
+    the statement table. The in-circuit transcript binds the witness commitments.
+  - **INV-AGG-NB-3:** one owner per relation and shape proves every leaf of that shape (`prove` checks the shape and
+    verifies the leaf natively first; `prove_unchecked` skips that for tests).
+  - Prover: the backend's NPO tables plus the statement table, `BatchStarkProver::prepare_circuit`.
+- **INV-AGG-NB-4:** J101 (now 60 queries) gives ≥ 101 proven bits for EF5 stencil leaves (heat 64², LBM 32²,
+  life 64²) and the layer-1 proofs over them.
+- Upper layers are unchanged: `AggOwner` (2-to-1) takes `NativeLayer1`'s recursive proofs; `stencil_chain` checks
+  that consecutive leaf statements chain.
+
+**Local P3R patch** (owner-approved 2026-11-22): `scripts/vendor-p3r.sh` builds `vendor/plonky3-recursion`
+(gitignored) from the pinned rev plus `vendor/p3r-*.patch`; the workspace `[patch]` points P3R's six crates there.
+- `p3r-common-data-preprocessed.patch`: a public accessor `CommonDataTargets::preprocessed_commitment` (the
+  field is `pub(crate)`), needed for the VK pin.
+- `p3r-periodic-layout.patch`: `replay_batch_stark_transcript` and `declares_interactions` built their
+  `AirLayout` without the AIR's periodic columns (an upstream bug: the quotient-degree computation panics for any
+  batch AIR with periodic columns). The in-circuit folding already declared them.
+
+Measured (J101, `stencil_agg_bench`, 16 cores, load 5–9; leaf includes its native verify):
+
+| rule, zone | EF5 leaf | layer-1 owner build (once) | layer 1 | 2-to-1 | aggregate verify |
+|---|---|---|---|---|---|
+| heat 64² | 161 ms, 0.64 MB | 367 ms | 852 ms, 0.41 MB | 1.12 s, 0.44 MB | 10 ms |
+| LBM 32² | 610 ms, 3.35 MB | 2.86 s | 5.31 s, 0.45 MB | 1.02 s, 0.45 MB | 10 ms |
+| life 64² | 15 ms, 0.23 MB | 171 ms | 359 ms, 0.39 MB | 1.03 s, 0.44 MB | 9 ms |
+
+Tests (`tests/native.rs`, release): honest recursion and statement binding; one owner for many slots plus a 2-to-1
+aggregate that chains; a leaf of another rule (same widths, same preprocessed commitment) rejected by the circuit;
+a leaf proved under a forged verifying key rejected by the circuit (mutation-checked: without the pin it recurses);
+101 bits.
 
 ## Tests and tools
 

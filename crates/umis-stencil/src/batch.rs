@@ -53,10 +53,15 @@ fn range_row(v: u64, b: usize) -> usize {
 /// budget 5 instead of 3 gives 35 % smaller proofs; measured 2026-11-22). `UMIS_LOOKUP_BUDGET`
 /// overrides it, for measurements.
 fn lookup_budget(preset: FriPreset) -> usize {
+    lookup_budget_for(preset.log_blowup())
+}
+
+/// The LogUp degree budget at FRI blowup `2^log_blowup`: `blowup + 1`, between 3 and 5.
+pub fn lookup_budget_for(log_blowup: usize) -> usize {
     std::env::var("UMIS_LOOKUP_BUDGET")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(((1usize << preset.log_blowup()) + 1).clamp(3, 5))
+        .unwrap_or(((1usize << log_blowup) + 1).clamp(3, 5))
 }
 
 // Hash AIR columns.
@@ -388,6 +393,7 @@ pub struct StencilBatch<R> {
     pub preset: FriPreset,
     config: koala_bear::Config,
     airs: Vec<BatchAir<R>>,
+    degrees: Vec<usize>,
     prover_data: ProverData<koala_bear::Config>,
 }
 
@@ -414,7 +420,23 @@ impl<R: Rule + Clone> StencilBatch<R> {
             preset.log_blowup(),
         )
         .map_err(|e| format!("setup: {e:?}"))?;
-        Ok(Self { rule, shape, preset, config, airs, prover_data })
+        Ok(Self { rule, shape, preset, config, airs, degrees, prover_data })
+    }
+
+    /// The AIRs of the leaf (cells, hash, and the range table if the rule requests ranges), for
+    /// proving the same relation under another STARK configuration (recursion: `umis-agg`).
+    pub fn airs(&self) -> &[BatchAir<R>] {
+        &self.airs
+    }
+
+    /// log₂ trace heights of [`Self::airs`].
+    pub fn degrees(&self) -> &[usize] {
+        &self.degrees
+    }
+
+    /// Per-AIR public values of a leaf with claim `public` (the hash AIR carries the claim).
+    pub fn publics(&self, public: &[Val]) -> Vec<Vec<Val>> {
+        (0..self.airs.len()).map(|a| if a == 1 { public.to_vec() } else { Vec::new() }).collect()
     }
 
     /// The range table for a shape: `Pairs` when a slot makes at least 2^15 narrow requests.
@@ -552,8 +574,7 @@ impl<R: Rule + Clone> StencilBatch<R> {
     }
 
     pub fn verify(&self, proof: &BatchProof<koala_bear::Config>, public: &[Val]) -> Result<(), String> {
-        let publics: Vec<Vec<Val>> =
-            (0..self.airs.len()).map(|a| if a == 1 { public.to_vec() } else { Vec::new() }).collect();
+        let publics = self.publics(public);
         verify_batch(&self.config, &self.airs, proof, &publics, &self.prover_data.common).map_err(|e| format!("{e:?}"))
     }
 
@@ -562,27 +583,7 @@ impl<R: Rule + Clone> StencilBatch<R> {
     /// quotient chunking allows, and upper estimates for what it does not carry (constraints:
     /// 4 per opened codeword; LogUp: 4 interactions of width 10 per permutation column).
     pub fn security_shape(proof: &BatchProof<koala_bear::Config>) -> umis_stark::security::ProofShape {
-        const E: usize = 4;
-        let log_height = proof.degree_bits.iter().copied().max().unwrap_or(0);
-        let (mut openings, mut perm_cols, mut chunks) = (0usize, 0usize, 1usize);
-        for inst in &proof.opened_values.instances {
-            let b = &inst.base_opened_values;
-            openings += b.trace_local.len() + b.trace_next.as_ref().map_or(0, Vec::len);
-            if let Some(pre) = &b.preprocessed {
-                openings += pre.local.len() + pre.next.as_ref().map_or(0, Vec::len);
-            }
-            openings += E * b.quotient_chunks.iter().map(Vec::len).sum::<usize>();
-            openings += E * (inst.permutation_local.len() + inst.permutation_next.len());
-            perm_cols += inst.permutation_local.len();
-            chunks = chunks.max(b.quotient_chunks.len());
-        }
-        umis_stark::security::ProofShape {
-            log_height,
-            num_constraints: 4 * openings,
-            max_degree: chunks + 1,
-            batched_openings: openings,
-            logup: (perm_cols > 0).then_some((4 * perm_cols, 2 + RATE)),
-        }
+        security_shape_of(proof, 4)
     }
 
     /// Widths of the AIRs (cells, hash, and the range table if present).
@@ -605,3 +606,31 @@ impl Shape {
 
 #[cfg(test)]
 pub(crate) const HASH_IN: usize = H_IN;
+
+/// [`StencilBatch::security_shape`] for a batch proof under any configuration whose challenge
+/// field has degree `ext` over KoalaBear.
+pub fn security_shape_of<SC: p3_batch_stark::StarkGenericConfig>(
+    proof: &BatchProof<SC>,
+    ext: usize,
+) -> umis_stark::security::ProofShape {
+    let log_height = proof.degree_bits.iter().copied().max().unwrap_or(0);
+    let (mut openings, mut perm_cols, mut chunks) = (0usize, 0usize, 1usize);
+    for inst in &proof.opened_values.instances {
+        let b = &inst.base_opened_values;
+        openings += b.trace_local.len() + b.trace_next.as_ref().map_or(0, Vec::len);
+        if let Some(pre) = &b.preprocessed {
+            openings += pre.local.len() + pre.next.as_ref().map_or(0, Vec::len);
+        }
+        openings += ext * b.quotient_chunks.iter().map(Vec::len).sum::<usize>();
+        openings += ext * (inst.permutation_local.len() + inst.permutation_next.len());
+        perm_cols += inst.permutation_local.len();
+        chunks = chunks.max(b.quotient_chunks.len());
+    }
+    umis_stark::security::ProofShape {
+        log_height,
+        num_constraints: 4 * openings,
+        max_degree: chunks + 1,
+        batched_openings: openings,
+        logup: (perm_cols > 0).then_some((4 * perm_cols, 2 + RATE)),
+    }
+}

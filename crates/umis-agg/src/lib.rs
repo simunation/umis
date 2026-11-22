@@ -15,6 +15,7 @@
 //! Plonky3-recursion is unaudited (its README says so); this crate is pinned to one commit.
 
 pub mod backend;
+pub mod native;
 
 use p3_circuit_prover::BatchStarkProof;
 use p3_circuit_prover::batch_stark_prover::CircuitVerifier;
@@ -50,9 +51,11 @@ pub struct AggParams {
 
 impl AggParams {
     /// ≥ 101 proven bits in the Johnson regime (DKT26 line count) for leaves and recursive
-    /// proofs: blowup 8, arity 8, 58 queries, 16-bit query and commit grinding.
+    /// proofs: blowup 8, arity 8, 60 queries, 16-bit query and commit grinding. 60 rather than
+    /// 58 queries because a wide stencil leaf (LBM 32², 70k batched openings) reaches only
+    /// 100.7 bits with 58 (2026-11-22); with 60 it has 102.5.
     pub const J101: Self = Self {
-        fri: RecursiveFri { log_blowup: 3, max_log_arity: 3, num_queries: 58, commit_pow_bits: 16, query_pow_bits: 16 },
+        fri: RecursiveFri { log_blowup: 3, max_log_arity: 3, num_queries: 60, commit_pow_bits: 16, query_pow_bits: 16 },
         regime: Regime::Johnson,
     };
     /// ≥ 101 proven bits in the unique-decoding regime only: blowup 4, arity 8, 128 queries.
@@ -278,6 +281,27 @@ pub fn chain(statement: &[Val]) -> Result<([Val; DIGEST], [Val; DIGEST]), String
     let last = leaves[leaves.len() - 1][2 * DIGEST..3 * DIGEST].try_into().expect("digest");
     Ok((first, last))
 }
+
+/// [`chain`] for stencil leaves (`umis_stencil`, INV-STENCIL-6): each leaf statement is
+/// `[d_prev, d_halo, d_next]`; returns the first `d_prev` and the last `d_next` if every leaf's
+/// `d_next` is the next leaf's `d_prev`.
+pub fn stencil_chain(statement: &[Val]) -> Result<([Val; SD], [Val; SD]), String> {
+    const N: usize = umis_stencil::air::N_PUBLIC;
+    if statement.is_empty() || statement.len() % N != 0 {
+        return Err(format!("statement length {} is not a positive multiple of {N}", statement.len()));
+    }
+    let leaves: Vec<&[Val]> = statement.chunks(N).collect();
+    for (i, w) in leaves.windows(2).enumerate() {
+        if w[0][2 * SD..3 * SD] != w[1][..SD] {
+            return Err(format!("leaf {} does not continue leaf {i}", i + 1));
+        }
+    }
+    let first = leaves[0][..SD].try_into().expect("digest");
+    let last = leaves[leaves.len() - 1][2 * SD..3 * SD].try_into().expect("digest");
+    Ok((first, last))
+}
+
+const SD: usize = umis_stencil::poseidon::DIGEST;
 
 /// A recursive proof and the statement it carries.
 pub struct Recursive {

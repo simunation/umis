@@ -1,0 +1,21 @@
+--- a/recursion/src/types/proof.rs
++++ b/recursion/src/types/proof.rs
+@@ -155,6 +155,18 @@
+     pub lookups: Vec<Vec<Lookup<Val<SC>>>>,
+ }
+ 
++impl<SC: StarkGenericConfig, Comm> CommonDataTargets<SC, Comm> {
++    /// The targets of the preprocessed (verifying-key) commitment, if the relation has
++    /// preprocessed columns. umis local patch: lets a caller pin them to constants when it
++    /// verifies a native batch proof with `verify_batch_circuit` (see umis vendor/README.md).
++    pub const fn preprocessed_commitment(&self) -> Option<&Comm> {
++        match &self.preprocessed {
++            Some(p) => Some(&p.commitment),
++            None => None,
++        }
++    }
++}
++
+ impl<SC: StarkGenericConfig, Comm> Recursive<SC::Challenge> for CommonDataTargets<SC, Comm>
+ where
+     Comm: Recursive<
