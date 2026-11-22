@@ -240,8 +240,8 @@ impl<R: Rule + Clone> StencilAir<R> {
         Ok(Self { periodic: shape.periodic(), rule, shape })
     }
 
-    /// The constraint degree Plonky3 derives (periodic columns count as degree 1). It must
-    /// equal the rule's own degree (INV-STENCIL-DEG-1).
+    /// The constraint degree Plonky3 derives (periodic columns count as degree 1): the rule's
+    /// degree, or 3 (the Poseidon2 S-box) if that is larger (INV-STENCIL-DEG-1).
     pub fn symbolic_degree(&self) -> usize {
         use p3_air::symbolic::{AirLayout, get_max_constraint_degree};
         let layout = AirLayout {

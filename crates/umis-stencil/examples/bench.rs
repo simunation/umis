@@ -1,10 +1,13 @@
 //! `cargo run --release -p umis-stencil --example bench -- n,k,rpr ...` (default 64,1,2 256,1,2):
-//! trace generation, P100 prove and verify of one life slot on the stencil framework.
+//! trace generation, P100 prove and verify of one slot on the stencil framework.
+//! `RULE=heat` (16-bit fixed-point diffusion) or `life` (default).
 use p3_uni_stark::{prove, verify};
 use std::time::Instant;
 use umis_stark::config::{FriPreset, koala_bear};
 use umis_stencil::Grid;
+use umis_stencil::Rule;
 use umis_stencil::air::{StencilAir, public_values};
+use umis_stencil::heat::Heat;
 use umis_stencil::life::Life;
 
 fn main() {
@@ -13,21 +16,31 @@ fn main() {
     let layouts = if args.is_empty() { vec![vec![64, 1, 2], vec![256, 1, 2]] } else { args };
     let cfg = koala_bear::config(FriPreset::P100);
     for l in layouts {
-        let air = StencilAir::new(Life, l[0], l[1], l[2]).unwrap();
+        if std::env::var("RULE").as_deref() == Ok("heat") {
+            run(&cfg, Heat::new(16, 3, 4, 1000), &l, |i| ((i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 48) as u32);
+        } else {
+            run(&cfg, Life, &l, |i| ((i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 60 < 5) as u32);
+        }
+    }
+}
+
+fn run<R: Rule + Clone>(cfg: &koala_bear::Config, rule: R, l: &[usize], fill: impl Fn(usize) -> u32) {
+    {
+        let air = StencilAir::new(rule, l[0], l[1], l[2]).unwrap();
         let s = air.shape;
         let mut ext = Grid::filled(s.we, s.we, &[0]);
         for (i, c) in ext.data.iter_mut().enumerate() {
-            *c = ((i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 60 < 5) as u32;
+            *c = fill(i);
         }
         let t = Instant::now();
         let (trace, next) = air.generate_trace(&ext);
         let public = public_values(&s, &ext, &next);
         let t_gen = t.elapsed();
         let t = Instant::now();
-        let proof = prove(&cfg, &air, trace, &public).unwrap();
+        let proof = prove(cfg, &air, trace, &public).unwrap();
         let t_prove = t.elapsed();
         let t = Instant::now();
-        verify(&cfg, &air, &proof, &public).unwrap();
+        verify(cfg, &air, &proof, &public).unwrap();
         let t_verify = t.elapsed();
         let kb = postcard::to_allocvec(&proof).unwrap().len() / 1024;
         println!(

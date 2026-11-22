@@ -31,7 +31,14 @@ sponge technique.
    and auxiliary witness columns. The framework provides the layout (rows × generations, halo, padding), a
    prev / halo / next binding by in-trace Poseidon2 sponges, shape-only periodic columns and public parameters.
    This generalises `LifeDigestAir`. Life is re-expressed on it as toy 1, the acceptance test.
-2. **S2 toy 2: fixed-point diffusion / advection** (multi-value state, integer arithmetic with rounding). It needs
+2. ~~**S2 toy 2**~~ **done 2026-11-22:** heat diffusion (`umis_stencil::heat`, spec §6b), 16-bit fixed point with
+   bit-decomposition range checks, all checks mutation-checked. Cost at 64×64: 12.9k columns, 378 ms prove,
+   6.9 MB. About 60 % is hashing and 35 % range bits, so **S5 is next**:
+   - (a) LogUp range checks against a table;
+   - (b) a separate Poseidon2 hash table fed over a bus.
+   
+   Both make leaves batch STARKs with lookups, which needs P3R's low-level recursion path.
+   Original text: **S2 toy 2: fixed-point diffusion / advection** (multi-value state, integer arithmetic with rounding). It needs
    range checks, done first with bit-decomposition columns (stays a uni-STARK, so the trusted P3R owner works).
 3. **S3 generic state root and statement**: a Poseidon2 root over the canonical state encoding, independent of
    the AIR layout. Leaf statement `[d_prev, d_in, d_next, d_out, params]`; `chain()` and the halo / face checks on

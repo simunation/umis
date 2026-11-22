@@ -101,5 +101,6 @@ B2–B5, A1, A2, the A3 core and A4 step 1 done (2026-11-21). Life commitments c
 (`stark_config_id = koalabear-agg[-test]`, `umis_agg::backend::LifeAggBackend`; SimNet `life-agg`, `life-agg-junk`,
 release only, ~100 s each). Owner decisions: P2 dual roots; one strip per zone for aggregation leaves (best
 `rpr = 2`). S1 done (2026-11-22): `crates/umis-stencil` (`Rule`, `StencilAir`, `root`, `halo_digest`, `life::Life`; spec
-`docs/zk/stencil-spec.md`; bench `examples/bench.rs`). Next: S2 heat-diffusion toy (fixed point, range checks), then
-S4 generic aggregation backend over `StencilAir`, S5 hash table/lookups (cost), S6 stateless beacon.
+`docs/zk/stencil-spec.md`; bench `examples/bench.rs`). S2 done (`heat.rs`; 64×64 = 12.9k columns, 378 ms, 6.9 MB: hashing ~60 %, range bits ~35 %). Next: S5
+(LogUp range table + separate Poseidon2 hash table over a bus; needs P3R's low-level path), then S4 generic
+aggregation, S6 stateless beacon.

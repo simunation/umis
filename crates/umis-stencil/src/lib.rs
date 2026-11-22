@@ -16,9 +16,12 @@
 //!
 //! Boundary condition: a missing neighbour contributes [`Rule::boundary`] cells to `E`,
 //! which then evolve by the same rule (ghost cells); no masks enter the AIR, so the
-//! constraint degree is the rule's degree ([`air::StencilAir::symbolic_degree`]).
+//! constraint degree is `max(3, rule degree)` ([`air::StencilAir::symbolic_degree`]).
 
 pub mod air;
+pub mod heat;
+#[cfg(test)]
+mod heat_tests;
 pub mod life;
 pub mod poseidon;
 #[cfg(test)]

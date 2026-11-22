@@ -60,7 +60,8 @@ Missing neighbours: the caller fills their part of `E` with `Rule::boundary()`, 
 
 ## 5. Degree and parameters
 
-- **DEG-1:** the AIR's symbolic degree (Plonky3 counts periodic columns as degree 1) equals the rule's degree.
+- **DEG-1:** the AIR's symbolic degree (Plonky3 counts periodic columns as degree 1) is `max(3, rule degree)`.
+  3 is the Poseidon2 S-box; heat diffusion's own degree is 2.
   Permutation inputs are committed limbs, and gates multiply only columns (`the_degree_is_the_rules_degree`:
   life is 3). Security inputs use `StencilAir::security_shape()`, which takes the symbolic degree.
 - **PARAM-1:** `MIN_HEIGHT = 64`. Heights 2^3–2^5 give 93.8–100.5 proven bits at P100; 2^6 and up clear 101
@@ -77,6 +78,28 @@ Missing neighbours: the caller fills their part of `E` with `Rule::boundary()`, 
 That is about 5× the hand-tuned life prover (18.6 ms, 245 KB). About two thirds of the width is the three
 in-trace sponges (about 2 permutations per board row and digest at n = 256). Prefer small `rpr`. The planned
 fix is a separate hash table linked by a lookup bus (ROADMAP §0 S5).
+
+## 6b. Toy 2: heat diffusion (`heat.rs`, S2)
+
+16-bit temperatures, α = a/2^s (`4a ≤ 2^s`), `N = (2^s − 4a)·u + a·Σ₄ neighbours`, `u' = ⌊N/2^s⌋` proved as
+`N = u'·2^s + rem`. Bit decompositions cover `rem` (s bits), `u'` (16 bits) and every generation-0 value
+(16 bits). All integers stay below `2^(16+s) ≪ p`, so `u'` is unique. Rule degree 2; the AIR's is 3
+(DEG-1). Missing neighbours are a fixed wall temperature.
+
+Tests (each mutation-checked): `wrong_rounding_is_rejected` (rounding equation),
+`rounding_bits_must_be_bits` (booleanity: `rem − 2^s` as a non-boolean "bit"),
+`out_of_range_values_are_rejected` (a halo value of `2^16 + 5`: generation-0 recomposition), and P100 ≥ 101
+bits.
+
+| zone (P100, CPU) | width | prove | verify | proof |
+|---|---|---|---|---|
+| 64×64, k = 1, rpr 2 | 12,864 | 378 ms | 406 ms | 6.9 MB |
+| 128×128 | 25,216 | 726 ms | 864 ms | 13.4 MB |
+| 256×256 | 49,920 | 1.55 s | 1.72 s | 26.6 MB |
+
+At 64×64 about 60 % of the columns are the in-trace sponges (16-bit values pack one per limb: 8 permutations
+per board row and digest) and about 35 % are range-check bits (37 per computed cell). Both are what lookups and a
+separate hash table remove (ROADMAP §0 S5).
 
 ## 7. Required negative tests (`src/tests.rs`, `--release`; each mutation-checked)
 
