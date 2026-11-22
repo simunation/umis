@@ -4,6 +4,8 @@ use super::*;
 
 const REQ_TIMEOUT_MS: u64 = 10_000;
 const MAX_ZONE_BLOCKS: usize = 64;
+/// Byte budget of one proof-share sync response (it still carries at least one share).
+const MAX_PROOF_BYTES: usize = 64 << 20;
 
 impl Node {
     pub(super) fn on_request(&mut self, now: u64, _peer: NodeId, req: SyncRequest) -> SyncResponse {
@@ -60,10 +62,17 @@ impl Node {
                 self.engines
                     .get(&zone)
                     .map(|e| {
+                        // At least one share, then up to a byte budget (proofs can be MBs each).
+                        let mut bytes = 0usize;
                         e.shares
                             .iter()
                             .filter(|((_, s), _)| *s >= from_slot && *s < to_slot)
                             .map(|(_, v)| v.clone())
+                            .take_while(|v| {
+                                let ok = bytes < MAX_PROOF_BYTES;
+                                bytes += v.proof.len();
+                                ok
+                            })
                             .collect()
                     })
                     .unwrap_or_default(),

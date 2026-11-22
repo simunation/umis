@@ -10,8 +10,10 @@ pub const SYNC_PROTOCOL: StreamProtocol = StreamProtocol::new("/simu/sync/1");
 
 /// Largest request frame accepted.
 pub const MAX_REQUEST: usize = 1 << 20;
-/// Largest response frame accepted (block batches, checkpoints).
-pub const MAX_RESPONSE: usize = 64 << 20;
+/// Largest response frame accepted (block batches, checkpoints). A response always carries at
+/// least one beacon block, and an unaggregated block carries every zone's leaf proofs for its
+/// slot (lattice Boltzmann at P100: about 6 MB per zone slot), so this bounds the block size.
+pub const MAX_RESPONSE: usize = 256 << 20;
 
 /// Largest single write on a stream.
 const WRITE_CHUNK: usize = 4 * 1024;

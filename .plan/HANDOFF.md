@@ -35,6 +35,8 @@ Read this first after a context reset, then `ROADMAP.md` (what to do next) and, 
   claim-independent `digest_leaf` + reusable `Layer1Owner`/`AggOwner`, `Recursive::{verify,timing}`, `recursive_shape`),
   `tests/agg.rs`, `examples/agg_bench.rs` (`DIGEST=1`).
 - `crates/task-life2d/src/air/digest.rs` (+ `digest_tests.rs`): claim-independent digest AIR (three inline Poseidon2 sponges).
+- `crates/task-stencil`: generic local-rule zone task (`lib.rs` params/state/decide, `air.rs` StencilStark backend,
+  `init.rs` genesis boards, `render.rs` pictures, `devnet.rs`), `tests/{global,proofs}.rs`, `examples/world.rs`.
 - `crates/umis-stencil`: generic local-rule AIR framework (`lib.rs` Rule/Spec/Grid/Shape, `air.rs` StencilAir + digests,
   `poseidon.rs` Poseidon2 columns, `life.rs` toy rule, `tests.rs`).
 - `crates/umis-agg/src/backend.rs` (+ `tests/backend.rs`): aggregating life backend; wired in `umis-tasks::backend_for` (native only).
@@ -104,8 +106,8 @@ release only, ~100 s each). Owner decisions: P2 dual roots; one strip per zone f
 `docs/zk/stencil-spec.md`; bench `examples/bench.rs`). S2 done (`heat.rs`; 64×64 = 12.9k columns, 378 ms, 6.9 MB: hashing ~60 %, range bits ~35 %). S5a done
 (`batch.rs`: cells + Poseidon2 hash table + range table over LogUp; heat 64×64 83 ms / 1.4 MB, life 256×256
 28 ms). Next: S5b recursion of batch leaves via P3R's low-level `verify_batch_circuit` (EF5), then S4 generic
-aggregation over it, S6 stateless beacon. S5b blocked on an owner decision: ROADMAP S5b follow-up finding. A visibility patch is not enough; native batch
-leaves need a trusted `NativeBatch` source in P3R (a logic patch), or uni-STARK leaves for aggregation. Files read:
+aggregation over it, S6 stateless beacon. Toy ladder done (2026-11-22): `task-stencil` runs life/heat/lbm zones with real proofs through the protocol (how to
+try: `docs/stencil.md`). S5b (recursion of batch leaves) needs a P3R logic patch (ROADMAP S5b follow-up finding). Files read:
 `recursion/src/artifact/native/batch.rs`, `recursion/src/input_contract/stark.rs`, `recursion/src/verifier/batch_stark.rs`,
 `recursion/src/prepared/layer.rs`; tests `recursion/tests/*multi_stark*.rs`. `StencilBatch` is hardcoded to EF4
 `koala_bear::Config`: generalize over the config first (EF5 without OOD/batch/lookup PoW).

@@ -77,10 +77,14 @@ a few natural helper columns; every row also pays fixed-point rounding range che
 
 ## 5. Suggested toy ladder
 
-1. **Life** (done): bits, degree 3; the framework acceptance test.
-2. **Heat diffusion**: one fixed-point value per cell; introduces rounding and range checks.
-3. **Gray–Scott reaction–diffusion**: two values, degree 3, still simple. A good speed benchmark.
-4. **Lattice Boltzmann D2Q9**: 9 values per cell and a division; the first real fluid.
+1. **Life** (done, `umis_stencil::life`): bits, degree 3; the framework acceptance test.
+2. **Heat diffusion** (done, `heat`): one fixed-point value per cell; rounding and range checks.
+3. **Gray–Scott reaction–diffusion** (not yet): two values, degree 3, still simple. A good speed benchmark.
+4. **Lattice Boltzmann D2Q9** (done, `lbm`): 9 values per cell, divisions by constants (staged so every
+   integer stays far below `p`), exact mass conservation; the first real fluid. Shear layers roll up into
+   vortices.
+
+How to run them and what they cost: `docs/stencil.md`.
 
 Each step adds exactly one new difficulty (fixed point; nonlinearity; many values per cell plus division). When
 range checks dominate the columns, switch them to lookups (ROADMAP §0 S5).

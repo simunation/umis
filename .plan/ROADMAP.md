@@ -16,6 +16,24 @@ Generic pieces to keep: P100 / EF5 aggregation presets (J101), the P3R pin, reus
 the group proof format, the chain check, the proof-pool DoS fixes and the failure memo, and the in-trace Poseidon2
 sponge technique.
 
+**Status 2026-11-22: the toy ladder runs end to end** (`docs/stencil.md`):
+- `umis-stencil` (S1 framework; S2 heat; S5a batch leaf with hash and range tables);
+- the lattice Boltzmann fluid;
+- `task-stencil` (a generic zone task and proof backend, wired into `umis-tasks`, the CLI, SimNet and devnet).
+
+Every advancing zone slot is proved at P100 on the CPU (life 64² 18 ms, heat 64² 90 ms, LBM 32² 358 ms) and
+verified by native nodes.
+
+**Next (in order):**
+1. **S5b recursion of batch leaves.** A P3R patch adding a trusted native-batch source (see the S5b finding
+   below); then S4, generic aggregation over it.
+2. **Speed:**
+   - the batch leaf on the GPU (`umis-gpu` is single-table only);
+   - parallel `assemble`;
+   - a byte-sized range table plus splits, for small zones.
+3. **Gray–Scott** as toy 4 (two values, degree 3).
+4. **S6 stateless beacon.**
+
 **Plan (in order):**
 1. ~~**S1 stencil AIR framework**~~ **done 2026-11-22** (`crates/umis-stencil`, spec `docs/zk/stencil-spec.md`):
    - generic `Rule` trait, ghost-cell boundary (no masks);

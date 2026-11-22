@@ -147,6 +147,47 @@ For heat, the fixed 2^16-row range table dominates small zones. A byte table plu
 trades that cost; worth it if the zones stay small. Trace generation of the batch leaf is still sequential per
 row (`assemble`, 73 ms at 256×256).
 
+## 6d. Toy 3: lattice Boltzmann (`lbm.rs`)
+
+D2Q9 BGK with the He–Luo incompressible equilibrium, in exact integer arithmetic (unit `U = 2^10`, 16-bit
+distributions). Pull streaming plus collision. Directions 1–8 use nearest rounding, proved as `q·d + r = N` with
+lookup range checks on every quantity, so each equation holds over the integers (`|terms| < 2^29 ≪ p`).
+`g'_0 = ρ − Σ g'_i` conserves mass exactly, and rest is an exact fixed point. The checks `ρ < 2^13` and
+`|m| < 512` state the physical regime (`Lbm::provable` checks a slot natively). The rule's degree is 2, with 25
+constraints and 60 range requests per cell.
+
+Forgeries (each mutation-checked):
+- `the_equilibrium_division_cannot_move_nine_into_the_remainder`: `feq − 1` with `r9 + 9`, stopped only by
+  `8 − r9 ≥ 0`;
+- `the_collision_cannot_round_up`: stopped only by `r2`'s range.
+
+Range table choice (INV-STENCIL-BATCH-3): `Pairs` (`(v, b)` rows, one lookup per request) when a slot makes
+≥ 2^15 narrow requests (LBM), otherwise `Single` (the 2^16 column, two lookups per narrow request; heat). Each
+form has its own mutation-checked attack tests (`both_range_tables_are_covered_by_the_attack_tests`). Lookup
+degree budget = the preset's maximum degree (P100: 5; LBM proofs 35 % smaller than with 3).
+
+## 6e. The zone task (`crates/task-stencil`, INV-STENCIL-TASK-*)
+
+`stencil2d@1`, layer `stencil`: an `n × n` zone of any rule (`RuleId::{Life, Heat, Lbm}`). Its protocol
+semantics are life2d's, generalised:
+- generation-tagged payloads of `k·r`-wide edges and corners;
+- hold and birth, so committed states are globally exact;
+- strict inputs.
+
+Missing neighbours are the rule's boundary cells.
+- **TASK-1 (native):** roots, canonical states (values in range), `outputs_root`, inputs against InputRefs, the
+  decision recomputed, and every header field. Hold and birth slots are checked natively only (proof `[0]`).
+- **TASK-2 (STARK):** for an advance, the verifier builds `E` itself and verifies the batch leaf against
+  `public_values(E, next.grid)`.
+
+Tests:
+- `tests/global.rs`: lockstep zones equal one monolithic world (3 rules, k = 1, 2), and the LBM demo stays
+  provable for 400 generations;
+- `tests/proofs.rs`: real slots prove and verify; a false board with re-derived roots is rejected
+  (mutation-checked); hold slots are native.
+
+SimNet: `stencil-{life,heat,lbm}` (mock), `stencil-{life,lbm}-stark`, `stencil-lbm-junk`.
+
 ## 7. Required negative tests (`src/tests.rs`, `--release`; each mutation-checked)
 
 | test | the only check that rejects it |
