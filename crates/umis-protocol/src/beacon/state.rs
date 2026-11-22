@@ -1060,8 +1060,17 @@ impl BeaconState {
         ensure!(first.prev_state_root == c.prev_state_root && last.state_root == c.state_root, "leaf ends");
         let zone = &self.zones[&z];
         let needs_data = ctx.backend.is_async();
+        // S6: a stateless backend verifies from state witnesses; the beacon never sees states.
+        let stateless = needs_data && ctx.backend.stateless(&zone.task_id);
         if needs_data {
-            ensure!(pce.data.states.len() == pce.leaves.len() + 1, "proof data: states");
+            if stateless {
+                ensure!(
+                    pce.data.witnesses.len() == pce.leaves.len() + 1 && pce.data.states.is_empty(),
+                    "proof data: witnesses"
+                );
+            } else {
+                ensure!(pce.data.states.len() == pce.leaves.len() + 1, "proof data: states");
+            }
             ensure!(pce.data.inputs.len() == pce.leaves.len(), "proof data: inputs");
         }
         let input_maps: Vec<BTreeMap<u32, Bytes>> =
@@ -1078,8 +1087,10 @@ impl BeaconState {
                 task_id: Some(&zone.task_id),
                 params: Some(&zone.params),
                 genesis_seed: Some(ctx.genesis.seed),
-                prev_state: Some(&pce.data.states[i]),
-                next_state: Some(&pce.data.states[i + 1]),
+                prev_state: (!stateless).then(|| pce.data.states[i].as_slice()),
+                next_state: (!stateless).then(|| pce.data.states[i + 1].as_slice()),
+                prev_witness: stateless.then(|| pce.data.witnesses[i].as_slice()),
+                next_witness: stateless.then(|| pce.data.witnesses[i + 1].as_slice()),
                 inputs: Some(&input_maps[i]),
                 input_refs: Some(&c.inputs[b.input_start as usize..(b.input_start + b.input_count) as usize]),
             }

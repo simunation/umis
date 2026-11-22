@@ -128,20 +128,16 @@ impl StencilAggBackend {
         let mut key = None;
         for &i in &idx {
             let (s, pd, p) = items[i];
-            let Some((k, ext, next)) = self.inner.native_claim(s, &pd, p)? else {
+            let Some((k, st)) = self.inner.native_claim(s, &pd, p)? else {
                 return bad("aggregate member is not an advancing slot");
             };
             if *key.get_or_insert(k) != k {
                 return bad("aggregate members must share one leaf relation");
             }
-            statement.push((ext, next));
+            statement.extend(st);
         }
         let key = key.expect("≥ 2 members");
         let tree = self.tree(key).map_err(ProofError::Invalid)?;
-        let statement: Vec<_> = statement
-            .iter()
-            .flat_map(|(ext, next)| umis_stencil::air::public_values(&tree.batch.shape, ext, next))
-            .collect();
         let proof: BatchStarkProof<crate::AggConfig> =
             postcard::from_bytes(body).map_err(|e| ProofError::Malformed(e.to_string()))?;
         let node = tree.agg.node(idx.len()).map_err(ProofError::Invalid)?;
@@ -169,6 +165,10 @@ impl ProofBackend for StencilAggBackend {
 
     fn batches(&self, task_id: &str) -> bool {
         task_id == TASK_ID
+    }
+
+    fn stateless(&self, task_id: &str) -> bool {
+        self.inner.stateless(task_id)
     }
 
     fn prove_batch(

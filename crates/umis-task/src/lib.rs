@@ -110,6 +110,12 @@ pub trait ZoneTask: Send + Sync + 'static {
     fn check_zone(_p: &Self::Params, _point: [i32; 3], _slot_ticks: u64) -> Result<()> {
         Ok(())
     }
+    /// A compact witness of an encoded state that a proof verifier can check against the
+    /// state's `state_root` without the state (stateless beacon, S6); `None`: the task ships
+    /// full states.
+    fn state_witness(_ctx: &Self::Ctx, _state: &[u8]) -> Option<Bytes> {
+        None
+    }
 }
 
 /// A prepared zone: params decoded and genesis fields precomputed.
@@ -130,6 +136,10 @@ pub trait ZoneInstance: Send + Sync {
     /// `state_root`: bmt file address of the raw state blob.
     fn state_root(&self, state: &[u8]) -> Hash {
         umis_core::bmt::file_address(state)
+    }
+    /// See [`ZoneTask::state_witness`].
+    fn state_witness(&self, _state: &[u8]) -> Option<Bytes> {
+        None
     }
 }
 
@@ -211,6 +221,10 @@ impl<T: ZoneTask> ZoneInstance for Instance<T> {
 
     fn strict_inputs(&self) -> bool {
         T::STRICT_INPUTS
+    }
+
+    fn state_witness(&self, state: &[u8]) -> Option<Bytes> {
+        T::state_witness(&self.ctx, state)
     }
 }
 

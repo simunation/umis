@@ -952,6 +952,11 @@ impl ZoneEngine {
                 data.inputs.push(inputs.clone().into_iter().collect());
             }
         }
+        if ctx.backend.stateless(&zone.task_id) {
+            // S6: witnesses instead of the states.
+            data.witnesses = data.states.iter().map(|s| inst.state_witness(s)).collect::<Option<_>>()?;
+            data.states.clear();
+        }
         Some(data)
     }
 
@@ -975,6 +980,8 @@ impl ZoneEngine {
             next_state: Some(e.state.as_ref()?),
             inputs: Some(inputs),
             input_refs: Some(&b.inputs),
+            prev_witness: None,
+            next_witness: None,
         })
     }
 

@@ -108,6 +108,8 @@ fn main() {
             next_state: Some(&next),
             inputs: Some(&inputs),
             input_refs: Some(&[]),
+            prev_witness: None,
+            next_witness: None,
         };
         let (t_verify, r) = best(reps, || b.verify(&stmt, &pd, &proof));
         r.unwrap();

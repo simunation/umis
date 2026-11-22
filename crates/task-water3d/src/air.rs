@@ -695,6 +695,8 @@ mod tests {
                 next_state: Some(next),
                 inputs: Some(inputs),
                 input_refs: Some(&self.refs),
+                prev_witness: None,
+                next_witness: None,
             }
         }
     }

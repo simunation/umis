@@ -116,6 +116,8 @@ pub fn stark_roundtrip_with(n_loc: u32, preset: umis_stark::config::FriPreset, n
         next_state: Some(&next),
         inputs: Some(&inputs),
         input_refs: Some(&refs),
+        prev_witness: None,
+        next_witness: None,
     };
     let t = now_ms();
     b.verify(&stmt, &pd, &proof).unwrap();

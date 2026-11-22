@@ -18,7 +18,7 @@
 //! `3 ‖ keccak(head) ‖ index` ([`umis_proof::group`]); the verifier derives every member's
 //! statement itself and checks the proof against their concatenation.
 
-use crate::{Ctx, Decision, Stencil2d, StencilParams, apply, decide, decode_state};
+use crate::{Ctx, Decision, Stencil2d, StencilParams, apply, decide, decode_state, summary};
 use p3_batch_stark::BatchProof;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -28,6 +28,7 @@ use umis_proof::{ProofBackend, ProofError, PublicData, Witness};
 use umis_stark::config::{FriPreset, koala_bear};
 use umis_stencil::air::public_values;
 use umis_stencil::batch::StencilBatch;
+use umis_stencil::{Grid, Rule, Val};
 use umis_task::{Bytes, PortId, ZoneTask};
 
 pub const BACKEND_ID: &str = "plonky3";
@@ -98,31 +99,24 @@ impl StencilStark {
         Ok(s)
     }
 
-    /// Every native check; `Some(E)` for an advancing slot (the board claim the STARK proves).
+    /// Every native check; for an advancing slot `Some(statement)`, the leaf's public values
+    /// `[d_prev, d_halo, d_next]` the STARK must prove. From full states (members, shares) or,
+    /// without states, from state witnesses (the stateless beacon, INV-STENCIL-TASK-4).
     fn native(
         &self,
         stmt: &TransitionStatement,
         pd: &PublicData<'_>,
         proof: &[u8],
-    ) -> Result<(Arc<Setup>, Option<(umis_stencil::Grid, umis_stencil::Grid)>), ProofError> {
+    ) -> Result<(Arc<Setup>, Option<Vec<Val>>), ProofError> {
         let bad = |m: &str| Err(ProofError::Invalid(m.into()));
-        let (Some(params), Some(seed), Some(prev), Some(next), Some(inputs), Some(refs)) =
-            (pd.params, pd.genesis_seed, pd.prev_state, pd.next_state, pd.inputs, pd.input_refs)
+        let (Some(params), Some(seed), Some(inputs), Some(refs)) =
+            (pd.params, pd.genesis_seed, pd.inputs, pd.input_refs)
         else {
-            return bad("stencil verification needs the states, inputs and InputRefs");
+            return bad("stencil verification needs the params, inputs and InputRefs");
         };
         let z = self.setup(params, &seed).map_err(ProofError::Invalid)?;
         if stmt.to_slot != stmt.from_slot + 1 || stmt.params_hash != z.params_hash {
             return bad("statement does not match the zone");
-        }
-        if bmt::file_address(prev) != stmt.prev_state_root || bmt::file_address(next) != stmt.state_root {
-            return bad("states do not match the statement roots");
-        }
-        let (Some(s_in), Some(s_out)) = (decode_state(&z.ctx.p, prev), decode_state(&z.ctx.p, next)) else {
-            return bad("non-canonical state");
-        };
-        if outputs_root(&<Stencil2d as ZoneTask>::outputs(&z.ctx, &s_out)) != stmt.outputs_root {
-            return bad("outputs_root");
         }
         if umis_core::records::list_root_of(refs) != stmt.inputs_commitment
             || inputs.len() != refs.len()
@@ -130,20 +124,81 @@ impl StencilStark {
         {
             return bad("inputs do not match inputs_commitment");
         }
-        let decision = decide(&z.ctx, &s_in, inputs, stmt.from_slot);
-        let expect = apply(&z.ctx, &s_in, &decision, stmt.from_slot);
-        let Decision::Advance { ext } = decision else {
-            if proof != [NATIVE] || s_out != expect {
-                return bad("hold/birth slot does not match");
+        let p = &z.ctx.p;
+        match (pd.prev_state, pd.next_state, pd.prev_witness, pd.next_witness) {
+            (Some(prev), Some(next), ..) => {
+                if bmt::file_address(prev) != stmt.prev_state_root || bmt::file_address(next) != stmt.state_root {
+                    return bad("states do not match the statement roots");
+                }
+                let (Some(s_in), Some(s_out)) = (decode_state(p, prev), decode_state(p, next)) else {
+                    return bad("non-canonical state");
+                };
+                if outputs_root(&<Stencil2d as ZoneTask>::outputs(&z.ctx, &s_out)) != stmt.outputs_root {
+                    return bad("outputs_root");
+                }
+                let decision = decide(&z.ctx, &s_in, inputs, stmt.from_slot);
+                let expect = apply(&z.ctx, &s_in, &decision, stmt.from_slot);
+                let Decision::Advance { ext } = decision else {
+                    if proof != [NATIVE] || s_out != expect {
+                        return bad("hold/birth slot does not match");
+                    }
+                    return Ok((z, None));
+                };
+                // Everything but the board is native; the board is the STARK claim.
+                let header =
+                    |s: &crate::State| (s.born, s.generation, s.birth, s.next_slot, s.start_slot, s.prev.clone());
+                if header(&s_out) != header(&expect) {
+                    return bad("advanced state header or previous board");
+                }
+                let public = public_values(&z.batch.shape, &ext, &s_out.grid);
+                Ok((z, Some(public)))
             }
-            return Ok((z, None));
-        };
-        // Everything but the board is native; the board is the STARK claim.
-        let header = |s: &crate::State| (s.born, s.generation, s.birth, s.next_slot, s.start_slot, s.prev.clone());
-        if header(&s_out) != header(&expect) {
-            return bad("advanced state header or previous board");
+            (None, None, Some(wp), Some(wn)) => {
+                let (Some(a), Some(b)) = (
+                    summary::check_witness(p, &stmt.prev_state_root, wp),
+                    summary::check_witness(p, &stmt.state_root, wn),
+                ) else {
+                    return bad("state witnesses do not match the statement roots");
+                };
+                // `outputs_root` is not checked here: members re-execute every block and an
+                // inconsistent one is an InvalidTransition fault until settlement.
+                // The decision reads only the header and the inputs (the zone part of `E` is
+                // not in the halo digest), so a blank board stands in for the state's.
+                let blank = Grid::filled(p.n(), p.n(), &z.ctx.rule.boundary());
+                let h = &a.header;
+                let s_in = crate::State {
+                    born: h.born,
+                    generation: h.generation,
+                    birth: h.birth,
+                    next_slot: h.next_slot,
+                    start_slot: h.start_slot,
+                    grid: blank.clone(),
+                    prev: blank,
+                };
+                let decision = decide(&z.ctx, &s_in, inputs, stmt.from_slot);
+                let expect = summary::Header::of(&apply(&z.ctx, &s_in, &decision, stmt.from_slot));
+                if b.header != expect {
+                    return bad("next state header");
+                }
+                match decision {
+                    Decision::Advance { ext } => {
+                        if b.prev != a.board {
+                            return bad("the previous board of an advanced state");
+                        }
+                        let halo = umis_stencil::air::halo_digest(&z.batch.shape, &ext);
+                        Ok((z, Some(a.board.into_iter().chain(halo).chain(b.board).collect())))
+                    }
+                    Decision::Hold if proof == [NATIVE] && b.board == a.board && b.prev == a.prev => Ok((z, None)),
+                    Decision::Birth(_)
+                        if proof == [NATIVE] && b.board == summary::blank_root(p) && b.prev == b.board =>
+                    {
+                        Ok((z, None))
+                    }
+                    _ => bad("hold/birth slot does not match"),
+                }
+            }
+            _ => bad("stencil verification needs both states or both state witnesses"),
         }
-        Ok((z, Some((ext, s_out.grid))))
     }
 }
 
@@ -201,11 +256,11 @@ impl StencilStark {
         for &i in &idx {
             let (s, pd, p) = items[i];
             let (z, claim) = self.native(s, &pd, p)?;
-            let Some((ext, next)) = claim else { return bad("multi-slot member is not an advancing slot") };
+            let Some(statement) = claim else { return bad("multi-slot member is not an advancing slot") };
             if setup.as_ref().is_some_and(|x| !Arc::ptr_eq(x, &z)) {
                 return bad("multi-slot members must be slots of one zone");
             }
-            public.extend(public_values(&z.batch.shape, &ext, &next));
+            public.extend(statement);
             setup = Some(z);
         }
         let z = setup.expect("≥ 2 members");
@@ -216,17 +271,18 @@ impl StencilStark {
         Ok(idx)
     }
 
-    /// For the verifier of another backend: every native check of this slot (INV-STENCIL-TASK-1);
-    /// `Some((key, E, next))` for an advance, whose leaf statement is
-    /// `public_values(E, next)`. A hold or birth slot must carry the native proof `[0]`.
+    /// For the verifier of another backend: every native check of this slot (INV-STENCIL-TASK-1,
+    /// from states or witnesses); `Some((key, statement))` for an advance, with the leaf
+    /// statement `[d_prev, d_halo, d_next]`. A hold or birth slot must carry the native proof
+    /// `[0]`.
     pub fn native_claim(
         &self,
         stmt: &TransitionStatement,
         pd: &PublicData<'_>,
         proof: &[u8],
-    ) -> Result<Option<(LeafKey, umis_stencil::Grid, umis_stencil::Grid)>, ProofError> {
+    ) -> Result<Option<(LeafKey, Vec<Val>)>, ProofError> {
         let (z, claim) = self.native(stmt, pd, proof)?;
-        Ok(claim.map(|(ext, next)| (LeafKey::of(&z.ctx.p), ext, next)))
+        Ok(claim.map(|st| (LeafKey::of(&z.ctx.p), st)))
     }
 }
 
@@ -262,6 +318,10 @@ impl ProofBackend for StencilStark {
     }
 
     fn batches(&self, task_id: &str) -> bool {
+        task_id == crate::TASK_ID
+    }
+
+    fn stateless(&self, task_id: &str) -> bool {
         task_id == crate::TASK_ID
     }
 
@@ -325,14 +385,13 @@ impl ProofBackend for StencilStark {
 
     fn verify(&self, stmt: &TransitionStatement, pd: &PublicData<'_>, proof: &[u8]) -> Result<NodeId, ProofError> {
         let (z, claim) = self.native(stmt, pd, proof)?;
-        let Some((ext, next)) = claim else { return Ok(NodeId::default()) };
+        let Some(public) = claim else { return Ok(NodeId::default()) };
         let Some((&tag, body)) = proof.split_first() else { return Err(ProofError::Invalid("empty proof".into())) };
         if tag != STARK {
             return Err(ProofError::Invalid("an advancing slot needs a STARK".into()));
         }
         let proof: BatchProof<koala_bear::Config> =
             postcard::from_bytes(body).map_err(|e| ProofError::Malformed(e.to_string()))?;
-        let public = public_values(&z.batch.shape, &ext, &next);
         z.batch.verify(&proof, &public).map_err(|e| ProofError::Invalid(format!("stencil STARK: {e}")))?;
         let _ = stmt.address();
         Ok(NodeId::default())

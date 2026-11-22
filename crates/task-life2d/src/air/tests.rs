@@ -196,6 +196,8 @@ impl Fixture {
             next_state: Some(&self.next),
             inputs: Some(&self.inputs),
             input_refs: Some(&self.refs),
+            prev_witness: None,
+            next_witness: None,
         }
     }
 

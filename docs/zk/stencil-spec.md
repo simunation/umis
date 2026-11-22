@@ -227,6 +227,30 @@ Tests:
 SimNet: `stencil-{life,heat,lbm,gs}` (mock), `stencil-{life,lbm,gs}-stark` (they require a multi-slot proof on
 chain), `stencil-lbm-junk`.
 
+## 6e'. The stateless beacon (S6 v1, `task-stencil/src/summary.rs`; INV-STENCIL-TASK-4)
+
+- **State layout v2:** `keccak(summary) ‖ header (48 B) ‖ board ‖ previous board`, where
+  `summary = header ‖ root(board) ‖ root(prev)` (canonical Poseidon2 roots, 8 u32 LE each). `decode_state`
+  accepts a state only if its first 32 bytes (BMT segment 0) are its own summary's hash, so every keccak BMT
+  `state_root` (statements, headers) commits to the summary.
+- **Witness:** `borsh(summary, BMT inclusion proof of segment 0)`, about 0.5 KB (an LBM 32² state is 37 KB).
+  `ProofBackend::stateless(task)` is true for stencil backends; proof commitments then carry witnesses
+  (`LeafData::witnesses`) instead of states, and the beacon passes them as `PublicData::{prev,next}_witness`.
+- **What the verifier checks without states:** both witnesses open the statement's `prev_state_root` /
+  `state_root`; the decision from the prev header and the inputs (`decide` reads only header fields and inputs;
+  a blank board stands in for the zone part of `E`, which the halo digest zeroes anyway); the next header equals
+  `apply`'s; for an advance `next.prev_root = prev.board_root` and the STARK statement
+  `[prev.board_root, halo_digest(E), next.board_root]`; for a hold equal roots, for a birth blank roots, both with
+  proof `[0]`.
+- **Not checked statelessly:** `outputs_root` (the payloads are a function of the next state). Members re-execute
+  every block, so an inconsistent `outputs_root` is an `InvalidTransition` fault until the commitment settles
+  (`D` slots after Proven). Binding the payloads in-circuit (a `d_faces` sponge) is the follow-up.
+- Members (shares) still verify from full states; both paths share the same code (`StencilStark::native`).
+- Tests (`tests/proofs.rs`, release): honest slots of all four rules verify from witnesses; swapped or repeated
+  witnesses fail; a false next board with re-derived roots and summary is rejected by the STARK; an edited
+  summary is rejected (mutation-checked: without the root check it verifies). SimNet stencil STARK and agg
+  scenarios run the beacon's stateless path.
+
 ## 6f. Recursion and aggregation (`crates/umis-agg`, S5b + S4; INV-AGG-NB-*, INV-STENCIL-AGG-*)
 
 Details: `docs/zk/aggregation.md` §Native batch leaves.

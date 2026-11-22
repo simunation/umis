@@ -1,12 +1,13 @@
 //! The stencil proof backend on real zone slots with neighbours: honest proofs verify for every
 //! rule; a false next board (all roots recomputed, so every native check passes) is rejected by
-//! the **release-mode verifier**; hold slots are native only (INV-STENCIL-TASK-1/2).
+//! the **release-mode verifier**; hold slots are native only (INV-STENCIL-TASK-1/2). The same
+//! from state witnesses only (the stateless beacon, INV-STENCIL-TASK-4).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use task_stencil::air::StencilStark;
 use task_stencil::devnet::{StencilOptions, default_rule};
-use task_stencil::{RuleId, Stencil2d, decode_state, encode_state};
+use task_stencil::{RuleId, Stencil2d, decode_state, encode_state, summary};
 use umis_core::records::{InputRef, TransitionStatement};
 use umis_core::{Hash, NodeId, SecretKey, bmt};
 use umis_proof::{ProofBackend, PublicData, Witness};
@@ -126,6 +127,27 @@ impl Slot {
             next_state: Some(&self.next),
             inputs: Some(&self.inputs),
             input_refs: Some(&self.refs),
+            prev_witness: None,
+            next_witness: None,
+        };
+        b.verify(&self.stmt, &pd, proof).is_ok()
+    }
+    fn witnesses(&self) -> (Bytes, Bytes) {
+        let p: task_stencil::StencilParams = borsh::from_slice(&self.params).unwrap();
+        (summary::witness(&p, &self.prev).unwrap(), summary::witness(&p, &self.next).unwrap())
+    }
+    /// Verification without the states: only the witnesses `wp`, `wn`.
+    fn verify_stateless(&self, b: &StencilStark, proof: &[u8], wp: &[u8], wn: &[u8]) -> bool {
+        let pd = PublicData {
+            task_id: Some(task_stencil::TASK_ID),
+            params: Some(&self.params),
+            genesis_seed: Some(self.seed),
+            prev_state: None,
+            next_state: None,
+            inputs: Some(&self.inputs),
+            input_refs: Some(&self.refs),
+            prev_witness: Some(wp),
+            next_witness: Some(wn),
         };
         b.verify(&self.stmt, &pd, proof).is_ok()
     }
@@ -168,4 +190,53 @@ fn hold_slots_are_native_only() {
     assert!(s.verify(&backend, &proof));
     assert!(!s.verify(&backend, &[1, 2, 3]), "a hold slot's proof must be [0]");
     let _ = <Stencil2d as ZoneTask>::TASK_ID;
+}
+
+#[test]
+fn slots_verify_from_witnesses_and_false_claims_do_not() {
+    let backend = StencilStark::from_config_id(Some("koalabear-test"));
+    for name in ["life", "heat", "lbm", "grayscott"] {
+        let mut s = slot_of(default_rule(name).unwrap(), 3, false);
+        let proof = s.prove(&backend);
+        let (wp, wn) = s.witnesses();
+        assert!(wp.len() < 1024 && wn.len() < 1024, "{name}: witnesses are small ({} B)", wn.len());
+        assert!(s.verify_stateless(&backend, &proof, &wp, &wn), "{name}: honest slot");
+        // Swapped or repeated witnesses do not open the statement's roots.
+        assert!(!s.verify_stateless(&backend, &proof, &wn, &wp), "{name}: swapped");
+        assert!(!s.verify_stateless(&backend, &proof, &wp, &wp), "{name}: prev twice");
+        // A false board with every root and summary re-derived: only the STARK stands.
+        let p: task_stencil::StencilParams = borsh::from_slice(&s.params).unwrap();
+        let mut st = decode_state(&p, &s.next).unwrap();
+        let c = st.grid.cell_mut(3, 4);
+        c[0] = if c[0] == 0 { 1 } else { c[0] - 1 };
+        if name == "lbm" {
+            c[1] += 1;
+        }
+        s.set_next(encode_state(&p, &st));
+        let (wp, wn) = s.witnesses();
+        assert!(!s.verify_stateless(&backend, &proof, &wp, &wn), "{name}: false board");
+    }
+}
+
+/// A witness whose summary was edited (another generation; the inclusion proof unchanged) does
+/// not open the state root (mutation-checked: without the root check it verifies).
+#[test]
+fn edited_summaries_are_rejected() {
+    use umis_core::bmt::ChunkInclusionProof;
+    let backend = StencilStark::from_config_id(Some("koalabear-test"));
+    let s = slot_of(default_rule("heat").unwrap(), 3, true); // a hold slot: header-only checks
+    let p: task_stencil::StencilParams = borsh::from_slice(&s.params).unwrap();
+    let proof = s.prove(&backend);
+    assert_eq!(proof, vec![0]);
+    let (wp, wn) = s.witnesses();
+    assert!(s.verify_stateless(&backend, &proof, &wp, &wn), "honest hold");
+    // Edit the next summary's next_slot: a header the hold rule would also reject, so edit
+    // both summaries' generation the same way instead (hold keeps it equal).
+    let edit = |w: &Bytes| -> Bytes {
+        let (mut sum, pr): (Vec<u8>, Vec<ChunkInclusionProof>) = borsh::from_slice(w).unwrap();
+        let g = u64::from_le_bytes(sum[8..16].try_into().unwrap()) + p.gens as u64;
+        sum[8..16].copy_from_slice(&g.to_le_bytes());
+        borsh::to_vec(&(sum, pr)).unwrap()
+    };
+    assert!(!s.verify_stateless(&backend, &proof, &edit(&wp), &edit(&wn)));
 }

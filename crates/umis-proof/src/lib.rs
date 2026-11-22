@@ -53,14 +53,20 @@ pub struct PublicData<'a> {
     pub inputs: Option<&'a BTreeMap<PortId, Bytes>>,
     /// The InputRefs behind `inputs_commitment`, in link order.
     pub input_refs: Option<&'a [umis_core::records::InputRef]>,
+    /// Stateless verification (S6, [`ProofBackend::stateless`]): task-defined witnesses of
+    /// the states with roots `prev_state_root` / `state_root`, instead of the states.
+    pub prev_witness: Option<&'a [u8]>,
+    pub next_witness: Option<&'a [u8]>,
 }
 
 /// Public data shipped with a STARK proof commitment: the states at every
-/// leaf boundary (`leaves + 1`) and each leaf's input payloads.
+/// leaf boundary (`leaves + 1`) and each leaf's input payloads. A stateless
+/// backend (S6) gets state witnesses (`leaves + 1`) instead of states.
 #[derive(Debug, Clone, PartialEq, Eq, Default, BorshSerialize, BorshDeserialize)]
 pub struct LeafData {
     pub states: Vec<Bytes>,
     pub inputs: Vec<Vec<(PortId, Bytes)>>,
+    pub witnesses: Vec<Bytes>,
 }
 
 /// One slot's proving job, self-contained so it can run in a worker that
@@ -189,6 +195,14 @@ pub trait ProofBackend: Send + Sync {
         false
     }
 
+    /// Whether this backend verifies `task_id`'s proofs from state witnesses
+    /// ([`umis_task::ZoneInstance::state_witness`]) instead of full states (S6): proof
+    /// commitments then ship witnesses, and [`PublicData`] carries `prev_witness` /
+    /// `next_witness` with `prev_state` / `next_state` unset.
+    fn stateless(&self, _task_id: &str) -> bool {
+        false
+    }
+
     /// Proves several slots (of one zone) together; one proof per item, in
     /// order. A backend may return proofs that only verify as a group
     /// ([`Self::verify_group`]). Default: one proof per item.
@@ -292,6 +306,10 @@ impl ProofBackend for MultiBackend {
 
     fn batches(&self, task_id: &str) -> bool {
         self.by_task.get(task_id).is_some_and(|b| b.batches(task_id))
+    }
+
+    fn stateless(&self, task_id: &str) -> bool {
+        self.by_task.get(task_id).is_some_and(|b| b.stateless(task_id))
     }
 
     fn prove_batch(

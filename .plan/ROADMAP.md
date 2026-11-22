@@ -24,15 +24,15 @@ sponge technique.
 Every advancing zone slot is proved at P100 on the CPU (life 64² 18 ms, heat 64² 90 ms, LBM 32² 358 ms) and
 verified by native nodes.
 
+**Done 2026-11-22 (second session):** S5b recursion of batch leaves (`umis_agg::native`, two small local P3R
+patches), S4 generic stencil aggregation (`koalabear-agg`), multi-slot leaves (2–4× faster per slot), Gray–Scott
+(toy 4), S6 v1 stateless beacon (witnesses instead of states; `outputs_root` via the fault path).
+
 **Next (in order; detailed plan in `.plan/NEXT.md`):**
-1. **S5b recursion of batch leaves.** A P3R patch adding a trusted native-batch source (see the S5b finding
-   below); then S4, generic aggregation over it.
-2. **Speed:**
-   - the batch leaf on the GPU (`umis-gpu` is single-table only);
-   - parallel `assemble`;
-   - a byte-sized range table plus splits, for small zones.
-3. **Gray–Scott** as toy 4 (two values, degree 3).
-4. **S6 stateless beacon.**
+1. **S6b** `d_faces`: bind output payloads in-circuit, so the beacon checks `outputs_root` statelessly.
+2. Plonky3 degree-inference cache (owner OK needed; 25–45 % of leaf prove/verify).
+3. Aggregation over multi-slot leaves; cheaper layer 1 for wide leaves (LBM 5.3 s per slot).
+4. Small zones (`MIN_HEIGHT` padding), then the GPU batch leaf.
 
 **Plan (in order):**
 1. ~~**S1 stencil AIR framework**~~ **done 2026-11-22** (`crates/umis-stencil`, spec `docs/zk/stencil-spec.md`):

@@ -151,6 +151,8 @@ impl Ctx {
             bytes(pd.genesis_seed.as_ref().map(|s| s.as_bytes().as_slice()));
             bytes(pd.prev_state);
             bytes(pd.next_state);
+            bytes(pd.prev_witness);
+            bytes(pd.next_witness);
             match pd.inputs {
                 None => h.write_u8(0),
                 Some(m) => {

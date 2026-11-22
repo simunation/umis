@@ -108,6 +108,8 @@ fn main() {
                     next_state: Some(&nx),
                     inputs: Some(&inputs),
                     input_refs: Some(&refs),
+                    prev_witness: None,
+                    next_witness: None,
                 };
                 let t = Instant::now();
                 backend.verify(&stmt, &pd, &proof).unwrap_or_else(|e| panic!("zone {pt:?} slot {slot}: {e}"));

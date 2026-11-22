@@ -88,6 +88,8 @@ impl Run {
                     next_state: Some(&self.states[i + 1]),
                     inputs: Some(&self.inputs),
                     input_refs: Some(&[]),
+                    prev_witness: None,
+                    next_witness: None,
                 };
                 (&self.stmts[i], pd, p.as_slice())
             })

@@ -25,6 +25,7 @@ pub mod air;
 pub mod devnet;
 pub mod init;
 pub mod render;
+pub mod summary;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
@@ -43,7 +44,9 @@ pub const LAYER: &str = "stencil";
 /// The 8 neighbour ports: 4 edges (face ids) and 4 corners (diagonal ids).
 pub const PORTS: [PortId; 8] = [0, 1, 2, 3, 6, 7, 8, 9];
 pub const PORT_NAMES: [&str; 8] = ["+x", "-x", "+y", "-y", "+x+y", "-x-y", "+x-y", "-x+y"];
-pub const STATE_HEADER: usize = 48;
+/// State layout (INV-STENCIL-TASK-4): the 32-byte summary hash (BMT segment 0), the 48-byte
+/// header, the board, the previous board ([`summary`]).
+pub const STATE_HEADER: usize = summary::HASH + summary::HEADER;
 pub const PAYLOAD_HEADER: usize = 32;
 const VERSION: u8 = 1;
 
@@ -439,13 +442,10 @@ pub fn apply(ctx: &Ctx, s: &State, d: &Decision, slot: u64) -> State {
 }
 
 pub fn encode_state(p: &StencilParams, s: &State) -> Bytes {
-    let mut out = vec![0u8; STATE_HEADER];
-    out[0] = VERSION;
-    out[1] = s.born as u8;
-    out[8..16].copy_from_slice(&s.generation.to_le_bytes());
-    out[16..24].copy_from_slice(&s.birth.to_le_bytes());
-    out[24..32].copy_from_slice(&s.next_slot.to_le_bytes());
-    out[32..40].copy_from_slice(&s.start_slot.to_le_bytes());
+    let sum = summary::Summary::of(p, s);
+    let mut out = Vec::with_capacity(p.state_bytes());
+    out.extend_from_slice(&sum.hash().0);
+    out.extend_from_slice(&sum.header.encode());
     debug_assert_eq!(s.grid.data.len(), p.values() * p.n() * p.n());
     put_u16s(&mut out, &s.grid.data);
     put_u16s(&mut out, &s.prev.data);
@@ -456,24 +456,25 @@ pub fn encode_state(p: &StencilParams, s: &State) -> Bytes {
 pub fn decode_state(p: &StencilParams, b: &[u8]) -> Option<State> {
     let (n, v) = (p.n(), p.values());
     let count = n * n * v;
-    if b.len() != p.state_bytes() || b[0] != VERSION || b[1] > 1 {
+    if b.len() != p.state_bytes() {
         return None;
     }
-    if b[2..8].iter().chain(&b[40..48]).any(|x| *x != 0) {
-        return None;
-    }
+    let hd = summary::parse_header(&b[summary::HASH..STATE_HEADER])?;
     let bits = p.spec().bits;
     let grid = Grid { w: n, h: n, values: v, data: get_u16s(&b[STATE_HEADER..STATE_HEADER + 2 * count], count, bits)? };
     let prev = Grid { w: n, h: n, values: v, data: get_u16s(&b[STATE_HEADER + 2 * count..], count, bits)? };
     let s = State {
-        born: b[1] == 1,
-        generation: u64_at(b, 8),
-        birth: u64_at(b, 16),
-        next_slot: u64_at(b, 24),
-        start_slot: u64_at(b, 32),
+        born: hd.born,
+        generation: hd.generation,
+        birth: hd.birth,
+        next_slot: hd.next_slot,
+        start_slot: hd.start_slot,
         grid,
         prev,
     };
+    if !hd.valid_for(p) || b[..summary::HASH] != summary::Summary::of(p, &s).hash().0 {
+        return None;
+    }
     let k = p.gens as u64;
     if s.born {
         if s.birth > s.generation || (s.generation - s.birth) % k != 0 || s.generation % k != 0 {
@@ -606,6 +607,10 @@ impl ZoneTask for Stencil2d {
 
     fn encode_state(ctx: &Ctx, s: &State) -> Bytes {
         encode_state(&ctx.p, s)
+    }
+
+    fn state_witness(ctx: &Ctx, state: &[u8]) -> Option<Bytes> {
+        summary::witness(&ctx.p, state)
     }
 
     fn decode_state(ctx: &Ctx, b: &[u8]) -> umis_task::Result<State> {

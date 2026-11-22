@@ -54,6 +54,8 @@ fn main() {
             next_state: Some(&next),
             inputs: Some(&inputs),
             input_refs: Some(&[]),
+            prev_witness: None,
+            next_witness: None,
         };
         let t = std::time::Instant::now();
         b.verify(&stmt, &pd, &proof).unwrap();

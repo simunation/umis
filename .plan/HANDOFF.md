@@ -1,4 +1,4 @@
-# Session handoff (state at commit `c4228be`, 2026-11-22)
+# Session handoff (state after the S5b/S4/speed/Gray–Scott/S6 session, 2026-11-22)
 
 Read this first after a context reset, then **`NEXT.md` (the detailed work plan)** and `ROADMAP.md` (goals,
 status, history) and, before touching proof code,
@@ -40,7 +40,15 @@ status, history) and, before touching proof code,
   `init.rs` genesis boards, `render.rs` pictures, `devnet.rs`), `tests/{global,proofs}.rs`, `examples/world.rs`.
 - `crates/umis-stencil`: generic local-rule AIR framework (`lib.rs` Rule/Spec/Grid/Shape, `air.rs` StencilAir + digests,
   `poseidon.rs` Poseidon2 columns, `life.rs` toy rule, `tests.rs`).
-- `crates/umis-agg/src/backend.rs` (+ `tests/backend.rs`): aggregating life backend; wired in `umis-tasks::backend_for` (native only).
+- `crates/umis-agg/src/backend.rs` (+ `tests/backend.rs`): aggregating life backend and the shared owner tree
+  (`AggTree`) and group helpers; wired in `umis-tasks::backend_for` (native only).
+- `crates/umis-agg/src/native.rs` (+ `tests/native.rs`): layer 1 over native batch leaves (`NativeRelation`,
+  `NativeLayer1`, VK pin, statement export). `src/stencil.rs` (+ `tests/stencil_backend.rs`): `StencilAggBackend`.
+  `examples/stencil_agg_bench.rs`.
+- `vendor/p3r-*.patch` + `scripts/vendor-p3r.sh`: local P3R patches; `vendor/plonky3-recursion` is gitignored and
+  built by the script (check.sh runs it). The workspace `[patch]` points P3R's crates there.
+- `crates/umis-stencil/src/{batch.rs (new_multi), grayscott.rs}`; `crates/task-stencil/src/summary.rs` (state
+  summaries, witnesses, S6); `crates/umis-proof/src/group.rs` (group proof format).
 - `crates/umis-core/src/genesis.rs`: `insecure_proofs`, `SECURE_STARK_CONFIGS`.
 - `crates/umis-protocol/src/node/{mod.rs,duties.rs}`: pools (`pc_pool`, `pc_trusted`, `pc_alts`, `zc_awaiting`),
   `check_pc`, `check_pc_candidates`, `evict_pc`, junk adversary; `zone/engine.rs`: `trusted` shares, `ShareVerdict`;
@@ -72,8 +80,9 @@ status, history) and, before touching proof code,
   Driver CUDA 13.2 < toolkit 13.5: NVRTC compiles straight to CUBIN (sm_86); PCIe link runs at about 2 GB/s.
 - Devnet HTTP port 8080 is taken: use `HTTP=127.0.0.1:18431`. Chrome: `/usr/bin/google-chrome`.
 - `tmp/zk-research/` is untracked: papers, upstream clones (`src/`: read only, never build or run), secprobe (ours).
-- Plonky3-recursion is a git dependency of `umis-agg` at rev `3a69ba61f713c8400b14eb3d8f0e52caa13512c7`; its
-  checkout is under `~/.cargo/git/checkouts/plonky3-recursion-*/3a69ba6` (read API there, it is what we build).
+- Plonky3-recursion is a git dependency of `umis-agg` at rev `3a69ba61f713c8400b14eb3d8f0e52caa13512c7`, built
+  from `vendor/plonky3-recursion` (pristine checkout under `~/.cargo/git/checkouts/plonky3-recursion-*/3a69ba6`
+  plus `vendor/p3r-*.patch`). Read the API in the vendored copy.
 - Branch `life2d-gpu-demo`; main branch for PRs is `nu`. Nothing pushed.
 
 ## Conventions
@@ -90,7 +99,8 @@ status, history) and, before touching proof code,
 100 proven bits (not 128) · P100 for leaves verified natively · L = 0 allowed with STARKs · Plonky3 `=0.9.0-rc.2` ·
 P3R pinned `3a69ba6` · aggregation over KoalaBear⁵ (EF4 recursive layers cap at 93–96 bits) · J101 (Johnson) as the
 aggregation default because it is ~1.6× faster with half-size proofs; U101 kept · GPU FRI not built (≤ 3 % gain) · P2 dual state roots (keccak BMT kept, Poseidon2 digest added; 2026-11-21) ·
-aggregation leaves use one strip per zone (2026-11-21).
+aggregation leaves use one strip per zone (2026-11-21) · local P3R patches OK (2026-11-22) · J101 = 60 queries ·
+`koalabear-agg` is a secure config · stencil beacon is stateless except `outputs_root` (fault path; S6b next).
 
 ## Owner constraint (2026-11-21)
 
@@ -100,6 +110,6 @@ fit and the degree intuition: `docs/simulation-fit.md`.
 
 ## Next action
 
-Follow `.plan/NEXT.md` step 1 (S5b: a trusted native-batch source in a locally patched Plonky3-recursion; the
-owner approved the local patch on 2026-11-22), then steps 2–5. `docs/stencil.md` describes what exists and how
-to try it.
+Follow `.plan/NEXT.md` step 1 (S6b: bind the output payloads in-circuit with a `d_faces` sponge). Step 2 (a
+Plonky3 degree-inference cache) needs the owner's OK first. `docs/stencil.md` describes what exists and how to try
+it.
