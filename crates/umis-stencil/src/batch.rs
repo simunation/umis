@@ -34,6 +34,7 @@ use p3_batch_stark::{BatchProof, ProverData, StarkInstance, prove_batch, verify_
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_lookup::{Count, InteractionBuilder, LookupBus};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::*;
 use std::borrow::Cow;
 use umis_stark::config::{FriPreset, koala_bear};
 
@@ -68,13 +69,20 @@ pub fn lookup_budget_for(log_blowup: usize) -> usize {
 const H_IN: usize = 0;
 const H_PERM: usize = WIDTH;
 const H_WIDTH: usize = WIDTH + PERM_COLS;
-// Hash AIR preprocessed columns.
+// Hash AIR preprocessed columns (for `m` slots): active, first, one last-row flag per
+// (slot, region), the tag `3·slot + region` and the block's seq.
 const HP_ACTIVE: usize = 0;
 const HP_FIRST: usize = 1;
-const HP_LAST: usize = 2; // + region
-const HP_TAG: usize = 5;
-const HP_SEQ: usize = 6;
-const HP_WIDTH: usize = 7;
+const HP_LAST: usize = 2; // + 3·slot + region
+const fn hp_tag(m: usize) -> usize {
+    HP_LAST + 3 * m
+}
+const fn hp_seq(m: usize) -> usize {
+    hp_tag(m) + 1
+}
+const fn hp_width(m: usize) -> usize {
+    hp_seq(m) + 1
+}
 
 impl Shape {
     fn limb_base(&self, g: Region) -> usize {
@@ -102,8 +110,16 @@ impl Shape {
         (start, self.region_rows(g) * self.perms(g))
     }
     pub fn hash_height(&self) -> usize {
+        self.hash_height_for(1)
+    }
+    /// Hash rows one slot uses.
+    fn slot_hash_rows(&self) -> usize {
         let (s, l) = self.hash_span(Region::Next);
-        (s + l).next_power_of_two().max(16)
+        s + l
+    }
+    /// The hash table's height for `m` slots (slot `j`'s rows start at `j·slot_hash_rows`).
+    pub fn hash_height_for(&self, m: usize) -> usize {
+        (m * self.slot_hash_rows()).next_power_of_two().max(16)
     }
     /// The board row slot `i` of trace row `r` absorbs into region `g`, if any.
     fn absorbed_row(&self, g: Region, r: usize, i: usize) -> Option<usize> {
@@ -113,11 +129,22 @@ impl Shape {
     }
 }
 
-/// One of the three AIRs.
+/// One of the AIRs: a cells AIR per slot, one hash table, one range table.
 #[derive(Clone)]
 pub enum BatchAir<R> {
-    Cells { rule: R, shape: Shape, periodic: Vec<Vec<Val>>, table: RangeTable },
-    Hash { shape: Shape },
+    /// The generations of slot `slot` (its blocks carry the tag `3·slot + region`).
+    Cells {
+        rule: R,
+        shape: Shape,
+        periodic: Vec<Vec<Val>>,
+        table: RangeTable,
+        slot: usize,
+    },
+    /// The sponges of `slots` slots, slot by slot.
+    Hash {
+        shape: Shape,
+        slots: usize,
+    },
     Range(RangeTable),
 }
 
@@ -162,7 +189,7 @@ impl<R: Rule + Clone> BaseAir<Val> for BatchAir<R> {
     fn preprocessed_width(&self) -> usize {
         match self {
             Self::Cells { shape, .. } => 2 * REGIONS.len() * shape.rpr,
-            Self::Hash { .. } => HP_WIDTH,
+            Self::Hash { slots, .. } => hp_width(*slots),
             Self::Range(RangeTable::Pairs) => 2,
             Self::Range(RangeTable::Single) => 1,
         }
@@ -184,21 +211,26 @@ impl<R: Rule + Clone> BaseAir<Val> for BatchAir<R> {
                 }
                 RowMajorMatrix::new(v, w)
             }
-            Self::Hash { shape: s } => {
-                let h = s.hash_height();
-                let mut v = Val::zero_vec(h * HP_WIDTH);
-                for g in REGIONS {
-                    let (start, len) = s.hash_span(g);
-                    for k in 0..len {
-                        let row = &mut v[(start + k) * HP_WIDTH..][..HP_WIDTH];
-                        row[HP_ACTIVE] = Val::ONE;
-                        row[HP_FIRST] = Val::from_bool(k == 0);
-                        row[HP_LAST + g as usize] = Val::from_bool(k + 1 == len);
-                        row[HP_TAG] = Val::from_usize(g as usize);
-                        row[HP_SEQ] = Val::from_usize(k);
+            Self::Hash { shape: s, slots: m } => {
+                let (m, w) = (*m, hp_width(*m));
+                let h = s.hash_height_for(m);
+                let mut v = Val::zero_vec(h * w);
+                for j in 0..m {
+                    for g in REGIONS {
+                        let (start, len) = s.hash_span(g);
+                        let start = j * s.slot_hash_rows() + start;
+                        let tag = 3 * j + g as usize;
+                        for k in 0..len {
+                            let row = &mut v[(start + k) * w..][..w];
+                            row[HP_ACTIVE] = Val::ONE;
+                            row[HP_FIRST] = Val::from_bool(k == 0);
+                            row[HP_LAST + tag] = Val::from_bool(k + 1 == len);
+                            row[hp_tag(m)] = Val::from_usize(tag);
+                            row[hp_seq(m)] = Val::from_usize(k);
+                        }
                     }
                 }
-                RowMajorMatrix::new(v, HP_WIDTH)
+                RowMajorMatrix::new(v, w)
             }
             Self::Range(RangeTable::Single) => {
                 RowMajorMatrix::new((0..1u32 << RANGE_BITS).map(Val::from_u32).collect(), 1)
@@ -245,7 +277,7 @@ impl<R: Rule + Clone> BaseAir<Val> for BatchAir<R> {
     }
     fn num_public_values(&self) -> usize {
         match self {
-            Self::Hash { .. } => N_PUBLIC,
+            Self::Hash { slots, .. } => N_PUBLIC * slots,
             _ => 0,
         }
     }
@@ -290,7 +322,7 @@ where
 {
     fn eval(&self, builder: &mut AB) {
         match self {
-            Self::Cells { rule, shape: s, table, .. } => {
+            Self::Cells { rule, shape: s, table, slot, .. } => {
                 let main = builder.main();
                 let (cur, next) = (main.current_slice(), main.next_slice());
                 let prep = builder.preprocessed().clone();
@@ -336,17 +368,20 @@ where
                             if q < s.limbs(g) { cur[s.limb_col(g, i, q)].into() } else { AB::Expr::ZERO }
                         };
                         for m in 0..s.perms(g) {
-                            let key: Vec<AB::Expr> =
-                                [AB::Expr::from_usize(g as usize), p[s.pre_seq(g, i)].into() + AB::Expr::from_usize(m)]
-                                    .into_iter()
-                                    .chain((0..RATE).map(|j| limb(m * RATE + j)))
-                                    .collect();
+                            let key: Vec<AB::Expr> = [
+                                AB::Expr::from_usize(3 * slot + g as usize),
+                                p[s.pre_seq(g, i)].into() + AB::Expr::from_usize(m),
+                            ]
+                            .into_iter()
+                            .chain((0..RATE).map(|j| limb(m * RATE + j)))
+                            .collect();
                             hash.lookup_key(builder, key, Count::bounded(p[s.pre_gate(g, i)].into(), 1));
                         }
                     }
                 }
             }
-            Self::Hash { .. } => {
+            Self::Hash { slots, .. } => {
+                let m = *slots;
                 let main = builder.main();
                 let (cur, next) = (main.current_slice(), main.next_slice());
                 let prep = builder.preprocessed().clone();
@@ -360,13 +395,14 @@ where
                     let chain = pn[HP_ACTIVE] - pn[HP_FIRST];
                     builder.when_transition().assert_zero(chain * (next[H_IN + j] - po[j].clone()));
                 }
-                for g in REGIONS {
+                // INV-STENCIL-BATCH-4: slot `s`'s digests are its public values `[24s, 24s + 24)`.
+                for tag in 0..3 * m {
                     for j in 0..DIGEST {
-                        let d = public[g as usize * DIGEST + j].clone();
-                        builder.assert_zero(p[HP_LAST + g as usize] * (po[j].clone() - d));
+                        let d = public[tag * DIGEST + j].clone();
+                        builder.assert_zero(p[HP_LAST + tag] * (po[j].clone() - d));
                     }
                 }
-                let key: Vec<AB::Expr> = [p[HP_TAG].into(), p[HP_SEQ].into()]
+                let key: Vec<AB::Expr> = [p[hp_tag(m)].into(), p[hp_seq(m)].into()]
                     .into_iter()
                     .chain((0..RATE).map(|j| cur[H_IN + j].into()))
                     .collect();
@@ -386,11 +422,13 @@ where
     }
 }
 
-/// The batch prover of rule `R` on one zone shape (setup cached).
+/// The batch prover of rule `R` on one zone shape and `slots` slots per proof (setup cached).
 pub struct StencilBatch<R> {
     pub rule: R,
     pub shape: Shape,
     pub preset: FriPreset,
+    /// Slots per proof: one cells AIR each, one shared hash and range table (INV-STENCIL-BATCH-4).
+    pub slots: usize,
     config: koala_bear::Config,
     airs: Vec<BatchAir<R>>,
     degrees: Vec<usize>,
@@ -398,15 +436,28 @@ pub struct StencilBatch<R> {
 }
 
 impl<R: Rule + Clone> StencilBatch<R> {
+    /// One slot per proof.
     pub fn new(rule: R, n: usize, k: usize, rpr: usize, preset: FriPreset) -> Result<Self, String> {
+        Self::new_multi(rule, n, k, rpr, preset, 1)
+    }
+
+    /// `slots` consecutive slots of one zone per proof.
+    pub fn new_multi(rule: R, n: usize, k: usize, rpr: usize, preset: FriPreset, slots: usize) -> Result<Self, String> {
+        if slots == 0 {
+            return Err("a proof covers at least one slot".into());
+        }
         let shape = Shape::new(rule.spec(), n, k, rpr)?;
-        let periodic =
+        let periodic: Vec<Vec<Val>> =
             (0..rpr).map(|i| (0..shape.height).map(|r| Val::from_bool(shape.inner0(r, i))).collect()).collect();
         // The range table only when the rule requests ranges (it is a fixed 2^16-row cost).
         let ranged = shape.spec.state_ranges + shape.spec.step_ranges > 0;
-        let table = Self::choose_table(&rule, &shape);
-        let mut airs = vec![BatchAir::Cells { rule: rule.clone(), shape, periodic, table }, BatchAir::Hash { shape }];
-        let mut degrees = vec![shape.height.trailing_zeros() as usize, shape.hash_height().trailing_zeros() as usize];
+        let table = Self::choose_table(&rule, &shape, slots);
+        let mut airs: Vec<BatchAir<R>> = (0..slots)
+            .map(|slot| BatchAir::Cells { rule: rule.clone(), shape, periodic: periodic.clone(), table, slot })
+            .collect();
+        airs.push(BatchAir::Hash { shape, slots });
+        let mut degrees = vec![shape.height.trailing_zeros() as usize; slots];
+        degrees.push(shape.hash_height_for(slots).trailing_zeros() as usize);
         if ranged {
             airs.push(BatchAir::Range(table));
             degrees.push(table.log_height());
@@ -420,11 +471,12 @@ impl<R: Rule + Clone> StencilBatch<R> {
             preset.log_blowup(),
         )
         .map_err(|e| format!("setup: {e:?}"))?;
-        Ok(Self { rule, shape, preset, config, airs, degrees, prover_data })
+        Ok(Self { rule, shape, preset, slots, config, airs, degrees, prover_data })
     }
 
-    /// The AIRs of the leaf (cells, hash, and the range table if the rule requests ranges), for
-    /// proving the same relation under another STARK configuration (recursion: `umis-agg`).
+    /// The AIRs of the leaf (a cells AIR per slot, the hash table, and the range table if the
+    /// rule requests ranges), for proving the same relation under another STARK configuration
+    /// (recursion: `umis-agg`).
     pub fn airs(&self) -> &[BatchAir<R>] {
         &self.airs
     }
@@ -434,14 +486,15 @@ impl<R: Rule + Clone> StencilBatch<R> {
         &self.degrees
     }
 
-    /// Per-AIR public values of a leaf with claim `public` (the hash AIR carries the claim).
+    /// Per-AIR public values of a leaf with claim `public` (the hash AIR carries the claim:
+    /// `N_PUBLIC` values per slot).
     pub fn publics(&self, public: &[Val]) -> Vec<Vec<Val>> {
-        (0..self.airs.len()).map(|a| if a == 1 { public.to_vec() } else { Vec::new() }).collect()
+        (0..self.airs.len()).map(|a| if a == self.slots { public.to_vec() } else { Vec::new() }).collect()
     }
 
-    /// The range table for a shape: `Pairs` when a slot makes at least 2^15 narrow requests.
+    /// The range table for a shape: `Pairs` when a proof makes at least 2^15 narrow requests.
     /// The count comes from the rule's own range requests on one zero cell.
-    fn choose_table(rule: &R, s: &Shape) -> RangeTable {
+    fn choose_table(rule: &R, s: &Shape, slots: usize) -> RangeTable {
         let v = s.spec.values;
         let zero = vec![Val::ZERO; v];
         let (mut out, mut state, mut step) = (Vec::new(), Vec::new(), Vec::new());
@@ -452,7 +505,7 @@ impl<R: Rule + Clone> StencilBatch<R> {
         let narrow = |r: &[(Val, usize)]| r.iter().filter(|(_, b)| (2..RANGE_BITS).contains(b)).count();
         let rows = s.rpr * s.height;
         let cone_cells: usize = (1..=s.k).map(|t| s.cone(t).1).sum();
-        let total = rows * (s.we * narrow(&state) + cone_cells * narrow(&step));
+        let total = slots * rows * (s.we * narrow(&state) + cone_cells * narrow(&step));
         if total >= 1 << 15 { RangeTable::Pairs } else { RangeTable::Single }
     }
 
@@ -461,12 +514,20 @@ impl<R: Rule + Clone> StencilBatch<R> {
         self.airs.iter().find_map(|a| if let BatchAir::Range(t) = a { Some(*t) } else { None })
     }
 
-    /// The three traces, the public values and the board after `k` generations.
+    /// The traces, the public values and the board after `k` generations of one slot.
     pub fn generate(&self, ext: &Grid) -> (Vec<RowMajorMatrix<Val>>, Vec<Val>, Grid) {
+        let (t, p, mut next) = self.generate_multi(std::slice::from_ref(ext));
+        (t, p, next.pop().expect("one slot"))
+    }
+
+    /// [`Self::generate`] for `slots` extended boards (one per slot, in order): the traces, the
+    /// public values (slot by slot) and each slot's next board.
+    pub fn generate_multi(&self, exts: &[Grid]) -> (Vec<RowMajorMatrix<Val>>, Vec<Val>, Vec<Grid>) {
+        assert_eq!(exts.len(), self.slots, "one extended board per slot");
         let s = &self.shape;
         let uni = StencilAir::new(self.rule.clone(), s.n, s.k, s.rpr).expect("shape");
-        let (cells, next) = uni.generate_cells(ext);
-        let (traces, public) = self.assemble(&cells);
+        let (cells, next): (Vec<_>, Vec<_>) = exts.par_iter().map(|e| uni.generate_cells(e)).unzip();
+        let (traces, public) = self.assemble_multi(&cells);
         (traces, public, next)
     }
 
@@ -474,70 +535,105 @@ impl<R: Rule + Clone> StencilBatch<R> {
     /// trace (cell columns only), exactly as the AIRs read them: honest for an honest trace;
     /// for a tampered one, the claim the tampered cells make (tests forge with it).
     pub fn assemble(&self, cells: &RowMajorMatrix<Val>) -> (Vec<RowMajorMatrix<Val>>, Vec<Val>) {
+        self.assemble_multi(std::slice::from_ref(cells))
+    }
+
+    /// [`Self::assemble`] for one cells trace per slot.
+    pub fn assemble_multi(&self, cells: &[RowMajorMatrix<Val>]) -> (Vec<RowMajorMatrix<Val>>, Vec<Val>) {
+        let order: Vec<usize> = (0..cells.len()).collect();
+        self.assemble_ordered(cells, &order)
+    }
+
+    /// [`Self::assemble_multi`] with the hash table's slot `j` absorbing the blocks of cells
+    /// trace `order[j]` (honest: the identity). Tests forge with other orders.
+    #[doc(hidden)]
+    pub fn assemble_ordered(
+        &self,
+        cells: &[RowMajorMatrix<Val>],
+        order: &[usize],
+    ) -> (Vec<RowMajorMatrix<Val>>, Vec<Val>) {
+        assert_eq!(cells.len(), self.slots, "one cells trace per slot");
         let s = &self.shape;
         let (cw, bw, h) = (s.cells_width(), s.batch_cells_width(), s.height);
-        let mut v = Val::zero_vec(h * bw);
         let table = match &self.airs[0] {
             BatchAir::Cells { table, .. } => *table,
-            _ => unreachable!("cells AIR first"),
+            _ => unreachable!("cells AIRs first"),
         };
+        // Per slot, in parallel: the cells trace with limbs, its blocks [g] in canonical order
+        // ((trace row, slot row) with the gate on) and its range multiplicities.
+        let per_slot = |cells: &RowMajorMatrix<Val>| {
+            let mut mult = vec![0u32; 1 << table.log_height()];
+            let mut v = Val::zero_vec(h * bw);
+            let mut b: [Vec<Vec<Val>>; 3] = Default::default();
+            for r in 0..h {
+                let (cur, nxt) = (&cells.values[r * cw..][..cw], &cells.values[((r + 1) % h) * cw..][..cw]);
+                let row = &mut v[r * bw..(r + 1) * bw];
+                row[..cw].copy_from_slice(cur);
+                let view = Cells { s, cur, next: nxt };
+                for g in REGIONS {
+                    for i in 0..s.rpr {
+                        let inner0 = Val::from_bool(s.inner0(r, i));
+                        let limbs = pack(s, &region_values::<Val, Val>(s, g, &view, i, &inner0), s.perms(g));
+                        for q in 0..s.limbs(g) {
+                            row[s.limb_col(g, i, q)] = limbs[q];
+                        }
+                        if s.absorbed_row(g, r, i).is_some() {
+                            b[g as usize].push(limbs);
+                        }
+                    }
+                }
+                let (mut out, mut ranges) = (Vec::new(), Vec::new());
+                rule_rows::<Val, Val, R>(&self.rule, s, &view, &mut out, &mut ranges);
+                for (x, bits) in ranges.into_iter().filter(|(_, b)| *b > 1) {
+                    let x = x.as_canonical_u32() as u64;
+                    // An out-of-range value has no table row: the bus cannot balance.
+                    for r in table.rows(x, bits).into_iter().flatten() {
+                        mult[r] += 1;
+                    }
+                }
+            }
+            (RowMajorMatrix::new(v, bw), b, mult)
+        };
+        let parts: Vec<_> = cells.par_iter().map(per_slot).collect();
         let mut mult = vec![0u32; 1 << table.log_height()];
-        // blocks[g] in canonical order: (trace row, slot) with the gate on
-        let mut blocks: [Vec<Vec<Val>>; 3] = Default::default();
-        for r in 0..h {
-            let (cur, nxt) = (&cells.values[r * cw..][..cw], &cells.values[((r + 1) % h) * cw..][..cw]);
-            let row = &mut v[r * bw..(r + 1) * bw];
-            row[..cw].copy_from_slice(cur);
-            let view = Cells { s, cur, next: nxt };
-            for g in REGIONS {
-                for i in 0..s.rpr {
-                    let inner0 = Val::from_bool(s.inner0(r, i));
-                    let limbs = pack(s, &region_values::<Val, Val>(s, g, &view, i, &inner0), s.perms(g));
-                    for q in 0..s.limbs(g) {
-                        row[s.limb_col(g, i, q)] = limbs[q];
-                    }
-                    if s.absorbed_row(g, r, i).is_some() {
-                        blocks[g as usize].push(limbs);
-                    }
-                }
+        let mut traces = Vec::with_capacity(self.airs.len());
+        let mut blocks: Vec<[Vec<Vec<Val>>; 3]> = Vec::with_capacity(cells.len());
+        for (t, b, m) in parts {
+            for (a, x) in mult.iter_mut().zip(m) {
+                *a += x;
             }
-            let (mut out, mut ranges) = (Vec::new(), Vec::new());
-            rule_rows::<Val, Val, R>(&self.rule, s, &view, &mut out, &mut ranges);
-            for (x, b) in ranges.into_iter().filter(|(_, b)| *b > 1) {
-                let x = x.as_canonical_u32() as u64;
-                // An out-of-range value has no table row: the bus cannot balance.
-                for r in table.rows(x, b).into_iter().flatten() {
-                    mult[r] += 1;
-                }
-            }
+            traces.push(t);
+            blocks.push(b);
         }
-        let cells_trace = RowMajorMatrix::new(v, bw);
-        let hh = s.hash_height();
+        let m = self.slots;
+        let hh = s.hash_height_for(m);
         let mut hv = Val::zero_vec(hh * H_WIDTH);
-        let mut public = Vec::with_capacity(N_PUBLIC);
-        for g in REGIONS {
-            let (start, len) = s.hash_span(g);
-            let mut st = [Val::ZERO; WIDTH];
-            let mut k = 0;
-            for limbs in &blocks[g as usize] {
-                for m in 0..s.perms(g) {
-                    st[..RATE].copy_from_slice(&limbs[m * RATE..][..RATE]);
-                    let row = &mut hv[(start + k) * H_WIDTH..][..H_WIDTH];
-                    row[H_IN..H_IN + WIDTH].copy_from_slice(&st);
-                    st = permute_into(st, &mut row[H_PERM..H_PERM + PERM_COLS]);
-                    k += 1;
+        let mut public = Vec::with_capacity(N_PUBLIC * m);
+        for (j, &src) in order.iter().enumerate() {
+            for g in REGIONS {
+                let (start, len) = s.hash_span(g);
+                let start = j * s.slot_hash_rows() + start;
+                let mut st = [Val::ZERO; WIDTH];
+                let mut k = 0;
+                for limbs in &blocks[src][g as usize] {
+                    for q in 0..s.perms(g) {
+                        st[..RATE].copy_from_slice(&limbs[q * RATE..][..RATE]);
+                        let row = &mut hv[(start + k) * H_WIDTH..][..H_WIDTH];
+                        row[H_IN..H_IN + WIDTH].copy_from_slice(&st);
+                        st = permute_into(st, &mut row[H_PERM..H_PERM + PERM_COLS]);
+                        k += 1;
+                    }
                 }
+                debug_assert_eq!(k, len);
+                public.extend_from_slice(&st[..DIGEST]);
             }
-            debug_assert_eq!(k, len);
-            public.extend_from_slice(&st[..DIGEST]);
         }
-        let (s_end, l_end) = s.hash_span(Region::Next);
-        for r in s_end + l_end..hh {
+        for r in m * s.slot_hash_rows()..hh {
             let row = &mut hv[r * H_WIDTH..][..H_WIDTH];
             let _ = permute_into([Val::ZERO; WIDTH], &mut row[H_PERM..H_PERM + PERM_COLS]);
         }
-        let mut traces = vec![cells_trace, RowMajorMatrix::new(hv, H_WIDTH)];
-        if self.airs.len() == 3 {
+        traces.push(RowMajorMatrix::new(hv, H_WIDTH));
+        if self.airs.len() == m + 2 {
             traces.push(RowMajorMatrix::new(mult.into_iter().map(Val::from_u32).collect(), 1));
         } else {
             debug_assert!(mult.iter().all(|m| *m == 0), "a rule without range requests");
@@ -559,21 +655,21 @@ impl<R: Rule + Clone> StencilBatch<R> {
         if traces.len() != self.airs.len() {
             return Err("one trace per AIR".into());
         }
+        let publics = self.publics(public);
         let instances: Vec<StarkInstance<'_, koala_bear::Config, BatchAir<R>>> = self
             .airs
             .iter()
             .zip(traces)
-            .enumerate()
-            .map(|(a, (air, trace))| StarkInstance {
-                air,
-                trace,
-                public_values: if a == 1 { public.to_vec() } else { Vec::new() },
-            })
+            .zip(publics)
+            .map(|((air, trace), public_values)| StarkInstance { air, trace, public_values })
             .collect();
         prove_batch(&self.config, &instances, &self.prover_data).map_err(|e| format!("{e:?}"))
     }
 
     pub fn verify(&self, proof: &BatchProof<koala_bear::Config>, public: &[Val]) -> Result<(), String> {
+        if public.len() != N_PUBLIC * self.slots {
+            return Err(format!("{} public values for {} slots", public.len(), self.slots));
+        }
         let publics = self.publics(public);
         verify_batch(&self.config, &self.airs, proof, &publics, &self.prover_data.common).map_err(|e| format!("{e:?}"))
     }
@@ -586,9 +682,9 @@ impl<R: Rule + Clone> StencilBatch<R> {
         security_shape_of(proof, 4)
     }
 
-    /// Widths of the AIRs (cells, hash, and the range table if present).
+    /// Widths of the AIRs (cells per slot, hash, and the range table if present).
     pub fn widths(&self) -> Vec<usize> {
-        [self.shape.batch_cells_width(), H_WIDTH, 1][..self.airs.len()].to_vec()
+        self.airs.iter().map(BaseAir::<Val>::width).collect()
     }
 }
 

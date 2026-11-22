@@ -8,6 +8,8 @@
 //! bmt file address of its proof bytes, and a commitment's proof BMT is the
 //! list root over its leaves in slot order.
 
+pub mod group;
+
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::BTreeMap;
 use umis_core::records::{ProofLeaf, TransitionStatement};

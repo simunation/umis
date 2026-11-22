@@ -1,7 +1,8 @@
 //! `cargo run --release -p umis-stencil --example bench -- n,k,rpr ...` (default 64,1,2 256,1,2):
 //! trace generation, P100 prove and verify of one slot on the stencil framework.
 //! `RULE=heat` (16-bit fixed-point diffusion) or `life` (default); `BATCH=1`: the batch leaf with
-//! lookups (range table, separate hash table; `heat` then uses lookup range checks).
+//! lookups (range table, separate hash table; `heat` then uses lookup range checks). `TRACE=1`:
+//! Plonky3's prover span timings.
 use p3_uni_stark::{prove, verify};
 use std::time::Instant;
 use umis_stark::config::{FriPreset, koala_bear};
@@ -18,6 +19,13 @@ fn main() {
         std::env::args().skip(1).map(|a| a.split(',').map(|x| x.parse().unwrap()).collect()).collect();
     let layouts = if args.is_empty() { vec![vec![64, 1, 2], vec![256, 1, 2]] } else { args };
     let cfg = koala_bear::config(FriPreset::P100);
+    if std::env::var("TRACE").is_ok_and(|v| v == "1") {
+        // Plonky3's span timings (prover phases).
+        tracing_subscriber::fmt()
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+            .with_env_filter(tracing_subscriber::EnvFilter::new("info"))
+            .init();
+    }
     for l in layouts {
         let batch = std::env::var("BATCH").is_ok_and(|v| v == "1");
         let heat = std::env::var("RULE").as_deref() == Ok("heat");
@@ -82,14 +90,17 @@ fn run<R: Rule + Clone>(cfg: &koala_bear::Config, rule: R, l: &[usize], fill: im
 }
 
 fn run_batch<R: Rule + Clone>(rule: R, l: &[usize], fill: impl Fn(usize) -> u32) {
-    let b = StencilBatch::new(rule, l[0], l[1], l[2], FriPreset::P100).unwrap();
+    // `M=m`: m slots per proof (shared hash and range tables); times are per proof.
+    let m = std::env::var("M").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    let b = StencilBatch::new_multi(rule, l[0], l[1], l[2], FriPreset::P100, m).unwrap();
     let s = b.shape;
     let mut ext = Grid::filled(s.we, s.we, &vec![0; s.spec.values]);
     for (i, c) in ext.data.iter_mut().enumerate() {
         *c = fill(i);
     }
+    let exts = vec![ext; m];
     let t = Instant::now();
-    let (traces, public, _) = b.generate(&ext);
+    let (traces, public, _) = b.generate_multi(&exts);
     let t_gen = t.elapsed();
     let t = Instant::now();
     let proof = b.prove(&traces, &public).unwrap();
@@ -98,12 +109,13 @@ fn run_batch<R: Rule + Clone>(rule: R, l: &[usize], fill: impl Fn(usize) -> u32)
     b.verify(&proof, &public).unwrap();
     let t_verify = t.elapsed();
     let kb = postcard::to_allocvec(&proof).unwrap().len() / 1024;
+    let per = |d: std::time::Duration| d.as_secs_f64() * 1e3 / m as f64;
     println!(
-        "{l:?} batch: widths {:?} heights {:?} | trace {:.1} ms prove {:.1} ms verify {:.1} ms | {kb} KB",
+        "{l:?} batch m={m}: widths {:?} | per slot: trace {:.1} ms prove {:.1} ms verify {:.1} ms {} KB",
         b.widths(),
-        &[s.height, s.hash_height(), 1 << 16][..b.widths().len()],
-        t_gen.as_secs_f64() * 1e3,
-        t_prove.as_secs_f64() * 1e3,
-        t_verify.as_secs_f64() * 1e3
+        per(t_gen),
+        per(t_prove),
+        per(t_verify),
+        kb / m
     );
 }

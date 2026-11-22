@@ -203,3 +203,43 @@ fn both_range_tables_are_covered_by_the_attack_tests() {
     assert_eq!(l.range_table(), Some(RangeTable::Pairs));
     assert_eq!(StencilBatch::new(Life, 8, 1, 2, FriPreset::Test).unwrap().range_table(), None);
 }
+
+/// INV-STENCIL-BATCH-4: several slots in one proof, honest, for heat and the fluid.
+#[test]
+fn multi_slot_proofs_verify() {
+    let mut rng = ChaCha8Rng::seed_from_u64(11);
+    for m in [2, 3] {
+        let b = StencilBatch::new_multi(heat(), 8, 1, 2, FriPreset::Test, m).unwrap();
+        let exts: Vec<Grid> = (0..m).map(|_| random(&mut rng, b.shape.we, 1 << 16)).collect();
+        let (t, public, next) = b.generate_multi(&exts);
+        for (j, e) in exts.iter().enumerate() {
+            assert_eq!(next[j], e.evolve(&heat(), 1));
+            assert_eq!(public[24 * j..24 * (j + 1)], public_values(&b.shape, e, &next[j])[..], "slot {j}");
+        }
+        assert!(accepted(&b, t, &public), "heat m = {m}");
+    }
+    let l = crate::lbm::Lbm::default();
+    let b = StencilBatch::new_multi(l, 8, 1, 2, FriPreset::Test, 2).unwrap();
+    let rest = Grid::filled(b.shape.we, b.shape.we, &l.boundary());
+    let (t, public, _) = b.generate_multi(&[rest.clone(), rest]);
+    assert!(accepted(&b, t, &public), "lbm m = 2");
+}
+
+/// INV-STENCIL-BATCH-4: a slot's blocks reach only its own sponges. The hash table absorbs
+/// slot 1's cells into slot 0's digests and vice versa (each sponge honest, the public values
+/// the swapped digests): the cells AIRs tag their blocks with their slot, so the bus cannot
+/// balance. Mutation-checked: without the slot in the tag this proof verifies.
+#[test]
+fn slots_cannot_swap_their_blocks() {
+    let mut rng = ChaCha8Rng::seed_from_u64(12);
+    let b = StencilBatch::new_multi(heat(), 8, 1, 2, FriPreset::Test, 2).unwrap();
+    let exts: Vec<Grid> = (0..2).map(|_| random(&mut rng, b.shape.we, 1 << 16)).collect();
+    let (t, honest, _) = b.generate_multi(&exts);
+    let cells: Vec<_> = t[..2].iter().map(|c| b.cells_only(c)).collect();
+    let (forged, public) = b.assemble_ordered(&cells, &[1, 0]);
+    assert_eq!(public[..24], honest[24..], "slot 0's digests are slot 1's");
+    assert!(!accepted(&b, forged, &public));
+    // control: the honest order is accepted
+    let (t, public) = b.assemble_ordered(&cells, &[0, 1]);
+    assert!(accepted(&b, t, &public));
+}
