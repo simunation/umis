@@ -50,8 +50,20 @@ sponge technique.
    - heat 4.5–6× faster with 5× smaller proofs; life 256×256 in 28 ms (close to the hand-tuned prover);
    - all checks mutation-checked.
    
-   **S5b next:** recursion of batch leaves with lookups through P3R's low-level `verify_batch_circuit`
-   (EF5 config without OOD/batch/lookup PoW), then S4 on top of it.
+   **S5b findings (2026-11-22):**
+   - P3R's high-level owners (`TrustedPrepared*`, `PreparedLayer`, `prove_next_layer`) take only uni-STARK
+     leaves without lookups, or P3R's own circuit batch proofs.
+   - The `PreparedNative*` owners belong to a separate binary-field (WHIR) stack.
+   - `verify_batch_circuit` (pub) verifies any native batch AIRs with lookups in-circuit (`tests/preprocessing.rs`
+     runs one). Proving that circuit and restoring the FRI query paths need crate-private pieces: the built-in
+     config's MMCS/PCS types, `prepare_prover`, `build_layer_prover`.
+   
+   Options:
+   - (a) a small local patch of the pinned P3R that makes those `pub`, then the manual low-level layer 1;
+   - (b) keep uni-STARK leaves for aggregation (5× costlier, works today) and batch leaves for native checks;
+   - (c) move leaves to P3R's binary-field stack (large rewrite).
+   
+   Owner decision needed; recommended (a).
    Original text: **S5 lookups in leaves** (P3R low-level `verify_batch_circuit` path) once a toy needs range checks or tables at
    scale. This is the efficiency path for real physics; spike it right after S2 if bit decomposition proves too
    wide.
