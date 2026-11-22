@@ -26,12 +26,22 @@ pub struct Heat {
     pub s: usize,
     /// Temperature of missing neighbours (a cold or hot wall).
     pub wall: u32,
+    /// Range checks by lookups ([`crate::batch`]) instead of bit columns: the only helper is
+    /// `rem`; `u`, `u'` and `rem` are range requests.
+    pub lookups: bool,
 }
 
 impl Heat {
     pub fn new(bits: usize, a: u32, s: usize, wall: u32) -> Self {
         assert!(bits + s <= 28 && 4 * a as u64 <= 1 << s && (wall as u64) < 1 << bits, "heat parameters");
-        Self { bits, a, s, wall }
+        Self { bits, a, s, wall, lookups: false }
+    }
+
+    /// The same rule with lookup range checks (`bits ≤ 16`).
+    pub fn with_lookups(mut self) -> Self {
+        assert!(self.bits <= 16 && self.s <= 16);
+        self.lookups = true;
+        self
     }
 
     fn n_of(&self, nb: &[&[u32]]) -> u64 {
@@ -54,6 +64,19 @@ fn recompose<E: PrimeCharacteristicRing + Clone>(bits: &[E], out: &mut Vec<E>) -
 
 impl Rule for Heat {
     fn spec(&self) -> Spec {
+        if self.lookups {
+            return Spec {
+                values: 1,
+                bits: self.bits,
+                radius: 1,
+                aux0: 0,
+                aux: 1,
+                state_constraints: 0,
+                step_constraints: 1,
+                state_ranges: 1,
+                step_ranges: 2,
+            };
+        }
         Spec {
             values: 1,
             bits: self.bits,
@@ -62,6 +85,8 @@ impl Rule for Heat {
             aux: self.bits + self.s,
             state_constraints: self.bits + 1,
             step_constraints: self.bits + self.s + 2,
+            state_ranges: 0,
+            step_ranges: 0,
         }
     }
     fn boundary(&self) -> Vec<u32> {
@@ -70,12 +95,28 @@ impl Rule for Heat {
     fn step(&self, nb: &[&[u32]]) -> (Vec<u32>, Vec<Val>) {
         let n = self.n_of(nb);
         let (next, rem) = (n >> self.s, n & ((1 << self.s) - 1));
+        if self.lookups {
+            return (vec![next as u32], vec![Val::from_u64(rem)]);
+        }
         (vec![next as u32], bits_of(next, self.bits).chain(bits_of(rem, self.s)).collect())
     }
     fn state_aux(&self, cell: &[u32]) -> Vec<Val> {
+        if self.lookups {
+            return Vec::new();
+        }
         bits_of(cell[0] as u64, self.bits).collect()
     }
-    fn eval_state<E: PrimeCharacteristicRing + Clone + From<Val>>(&self, cell: &[E], aux0: &[E], out: &mut Vec<E>) {
+    fn eval_state<E: PrimeCharacteristicRing + Clone + From<Val>>(
+        &self,
+        cell: &[E],
+        aux0: &[E],
+        out: &mut Vec<E>,
+        ranges: &mut Vec<(E, usize)>,
+    ) {
+        if self.lookups {
+            ranges.push((cell[0].clone(), self.bits));
+            return;
+        }
         let v = recompose(aux0, out);
         out.push(cell[0].clone() - v);
     }
@@ -85,11 +126,19 @@ impl Rule for Heat {
         next: &[E],
         aux: &[E],
         out: &mut Vec<E>,
+        ranges: &mut Vec<(E, usize)>,
     ) {
-        let (vb, rb) = aux.split_at(self.bits);
-        let v = recompose(vb, out);
-        let rem = recompose(rb, out);
-        out.push(next[0].clone() - v);
+        let rem = if self.lookups {
+            ranges.push((next[0].clone(), self.bits));
+            ranges.push((aux[0].clone(), self.s));
+            aux[0].clone()
+        } else {
+            let (vb, rb) = aux.split_at(self.bits);
+            let v = recompose(vb, out);
+            let rem = recompose(rb, out);
+            out.push(next[0].clone() - v);
+            rem
+        };
         let sum = nb[1][0].clone() + nb[3][0].clone() + nb[5][0].clone() + nb[7][0].clone();
         let n = nb[4][0].clone() * E::from_u64((1u64 << self.s) - 4 * self.a as u64) + sum * E::from_u64(self.a as u64);
         out.push(n - next[0].clone() * E::from_u64(1u64 << self.s) - rem);

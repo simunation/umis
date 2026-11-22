@@ -45,7 +45,14 @@ sponge technique.
    it. Replaces `board_root`.
 4. **S4 generic aggregation backend** `AggBackend<T: StencilTask>`, replacing `LifeAggBackend`. Protocol config
    per task.
-5. **S5 lookups in leaves** (P3R low-level `verify_batch_circuit` path) once a toy needs range checks or tables at
+5. ~~**S5a**~~ **done 2026-11-22:** batch leaf with lookups (`umis_stencil::batch::StencilBatch`, spec §6c):
+   - three AIRs: cells, a Poseidon2 hash table and a 2^16 range table, linked by LogUp buses;
+   - heat 4.5–6× faster with 5× smaller proofs; life 256×256 in 28 ms (close to the hand-tuned prover);
+   - all checks mutation-checked.
+   
+   **S5b next:** recursion of batch leaves with lookups through P3R's low-level `verify_batch_circuit`
+   (EF5 config without OOD/batch/lookup PoW), then S4 on top of it.
+   Original text: **S5 lookups in leaves** (P3R low-level `verify_batch_circuit` path) once a toy needs range checks or tables at
    scale. This is the efficiency path for real physics; spike it right after S2 if bit decomposition proves too
    wide.
 6. **S6 stateless beacon** (old A4 step 2) on the S3 statement: header root, outputs digest, fault evidence.

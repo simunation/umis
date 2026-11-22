@@ -101,6 +101,52 @@ At 64×64 about 60 % of the columns are the in-trace sponges (16-bit values pack
 per board row and digest) and about 35 % are range-check bits (37 per computed cell). Both are what lookups and a
 separate hash table remove (ROADMAP §0 S5).
 
+## 6c. The batch leaf with lookups (`batch.rs`, S5a; INV-STENCIL-BATCH-*)
+
+One batch STARK with up to three AIRs linked by LogUp buses (p3-lookup). Bus keys and counts use only main and
+preprocessed columns: rc.2's LogUp trace builder cannot see periodic columns.
+
+- **Cells AIR:**
+  - the generations and the rule's constraints;
+  - committed limbs of every digest row, bound to the cells (BATCH-1);
+  - each 8-limb block sent on `stencil-hash` as `(region, seq, block)`, with count = a preprocessed gate. `seq`
+    is preprocessed: board row × P + m, the canonical absorption order;
+  - range requests looked up on `stencil-range`.
+- **Hash AIR:** one Poseidon2 permutation per row, the three sponges in canonical order.
+  - Each active row is a table entry `(region, seq, block)` with multiplicity 1 (preprocessed).
+  - Zero capacity at a region's first row; chaining `(next.active − next.first)·(next.in − out) = 0` (BATCH-2).
+  - The region's last row outputs its public digest.
+- **Range AIR** (only if the rule requests ranges): the table `0..2^16` with a multiplicity column.
+- **BATCH-3 (range requests):** `(x, b)` with `2 ≤ b ≤ 16` looks up `x` and, when `b < 16`, `x·2^(16−b)`. Since
+  `x < 2^16`, the product is `< 2^30 < p` and cannot wrap. `b = 1` would wrap (`65025·2^15 − p < 2^16`,
+  `the_one_bit_range_trick_would_wrap`), so it is a booleanity constraint.
+- The public values equal the canonical `root` / `halo_digest` (`honest_batch_proofs_verify_for_both_toys`).
+- Security: `StencilBatch::security_shape(proof)` reads the opened codewords from the proof (with upper estimates
+  for constraints and LogUp). P100 clears 101 bits (`batch_leaves_clear_the_target_at_p100`).
+
+Tests (each mutation-checked, two-sided for the buses):
+
+| test | the only check that rejects it |
+|---|---|
+| `out_of_range_values_are_rejected`, `wrong_rounding_is_rejected` (all digests re-derived from the tampered cells) | range lookups |
+| `limbs_are_bound_to_the_cells` (run a's cells, run b's limbs and hash table) | limb constraints |
+| `the_hash_table_must_absorb_the_cells_blocks` (run b's hash table) | hash bus |
+| `the_hash_chain_cannot_restart` | hash chaining |
+| `cells_and_hash_blocks_must_agree` (tampered limb, block, public digest) | bus, last-row output |
+
+Measured (P100, CPU):
+
+| | uni (bits, in-trace hash) | batch (lookups, hash table) |
+|---|---|---|
+| heat 64×64 | 374 ms prove, 417 ms verify, 6.9 MB | 83 ms, 25 ms, 1.4 MB |
+| heat 256×256 | 1.58 s, 1.70 s, 26.6 MB | 254 ms, 96 ms, 4.5 MB |
+| life 64×64 | 53 ms, 53 ms, 803 KB | 9.3 ms, 8.0 ms, 410 KB |
+| life 256×256 | 114 ms, 118 ms, 1.9 MB | 28 ms, 24 ms, 1.1 MB |
+
+For heat, the fixed 2^16-row range table dominates small zones. A byte table plus a split (more helper columns)
+trades that cost; worth it if the zones stay small. Trace generation of the batch leaf is still sequential per
+row (`assemble`, 73 ms at 256×256).
+
 ## 7. Required negative tests (`src/tests.rs`, `--release`; each mutation-checked)
 
 | test | the only check that rejects it |

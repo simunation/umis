@@ -21,7 +21,17 @@ fn f_of(nb: &[&[u32]]) -> u32 {
 
 impl Rule for Life {
     fn spec(&self) -> Spec {
-        Spec { values: 1, bits: 1, radius: 1, aux0: 0, aux: 1, state_constraints: 1, step_constraints: 2 }
+        Spec {
+            values: 1,
+            bits: 1,
+            radius: 1,
+            aux0: 0,
+            aux: 1,
+            state_constraints: 1,
+            step_constraints: 2,
+            state_ranges: 0,
+            step_ranges: 0,
+        }
     }
     fn boundary(&self) -> Vec<u32> {
         vec![0]
@@ -34,7 +44,13 @@ impl Rule for Life {
     fn state_aux(&self, _: &[u32]) -> Vec<Val> {
         Vec::new()
     }
-    fn eval_state<E: PrimeCharacteristicRing + Clone + From<Val>>(&self, cell: &[E], _: &[E], out: &mut Vec<E>) {
+    fn eval_state<E: PrimeCharacteristicRing + Clone + From<Val>>(
+        &self,
+        cell: &[E],
+        _: &[E],
+        out: &mut Vec<E>,
+        _: &mut Vec<(E, usize)>,
+    ) {
         out.push(cell[0].clone() * (cell[0].clone() - E::ONE));
     }
     fn eval_step<E: PrimeCharacteristicRing + Clone + From<Val>>(
@@ -43,6 +59,7 @@ impl Rule for Life {
         next: &[E],
         aux: &[E],
         out: &mut Vec<E>,
+        _: &mut Vec<(E, usize)>,
     ) {
         let three = E::from_u64(3);
         let c = nb.iter().enumerate().filter(|(k, _)| *k != 4).fold(E::ZERO, |s, (_, x)| s + x[0].clone());

@@ -44,13 +44,13 @@ pub const N_PUBLIC: usize = 3 * DIGEST;
 
 impl Shape {
     /// Values a region absorbs per board row.
-    fn row_values(&self, g: Region) -> usize {
+    pub(crate) fn row_values(&self, g: Region) -> usize {
         self.spec.values * if g == Region::Halo { self.we } else { self.n }
     }
-    pub fn limbs(&self, g: Region) -> usize {
+    pub(crate) fn limbs(&self, g: Region) -> usize {
         self.row_values(g).div_ceil(self.per_limb())
     }
-    pub fn perms(&self, g: Region) -> usize {
+    pub(crate) fn perms(&self, g: Region) -> usize {
         self.limbs(g).div_ceil(RATE)
     }
     fn slot_cols(&self, g: Region) -> usize {
@@ -91,15 +91,15 @@ impl Shape {
 
     /// Whether `d_prev`/`d_next` absorb at trace row `r`, slot `i`: stacked row
     /// `rpr·r + i + k·r_n` is a zone row (board row `rpr·r + i`).
-    fn zone(&self, r: usize, i: usize) -> bool {
+    pub(crate) fn zone(&self, r: usize, i: usize) -> bool {
         self.rpr * r + i < self.n
     }
     /// Whether generation-0 slot `i` of trace row `r` is a row of `E`.
-    fn in_e(&self, r: usize, i: usize) -> bool {
+    pub(crate) fn in_e(&self, r: usize, i: usize) -> bool {
         self.rpr * r + i < self.we
     }
     /// Whether generation-0 slot `i` of trace row `r` is a zone row of `E`.
-    fn inner0(&self, r: usize, i: usize) -> bool {
+    pub(crate) fn inner0(&self, r: usize, i: usize) -> bool {
         (self.halo()..self.halo() + self.n).contains(&(self.rpr * r + i))
     }
     fn gate(&self, g: Region, r: usize, i: usize) -> bool {
@@ -131,15 +131,15 @@ impl Shape {
 }
 
 /// The cells of the current and next trace row.
-struct Cells<'a, V> {
-    s: &'a Shape,
-    cur: &'a [V],
-    next: &'a [V],
+pub(crate) struct Cells<'a, V> {
+    pub(crate) s: &'a Shape,
+    pub(crate) cur: &'a [V],
+    pub(crate) next: &'a [V],
 }
 
 impl<V: Copy> Cells<'_, V> {
     /// Value `j` (or helper) of generation `t` at slot `slot` (`≥ rpr`: next trace row), column `x`.
-    fn get<E: From<V>>(&self, t: usize, slot: usize, x: usize, j: usize) -> E {
+    pub(crate) fn get<E: From<V>>(&self, t: usize, slot: usize, x: usize, j: usize) -> E {
         let (row, i) = if slot < self.s.rpr { (self.cur, slot) } else { (self.next, slot - self.s.rpr) };
         row[self.s.col(t, i, x, j)].into()
     }
@@ -147,7 +147,7 @@ impl<V: Copy> Cells<'_, V> {
 
 /// A region's values at slot `i` (row order, cell-major), the zone cells of `d_halo`'s rows
 /// multiplied by `1 − inner0`.
-fn region_values<E: PrimeCharacteristicRing + Clone + From<V>, V: Copy>(
+pub(crate) fn region_values<E: PrimeCharacteristicRing + Clone + From<V>, V: Copy>(
     s: &Shape,
     g: Region,
     cells: &Cells<'_, V>,
@@ -170,7 +170,7 @@ fn region_values<E: PrimeCharacteristicRing + Clone + From<V>, V: Copy>(
 }
 
 /// Packs values `30/bits` per limb (`Σ v_m · 2^(bits·m)`), zero-padded to whole permutations.
-fn pack<E: PrimeCharacteristicRing + Clone>(s: &Shape, vals: &[E], perms: usize) -> Vec<E> {
+pub(crate) fn pack<E: PrimeCharacteristicRing + Clone>(s: &Shape, vals: &[E], perms: usize) -> Vec<E> {
     let shift = E::from_u64(1u64 << s.spec.bits);
     let mut l: Vec<E> =
         vals.chunks(s.per_limb()).map(|c| c.iter().rev().fold(E::ZERO, |a, x| a * shift.clone() + x.clone())).collect();
@@ -178,7 +178,7 @@ fn pack<E: PrimeCharacteristicRing + Clone>(s: &Shape, vals: &[E], perms: usize)
     l
 }
 
-fn pack_u32(s: &Shape, vals: &[u32], perms: usize) -> Vec<Val> {
+pub(crate) fn pack_u32(s: &Shape, vals: &[u32], perms: usize) -> Vec<Val> {
     let v: Vec<Val> = vals.iter().map(|x| Val::from_u32(*x)).collect();
     pack(s, &v, perms)
 }
@@ -269,6 +269,12 @@ impl<R: Rule + Clone> StencilAir<R> {
 
     /// The honest trace of `ext` (`we × we`) and the zone's board after `k` generations.
     pub fn generate_trace(&self, ext: &Grid) -> (RowMajorMatrix<Val>, Grid) {
+        let (cells, next) = self.generate_cells(ext);
+        (self.extend_trace(cells), next)
+    }
+
+    /// The cell columns only (every generation) and the zone's board after `k` generations.
+    pub fn generate_cells(&self, ext: &Grid) -> (RowMajorMatrix<Val>, Grid) {
         let s = &self.shape;
         let (rows, r, v) = (s.rows(), s.spec.radius, s.spec.values);
         assert!(ext.w == s.we && ext.h == s.we && ext.values == v);
@@ -342,7 +348,7 @@ impl<R: Rule + Clone> StencilAir<R> {
             let y = yy + h;
             next.data[yy * s.n * v..(yy + 1) * s.n * v].copy_from_slice(&vals[s.k][y]);
         }
-        (self.extend_trace(RowMajorMatrix::new(life, cw)), next)
+        (RowMajorMatrix::new(life, cw), next)
     }
 
     /// Appends the digest columns computed from the trace's own cells.
@@ -419,13 +425,14 @@ impl<AB: AirBuilder<F = Val>, R: Rule + Clone> Air<AB> for StencilAir<R> {
         }
         let public: Vec<AB::Expr> = builder.public_values().iter().map(|x| (*x).into()).collect();
         let mut out: Vec<AB::Expr> = Vec::new();
+        let mut ranges: Vec<(AB::Expr, usize)> = Vec::new();
 
         // Generation 0: valid cells (INV-STENCIL-RULE-1).
         for i in 0..s.rpr {
             for x in 0..s.we {
                 let c: Vec<AB::Expr> = (0..v).map(|j| cells.get(0, i, x, j)).collect();
                 let a: Vec<AB::Expr> = (0..s.spec.aux0).map(|j| cells.get(0, i, x, v + j)).collect();
-                self.rule.eval_state(&c, &a, &mut out);
+                self.rule.eval_state(&c, &a, &mut out, &mut ranges);
             }
         }
         // Generations 1..=k: the rule on every cone cell (INV-STENCIL-RULE-2).
@@ -440,10 +447,11 @@ impl<AB: AirBuilder<F = Val>, R: Rule + Clone> Air<AB> for StencilAir<R> {
                     let nb: Vec<&[AB::Expr]> = nb_vals.iter().map(|c| c.as_slice()).collect();
                     let nx: Vec<AB::Expr> = (0..v).map(|j| cells.get(t + 1, i, x, j)).collect();
                     let aux: Vec<AB::Expr> = (0..s.spec.aux).map(|j| cells.get(t + 1, i, x, v + j)).collect();
-                    self.rule.eval_step(&nb, &nx, &aux, &mut out);
+                    self.rule.eval_step(&nb, &nx, &aux, &mut out, &mut ranges);
                 }
             }
         }
+        assert!(ranges.is_empty(), "this rule requests lookup range checks: prove it with `batch::StencilBatch`");
         for c in out {
             builder.assert_zero(c);
         }

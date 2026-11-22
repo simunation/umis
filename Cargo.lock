@@ -6080,8 +6080,10 @@ name = "umis-stencil"
 version = "0.1.0"
 dependencies = [
  "p3-air",
+ "p3-batch-stark",
  "p3-field",
  "p3-koala-bear",
+ "p3-lookup",
  "p3-matrix",
  "p3-maybe-rayon",
  "p3-poseidon2",

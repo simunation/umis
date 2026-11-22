@@ -19,6 +19,9 @@
 //! constraint degree is `max(3, rule degree)` ([`air::StencilAir::symbolic_degree`]).
 
 pub mod air;
+pub mod batch;
+#[cfg(test)]
+mod batch_tests;
 pub mod heat;
 #[cfg(test)]
 mod heat_tests;
@@ -47,6 +50,9 @@ pub struct Spec {
     pub state_constraints: usize,
     /// Constraints per computed cell ([`Rule::eval_step`]).
     pub step_constraints: usize,
+    /// Range requests per generation-0 cell and per computed cell (lookups, [`batch`]).
+    pub state_ranges: usize,
+    pub step_ranges: usize,
 }
 
 /// A local update rule. `nb` is the neighbourhood in row-major order (`(2r+1)²` cells,
@@ -64,15 +70,24 @@ pub trait Rule: Send + Sync + 'static {
     fn step(&self, nb: &[&[u32]]) -> (Vec<u32>, Vec<Val>);
     /// Helper columns of a generation-0 cell.
     fn state_aux(&self, cell: &[u32]) -> Vec<Val>;
-    /// Validity constraints of a generation-0 cell.
-    fn eval_state<E: PrimeCharacteristicRing + Clone + From<Val>>(&self, cell: &[E], aux0: &[E], out: &mut Vec<E>);
-    /// Update constraints: `next` (and `aux`) follow from `nb`.
+    /// Validity constraints of a generation-0 cell. `ranges` collects `(x, b)`: "`x` is an
+    /// integer in `[0, 2^b)`", `b ≤ 16`, proved by lookups ([`batch`], ROADMAP S5). Rules for
+    /// the uni-STARK [`air::StencilAir`] must not request ranges (they decompose into bits).
+    fn eval_state<E: PrimeCharacteristicRing + Clone + From<Val>>(
+        &self,
+        cell: &[E],
+        aux0: &[E],
+        out: &mut Vec<E>,
+        ranges: &mut Vec<(E, usize)>,
+    );
+    /// Update constraints: `next` (and `aux`) follow from `nb`; `ranges` as for `eval_state`.
     fn eval_step<E: PrimeCharacteristicRing + Clone + From<Val>>(
         &self,
         nb: &[&[E]],
         next: &[E],
         aux: &[E],
         out: &mut Vec<E>,
+        ranges: &mut Vec<(E, usize)>,
     );
 }
 

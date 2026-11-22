@@ -14,6 +14,8 @@ p3-koala-bear = "=0.9.0-rc.2"
 p3-poseidon2 = "=0.9.0-rc.2"
 p3-symmetric = "=0.9.0-rc.2"
 p3-maybe-rayon = { version = "=0.9.0-rc.2", features = ["parallel"] }
+p3-batch-stark = "=0.9.0-rc.2"
+p3-lookup = "=0.9.0-rc.2"
 umis-stark = { path = "../umis-stark" }
 
 [dev-dependencies]
