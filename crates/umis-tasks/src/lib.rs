@@ -4,7 +4,7 @@
 //! - `plonky3`: one STARK prover per task ([`umis_proof::MultiBackend`]),
 //!   water3d and life2d, both with the genesis `stark_config_id`
 //!   (`koalabear-keccak*`: life2d with Keccak Merkle trees, water3d unchanged;
-//!   `koalabear-agg*`: life2d commitments aggregated recursively, native only, water3d on
+//!   `koalabear-agg*`: life2d and stencil commitments aggregated recursively, native only, water3d on
 //!   `koalabear*`).
 
 use std::sync::Arc;
@@ -53,8 +53,7 @@ pub fn backend_for(g: &Genesis) -> Result<Arc<dyn ProofBackend>, String> {
                 .with(task_water3d::TASK_ID, Arc::new(water))
                 .with(task_life2d::TASK_ID, life);
             #[cfg(not(target_arch = "wasm32"))]
-            let multi =
-                multi.with(task_stencil::TASK_ID, Arc::new(task_stencil::air::StencilStark::from_config_id(id)));
+            let multi = multi.with(task_stencil::TASK_ID, stencil_backend(id)?);
             Ok(Arc::new(multi))
         }
         other => Err(format!("unknown proof backend {other}")),
@@ -64,6 +63,17 @@ pub fn backend_for(g: &Genesis) -> Result<Arc<dyn ProofBackend>, String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn life_agg(id: &str) -> Result<Arc<dyn ProofBackend>, String> {
     Ok(Arc::new(umis_agg::backend::LifeAggBackend::from_config_id(id)?))
+}
+
+/// The stencil backend: aggregating for `koalabear-agg*`, plain batch leaves otherwise.
+#[cfg(not(target_arch = "wasm32"))]
+fn stencil_backend(id: Option<&str>) -> Result<Arc<dyn ProofBackend>, String> {
+    Ok(match id {
+        Some(agg) if agg.starts_with("koalabear-agg") => {
+            Arc::new(umis_agg::stencil::StencilAggBackend::from_config_id(agg)?)
+        }
+        _ => Arc::new(task_stencil::air::StencilStark::from_config_id(id)),
+    })
 }
 
 #[cfg(target_arch = "wasm32")]

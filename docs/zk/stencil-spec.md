@@ -188,6 +188,26 @@ Tests:
 
 SimNet: `stencil-{life,heat,lbm}` (mock), `stencil-{life,lbm}-stark`, `stencil-lbm-junk`.
 
+## 6f. Recursion and aggregation (`crates/umis-agg`, S5b + S4; INV-AGG-NB-*, INV-STENCIL-AGG-*)
+
+Details: `docs/zk/aggregation.md` §Native batch leaves.
+
+- The batch leaf is reproved under the EF5 aggregation config (`umis_agg::native::NativeRelation` over
+  `StencilBatch::airs()`), then verified in-circuit by `NativeLayer1` with its verifying key pinned (NB-1) and the
+  statement `[d_prev, d_halo, d_next]` exported (NB-2).
+- **INV-STENCIL-AGG-1 (group format):** a commitment's advancing slots of one leaf relation (`LeafKey`: rule, n, k,
+  rows per trace row) become `AggHead ‖ m ‖ member addresses ‖ postcard(aggregate)` on the first member and
+  `AggRef ‖ keccak(head) ‖ index` on the others (life2d's tags 4/5; stencil plain proofs use 0/1). A single
+  advancing slot and hold/birth slots keep `StencilStark` proofs.
+- **INV-STENCIL-AGG-2 (verifier):** every member passes `StencilStark::native_claim` (all native checks of
+  INV-STENCIL-TASK-1); the verifier derives each statement as `public_values(E, next)` from public data and checks
+  the aggregate with its own verifier for (relation, member count).
+- **INV-STENCIL-AGG-3 (independent trees):** owner trees are built per relation from a boundary-filled leaf; an
+  aggregate made with one node's tree verifies with another's; another member count's verifier rejects it.
+- Genesis: `stark_config_id = koalabear-agg` (P100 single leaves, J101 aggregates) or `koalabear-agg-test`.
+- Tests: `umis-agg/tests/native.rs`, `tests/stencil_backend.rs`, `src/stencil.rs`; SimNet `stencil-agg`,
+  `stencil-agg-lbm`, `stencil-agg-junk`.
+
 ## 7. Required negative tests (`src/tests.rs`, `--release`; each mutation-checked)
 
 | test | the only check that rejects it |

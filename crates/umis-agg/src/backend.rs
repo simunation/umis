@@ -30,33 +30,26 @@ pub const MAX_AGG: usize = 32;
 
 /// One node of an owner tree: a representative recursive proof over `size` leaves and, for
 /// `size ≥ 2`, the 2-to-1 owner that combines a `⌈size/2⌉` and a `⌊size/2⌋` subtree.
-struct Node {
-    rep: Recursive,
+pub(crate) struct Node {
+    pub(crate) rep: Recursive,
     owner: Option<AggOwner>,
 }
 
-/// The owners of one zone shape: layer 1 and every subtree size built so far.
-struct Tree {
+/// The 2-to-1 owners above one layer-1 owner, every subtree size built on first use. Any leaf
+/// kind: only the representative layer-1 proof matters.
+pub(crate) struct AggTree {
     p: AggParams,
-    l1: Layer1Owner<'static>,
     nodes: Mutex<HashMap<usize, Arc<Node>>>,
 }
 
-impl Tree {
-    fn new(p: AggParams, shape: Shape) -> Result<Self, String> {
-        let cfg = config(&p);
-        let e = shape.n + 2 * shape.k;
-        // A dead extended board fixes the allocation shape; one leaked leaf per zone shape.
-        let rep: &'static _ = Box::leak(Box::new(digest_leaf_of(&cfg, shape, &Board::dead(e, e), &[false; 8])));
-        let l1 = Layer1Owner::new(&p, rep)?;
-        let tree = Self { p, l1, nodes: Mutex::new(HashMap::new()) };
-        let leaf = tree.l1.prove(rep)?;
-        tree.nodes.lock().expect("nodes").insert(1, Arc::new(Node { rep: leaf, owner: None }));
-        Ok(tree)
+impl AggTree {
+    pub(crate) fn new(p: AggParams, rep1: Recursive) -> Self {
+        let nodes = HashMap::from([(1, Arc::new(Node { rep: rep1, owner: None }))]);
+        Self { p, nodes: Mutex::new(nodes) }
     }
 
     /// The node of `size` leaves, built (with its subtrees) on first use.
-    fn node(&self, size: usize) -> Result<Arc<Node>, String> {
+    pub(crate) fn node(&self, size: usize) -> Result<Arc<Node>, String> {
         if let Some(n) = self.nodes.lock().expect("nodes").get(&size) {
             return Ok(n.clone());
         }
@@ -68,8 +61,8 @@ impl Tree {
         Ok(n)
     }
 
-    /// Folds layer-1 proofs into one aggregate with the same tree shape as [`Tree::node`].
-    fn fold(&self, parts: &[Recursive]) -> Result<Recursive, String> {
+    /// Folds layer-1 proofs into one aggregate with the same tree shape as [`AggTree::node`].
+    pub(crate) fn fold(&self, parts: &[Recursive]) -> Result<Recursive, String> {
         match parts.len() {
             0 => Err("nothing to aggregate".into()),
             1 => Err("a single leaf is not aggregated".into()),
@@ -83,6 +76,84 @@ impl Tree {
             }
         }
     }
+}
+
+/// The owners of one zone shape: layer 1 and the 2-to-1 tree above it.
+struct Tree {
+    l1: Layer1Owner<'static>,
+    agg: AggTree,
+}
+
+impl Tree {
+    fn new(p: AggParams, shape: Shape) -> Result<Self, String> {
+        let cfg = config(&p);
+        let e = shape.n + 2 * shape.k;
+        // A dead extended board fixes the allocation shape; one leaked leaf per zone shape.
+        let rep: &'static _ = Box::leak(Box::new(digest_leaf_of(&cfg, shape, &Board::dead(e, e), &[false; 8])));
+        let l1 = Layer1Owner::new(&p, rep)?;
+        let leaf = l1.prove(rep)?;
+        Ok(Self { l1, agg: AggTree::new(p, leaf) })
+    }
+}
+
+/// Group proof format shared by the aggregating backends (life2d's tags; they do not collide
+/// with any task's plain proof tags).
+pub(crate) fn group_proofs(members: &[Hash], body: &[u8]) -> Vec<Vec<u8>> {
+    let head = group_head(ProofTag::AggHead, members, body);
+    let h = umis_core::keccak256(&head);
+    (0..members.len()).map(|k| if k == 0 { head.clone() } else { group_ref(ProofTag::AggRef, &h, k) }).collect()
+}
+
+/// The member indices in `items` of the aggregate whose head is `items[head]`
+/// (INV-LIFE-AGG-1), and its proof body.
+pub(crate) fn group_members<'a>(
+    items: &[(&TransitionStatement, PublicData<'_>, &'a [u8])],
+    head: usize,
+) -> Result<(Vec<usize>, &'a [u8]), ProofError> {
+    let bad = |m: &str| Err(ProofError::Invalid(m.into()));
+    let (members, body) = parse_group_head(ProofTag::AggHead, MAX_AGG, items[head].2)?;
+    if items[head].0.address() != members[0] {
+        return bad("aggregate head is not its own first member");
+    }
+    let head_hash = umis_core::keccak256(items[head].2);
+    let mut idx = vec![head];
+    for (k, m) in members.iter().enumerate().skip(1) {
+        let want = group_ref(ProofTag::AggRef, &head_hash, k);
+        match items.iter().position(|(s, _, p)| s.address() == *m && *p == want.as_slice()) {
+            Some(i) => idx.push(i),
+            None => return bad("aggregate member missing from the group"),
+        }
+    }
+    Ok((idx, body))
+}
+
+/// [`ProofBackend::verify_group`] of an aggregating backend: aggregate heads through `agg`
+/// (which returns the member indices it verified), everything else through `inner`.
+pub(crate) fn verify_group_with(
+    items: &[(&TransitionStatement, PublicData<'_>, &[u8])],
+    agg: impl Fn(usize) -> Result<Vec<usize>, ProofError>,
+    inner: &dyn ProofBackend,
+) -> Vec<Result<NodeId, ProofError>> {
+    let tag = |p: &[u8]| p.first().copied();
+    let mut out: Vec<Option<Result<NodeId, ProofError>>> = (0..items.len()).map(|_| None).collect();
+    for (i, (_, _, p)) in items.iter().enumerate() {
+        if tag(p) == Some(ProofTag::AggHead as u8) {
+            match agg(i) {
+                Ok(idx) => idx.into_iter().for_each(|j| out[j] = Some(Ok(NodeId::default()))),
+                Err(e) => out[i] = Some(Err(e)),
+            }
+        }
+    }
+    // Everything else (plain proofs, batch groups, native slots) goes to the inner backend.
+    let rest: Vec<usize> =
+        (0..items.len()).filter(|&i| out[i].is_none() && tag(items[i].2) != Some(ProofTag::AggRef as u8)).collect();
+    let sub: Vec<_> = rest.iter().map(|&i| (items[i].0, items[i].1, items[i].2)).collect();
+    for (&i, r) in rest.iter().zip(inner.verify_group(&sub)) {
+        out[i] = Some(r);
+    }
+    out.into_iter()
+        .map(|r| r.unwrap_or_else(|| Err(ProofError::Invalid("aggregate reference without a verified head".into()))))
+        .collect()
 }
 
 /// The life2d backend that aggregates a commitment's advancing slots.
@@ -130,7 +201,7 @@ impl LifeAggBackend {
             .iter()
             .map(|(ext, absent)| tree.l1.prove(&digest_leaf_of(&cfg, shape, ext, absent)))
             .collect::<Result<_, _>>()?;
-        let top = tree.fold(&parts)?;
+        let top = tree.agg.fold(&parts)?;
         postcard::to_allocvec(&top.out.0).map_err(|e| e.to_string())
     }
 
@@ -142,19 +213,7 @@ impl LifeAggBackend {
         head: usize,
     ) -> Result<Vec<usize>, ProofError> {
         let bad = |m: &str| Err(ProofError::Invalid(m.into()));
-        let (members, body) = parse_group_head(ProofTag::AggHead, MAX_AGG, items[head].2)?;
-        if items[head].0.address() != members[0] {
-            return bad("aggregate head is not its own first member");
-        }
-        let head_hash = umis_core::keccak256(items[head].2);
-        let mut idx = vec![head];
-        for (k, m) in members.iter().enumerate().skip(1) {
-            let want = group_ref(ProofTag::AggRef, &head_hash, k);
-            match items.iter().position(|(s, _, p)| s.address() == *m && *p == want.as_slice()) {
-                Some(i) => idx.push(i),
-                None => return bad("aggregate member missing from the group"),
-            }
-        }
+        let (idx, body) = group_members(items, head)?;
         let mut statement = Vec::new();
         let mut shape = None;
         for &i in &idx {
@@ -171,7 +230,7 @@ impl LifeAggBackend {
         let proof: BatchStarkProof<crate::AggConfig> =
             postcard::from_bytes(body).map_err(|e| ProofError::Malformed(e.to_string()))?;
         let tree = self.tree(shape).map_err(ProofError::Invalid)?;
-        let node = tree.node(idx.len()).map_err(ProofError::Invalid)?;
+        let node = tree.agg.node(idx.len()).map_err(ProofError::Invalid)?;
         node.rep.verifier.verify(&proof, &statement).map_err(|e| ProofError::Invalid(format!("aggregate: {e:?}")))?;
         Ok(idx)
     }
@@ -224,10 +283,8 @@ impl ProofBackend for LifeAggBackend {
                 let claims: Vec<(Board, [bool; 8])> = part.iter().map(|a| (a.2.clone(), a.3)).collect();
                 let body = self.aggregate(part[0].1, &claims).map_err(ProofError::Prover)?;
                 let members: Vec<Hash> = part.iter().map(|a| items[a.0].0.address()).collect();
-                let head = group_head(ProofTag::AggHead, &members, &body);
-                let h = umis_core::keccak256(&head);
-                for (k, a) in part.iter().enumerate() {
-                    out[a.0] = Some(if k == 0 { head.clone() } else { group_ref(ProofTag::AggRef, &h, k) });
+                for (a, proof) in part.iter().zip(group_proofs(&members, &body)) {
+                    out[a.0] = Some(proof);
                 }
             }
         }
@@ -235,28 +292,7 @@ impl ProofBackend for LifeAggBackend {
     }
 
     fn verify_group(&self, items: &[(&TransitionStatement, PublicData<'_>, &[u8])]) -> Vec<Result<NodeId, ProofError>> {
-        let tag = |p: &[u8]| p.first().copied();
-        let mut out: Vec<Option<Result<NodeId, ProofError>>> = (0..items.len()).map(|_| None).collect();
-        for (i, (_, _, p)) in items.iter().enumerate() {
-            if tag(p) == Some(ProofTag::AggHead as u8) {
-                match self.verify_agg_group(items, i) {
-                    Ok(idx) => idx.into_iter().for_each(|j| out[j] = Some(Ok(NodeId::default()))),
-                    Err(e) => out[i] = Some(Err(e)),
-                }
-            }
-        }
-        // Everything else (plain proofs, batch groups, native slots) goes to the inner backend.
-        let rest: Vec<usize> =
-            (0..items.len()).filter(|&i| out[i].is_none() && tag(items[i].2) != Some(ProofTag::AggRef as u8)).collect();
-        let sub: Vec<_> = rest.iter().map(|&i| (items[i].0, items[i].1, items[i].2)).collect();
-        for (&i, r) in rest.iter().zip(self.inner.verify_group(&sub)) {
-            out[i] = Some(r);
-        }
-        out.into_iter()
-            .map(|r| {
-                r.unwrap_or_else(|| Err(ProofError::Invalid("aggregate reference without a verified head".into())))
-            })
-            .collect()
+        verify_group_with(items, |i| self.verify_agg_group(items, i), &self.inner)
     }
 }
 
@@ -302,13 +338,13 @@ mod tests {
                     public_values(&d, x, ab, &out)
                 })
                 .collect();
-            let vb = b.tree(s).unwrap().node(m).unwrap();
+            let vb = b.tree(s).unwrap().agg.node(m).unwrap();
             vb.rep.verifier.verify(&proof, &statement).unwrap_or_else(|e| panic!("m = {m}: {e:?}"));
             let mut wrong = statement.clone();
             wrong.swap(0, task_life2d::air::digest::N_PUBLIC);
             assert!(vb.rep.verifier.verify(&proof, &wrong).is_err(), "m = {m}");
             // A different member count's verifier rejects it.
-            let other = b.tree(s).unwrap().node(m + 1).unwrap();
+            let other = b.tree(s).unwrap().agg.node(m + 1).unwrap();
             assert!(other.rep.verifier.verify(&proof, &statement).is_err(), "m = {m}");
         }
     }

@@ -13,6 +13,7 @@ p3-circuit-prover = { git = "https://github.com/Plonky3/Plonky3-recursion", rev 
 p3-poseidon2-circuit-air = { git = "https://github.com/Plonky3/Plonky3-recursion", rev = "3a69ba61f713c8400b14eb3d8f0e52caa13512c7" }
 umis-stark = { path = "../umis-stark" }
 umis-stencil = { path = "../umis-stencil" }
+task-stencil = { path = "../task-stencil" }
 task-life2d = { path = "../task-life2d", features = ["stark"] }
 umis-core = { path = "../umis-core" }
 umis-proof = { path = "../umis-proof" }

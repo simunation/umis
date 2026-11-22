@@ -139,3 +139,22 @@ fn stencil_lbm_stark() {
 fn stencil_lbm_junk() {
     ok("stencil-lbm-junk", 20);
 }
+
+// Stencil commitments aggregated recursively (S4, koalabear-agg-test).
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_agg() {
+    ok("stencil-agg", 20);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_agg_lbm() {
+    ok("stencil-agg-lbm", 20);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_agg_junk() {
+    ok("stencil-agg-junk", 20);
+}

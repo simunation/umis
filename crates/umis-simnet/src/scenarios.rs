@@ -46,6 +46,9 @@ pub enum Scenario {
     StencilLifeStark,
     StencilLbmStark,
     StencilLbmJunk,
+    StencilAgg,
+    StencilAggLbm,
+    StencilAggJunk,
 }
 
 /// The Game of Life scenarios (globally exact zones, see `task_life2d`).
@@ -66,8 +69,17 @@ pub const LIFE: [&str; 13] = [
 ];
 
 /// The generic local-rule scenarios (`task-stencil`).
-pub const STENCIL: [&str; 6] =
-    ["stencil-life", "stencil-heat", "stencil-lbm", "stencil-life-stark", "stencil-lbm-stark", "stencil-lbm-junk"];
+pub const STENCIL: [&str; 9] = [
+    "stencil-life",
+    "stencil-heat",
+    "stencil-lbm",
+    "stencil-life-stark",
+    "stencil-lbm-stark",
+    "stencil-lbm-junk",
+    "stencil-agg",
+    "stencil-agg-lbm",
+    "stencil-agg-junk",
+];
 
 pub const ALL: [&str; 13] = [
     "basic",
@@ -121,6 +133,9 @@ impl std::str::FromStr for Scenario {
             "stencil-life-stark" => Scenario::StencilLifeStark,
             "stencil-lbm-stark" => Scenario::StencilLbmStark,
             "stencil-lbm-junk" => Scenario::StencilLbmJunk,
+            "stencil-agg" => Scenario::StencilAgg,
+            "stencil-agg-lbm" => Scenario::StencilAggLbm,
+            "stencil-agg-junk" => Scenario::StencilAggJunk,
             _ => return Err(format!("unknown scenario {s}")),
         })
     }
@@ -185,6 +200,21 @@ pub fn run(s: Scenario, seed: u64, slots: u64) -> Outcome {
             cfg.proof_lag = 1;
             cfg.members_per_zone = 4;
             stencil_checked(junk_proofs(cfg, slots.clamp(20, 40), true))
+        }
+        // Stencil commitments aggregated recursively (S4): EF5 batch leaves → layer 1 → 2-to-1.
+        Scenario::StencilAgg | Scenario::StencilAggLbm => {
+            let rule = if s == Scenario::StencilAgg { "heat" } else { "lbm" };
+            let mut cfg = SimConfig::stencil(seed, rule);
+            cfg.stark_config = Some("koalabear-agg-test".into());
+            aggregated(stencil_checked(stark(cfg, slots.clamp(20, 40))))
+        }
+        Scenario::StencilAggJunk => {
+            let mut cfg = SimConfig::stencil(seed, "lbm");
+            cfg.stark_config = Some("koalabear-agg-test".into());
+            cfg.proof_backend = task_stencil::air::BACKEND_ID.into();
+            cfg.proof_lag = 1;
+            cfg.members_per_zone = 4;
+            aggregated(stencil_checked(junk_proofs(cfg, slots.clamp(20, 40), true)))
         }
         // Commitments' advancing slots proved by one recursive aggregate (ROADMAP A4 step 1).
         Scenario::LifeAgg => {

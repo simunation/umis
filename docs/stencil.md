@@ -92,12 +92,14 @@ every check needs.
 
 ## Limits and next steps
 
-- **Recursion:** these batch leaves (lookups, several tables) do not recurse yet. P3R's trusted owners accept
-  only single-table leaves without lookups; extending them is a P3R patch (ROADMAP S5b). Until then, stencil zones
-  are verified leaf by leaf, like life2d.
+- **Recursion and aggregation (2026-11-22):** batch leaves recurse (`umis_agg::native`, a two-line local P3R
+  patch). With `--stark-config koalabear-agg` a proof commitment's advancing slots are folded into one ~0.45 MB
+  aggregate instead of one leaf per slot (LBM 32²: ~6 MB per slot before). Cost per slot (J101, CPU): EF5 leaf
+  plus layer-1 recursion, heat 64² ≈ 1 s, LBM 32² ≈ 6 s; each 2-to-1 step ≈ 1 s. SimNet: `stencil-agg`,
+  `stencil-agg-lbm`, `stencil-agg-junk`.
 - **GPU:** the GPU prover (`umis-gpu`) handles single-table proofs only; the batch leaf proves on the CPU.
 - **Block size:** without aggregation a beacon block carries every leaf proof of its slot. The gossip and sync size
-  limits were raised to 128 MB and 256 MB for this (2026-11-22). Aggregation (S5b) is the real fix.
+  limits were raised to 128 MB and 256 MB for this (2026-11-22). Use `koalabear-agg` for large worlds.
 - **Small zones:** the range table is a fixed cost (2^16 or 2^17 rows), so a 16² LBM zone proves almost as slowly as
   a 32² one. A byte table plus splits would help.
 - **Boundary:** outside the world, cells hold the rule's boundary value each slot (dead cells, a wall

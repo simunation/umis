@@ -5901,6 +5901,7 @@ dependencies = [
  "p3-uni-stark",
  "postcard",
  "task-life2d",
+ "task-stencil",
  "umis-core",
  "umis-proof",
  "umis-stark",

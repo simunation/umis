@@ -117,6 +117,60 @@ impl StencilStark {
     }
 }
 
+/// The relation a zone's leaf proves: its rule and proof layout (one aggregation owner tree
+/// per key).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LeafKey {
+    pub rule: crate::RuleId,
+    pub n: usize,
+    pub k: usize,
+    pub rpr: usize,
+}
+
+impl LeafKey {
+    fn of(p: &StencilParams) -> Self {
+        Self { rule: p.rule, n: p.n(), k: p.k(), rpr: p.rows_per_trace_row as usize }
+    }
+
+    /// The batch leaf of this key (relation and witness generation) at `preset`.
+    pub fn batch(&self, preset: FriPreset) -> Result<StencilBatch<crate::AnyRule>, String> {
+        StencilBatch::new(self.rule.rule(), self.n, self.k, self.rpr, preset)
+    }
+}
+
+impl StencilStark {
+    /// For the prover of another backend (aggregation): `Some((key, E))` if this slot advances,
+    /// with `E` the extended board the leaf proves.
+    pub fn advance_claim(
+        &self,
+        stmt: &TransitionStatement,
+        w: &Witness<'_>,
+    ) -> Result<Option<(LeafKey, umis_stencil::Grid)>, ProofError> {
+        let z = self.setup(w.params, &w.genesis_seed).map_err(ProofError::Prover)?;
+        if stmt.to_slot != stmt.from_slot + 1 || stmt.params_hash != z.params_hash {
+            return Err(ProofError::Prover("statement must cover one slot of this zone".into()));
+        }
+        let s_in = decode_state(&z.ctx.p, w.prev_state).ok_or_else(|| ProofError::Prover("prev state".into()))?;
+        Ok(match decide(&z.ctx, &s_in, w.inputs, stmt.from_slot) {
+            Decision::Advance { ext } => Some((LeafKey::of(&z.ctx.p), ext)),
+            _ => None,
+        })
+    }
+
+    /// For the verifier of another backend: every native check of this slot (INV-STENCIL-TASK-1);
+    /// `Some((key, E, next))` for an advance, whose leaf statement is
+    /// `public_values(E, next)`. A hold or birth slot must carry the native proof `[0]`.
+    pub fn native_claim(
+        &self,
+        stmt: &TransitionStatement,
+        pd: &PublicData<'_>,
+        proof: &[u8],
+    ) -> Result<Option<(LeafKey, umis_stencil::Grid, umis_stencil::Grid)>, ProofError> {
+        let (z, claim) = self.native(stmt, pd, proof)?;
+        Ok(claim.map(|(ext, next)| (LeafKey::of(&z.ctx.p), ext, next)))
+    }
+}
+
 /// `outputs_root` over port payloads (as the protocol computes it).
 fn outputs_root(outputs: &BTreeMap<PortId, Bytes>) -> Hash {
     let leaves: Vec<Hash> = outputs.values().map(|p| bmt::file_address(p)).collect();

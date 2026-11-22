@@ -16,6 +16,7 @@
 
 pub mod backend;
 pub mod native;
+pub mod stencil;
 
 use p3_circuit_prover::BatchStarkProof;
 use p3_circuit_prover::batch_stark_prover::CircuitVerifier;
