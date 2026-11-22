@@ -1,8 +1,10 @@
 # umis — notes for Claude sessions
 
 - **After a context reset start with `.plan/HANDOFF.md`** (state, how to run, quirks, decisions), then
-  `.plan/ROADMAP.md` (goals, remaining steps, schedule). Keep both current when finishing a step.
+  `.plan/NEXT.md` (the detailed next steps) and `.plan/ROADMAP.md` (goals, status). Keep them current when
+  finishing a step. User guide of the stencil simulations: `docs/stencil.md`.
 - Design plan: `.plan/simunation-poc-plan.md`. As-built architecture: `docs/ARCHITECTURE.md`.
+- **Stencil proofs** (`crates/umis-stencil`, `crates/task-stencil`): read `docs/zk/stencil-spec.md` first; cite `INV-STENCIL-*`.
 - **Proof / STARK work:** before touching `crates/task-water3d/src/air.rs`, `crates/umis-stark`, `crates/umis-proof`, proof paths
   in `crates/umis-protocol`, or genesis proof settings, read `docs/zk/README.md`, then `docs/zk/air-spec.md`. Cite the `INV-*`
   invariant IDs in commits. Soundness checks need negative tests that exercise the **verifier in release mode**. A panic in the

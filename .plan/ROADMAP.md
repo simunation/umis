@@ -24,7 +24,7 @@ sponge technique.
 Every advancing zone slot is proved at P100 on the CPU (life 64² 18 ms, heat 64² 90 ms, LBM 32² 358 ms) and
 verified by native nodes.
 
-**Next (in order):**
+**Next (in order; detailed plan in `.plan/NEXT.md`):**
 1. **S5b recursion of batch leaves.** A P3R patch adding a trusted native-batch source (see the S5b finding
    below); then S4, generic aggregation over it.
 2. **Speed:**

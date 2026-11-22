@@ -1,6 +1,7 @@
-# Session handoff (state at commit `b1dc8b2`, 2026-11-21)
+# Session handoff (state at commit `c4228be`, 2026-11-22)
 
-Read this first after a context reset, then `ROADMAP.md` (what to do next) and, before touching proof code,
+Read this first after a context reset, then **`NEXT.md` (the detailed work plan)** and `ROADMAP.md` (goals,
+status, history) and, before touching proof code,
 `docs/zk/README.md` → `docs/zk/air-spec.md` / `docs/zk/life2d-air-spec.md` (CLAUDE.md rule).
 
 ## Where things are
@@ -99,15 +100,6 @@ fit and the degree intuition: `docs/simulation-fit.md`.
 
 ## Next action
 
-B2–B5, A1, A2, the A3 core and A4 step 1 done (2026-11-21). Life commitments can be aggregated in the protocol
-(`stark_config_id = koalabear-agg[-test]`, `umis_agg::backend::LifeAggBackend`; SimNet `life-agg`, `life-agg-junk`,
-release only, ~100 s each). Owner decisions: P2 dual roots; one strip per zone for aggregation leaves (best
-`rpr = 2`). S1 done (2026-11-22): `crates/umis-stencil` (`Rule`, `StencilAir`, `root`, `halo_digest`, `life::Life`; spec
-`docs/zk/stencil-spec.md`; bench `examples/bench.rs`). S2 done (`heat.rs`; 64×64 = 12.9k columns, 378 ms, 6.9 MB: hashing ~60 %, range bits ~35 %). S5a done
-(`batch.rs`: cells + Poseidon2 hash table + range table over LogUp; heat 64×64 83 ms / 1.4 MB, life 256×256
-28 ms). Next: S5b recursion of batch leaves via P3R's low-level `verify_batch_circuit` (EF5), then S4 generic
-aggregation over it, S6 stateless beacon. Toy ladder done (2026-11-22): `task-stencil` runs life/heat/lbm zones with real proofs through the protocol (how to
-try: `docs/stencil.md`). S5b (recursion of batch leaves) needs a P3R logic patch (ROADMAP S5b follow-up finding). Files read:
-`recursion/src/artifact/native/batch.rs`, `recursion/src/input_contract/stark.rs`, `recursion/src/verifier/batch_stark.rs`,
-`recursion/src/prepared/layer.rs`; tests `recursion/tests/*multi_stark*.rs`. `StencilBatch` is hardcoded to EF4
-`koala_bear::Config`: generalize over the config first (EF5 without OOD/batch/lookup PoW).
+Follow `.plan/NEXT.md` step 1 (S5b: a trusted native-batch source in a locally patched Plonky3-recursion; the
+owner approved the local patch on 2026-11-22), then steps 2–5. `docs/stencil.md` describes what exists and how
+to try it.
