@@ -35,6 +35,8 @@ Read this first after a context reset, then `ROADMAP.md` (what to do next) and, 
   claim-independent `digest_leaf` + reusable `Layer1Owner`/`AggOwner`, `Recursive::{verify,timing}`, `recursive_shape`),
   `tests/agg.rs`, `examples/agg_bench.rs` (`DIGEST=1`).
 - `crates/task-life2d/src/air/digest.rs` (+ `digest_tests.rs`): claim-independent digest AIR (three inline Poseidon2 sponges).
+- `crates/umis-stencil`: generic local-rule AIR framework (`lib.rs` Rule/Spec/Grid/Shape, `air.rs` StencilAir + digests,
+  `poseidon.rs` Poseidon2 columns, `life.rs` toy rule, `tests.rs`).
 - `crates/umis-agg/src/backend.rs` (+ `tests/backend.rs`): aggregating life backend; wired in `umis-tasks::backend_for` (native only).
 - `crates/umis-core/src/genesis.rs`: `insecure_proofs`, `SECURE_STARK_CONFIGS`.
 - `crates/umis-protocol/src/node/{mod.rs,duties.rs}`: pools (`pc_pool`, `pc_trusted`, `pc_alts`, `zc_awaiting`),
@@ -98,5 +100,6 @@ fit and the degree intuition: `docs/simulation-fit.md`.
 B2–B5, A1, A2, the A3 core and A4 step 1 done (2026-11-21). Life commitments can be aggregated in the protocol
 (`stark_config_id = koalabear-agg[-test]`, `umis_agg::backend::LifeAggBackend`; SimNet `life-agg`, `life-agg-junk`,
 release only, ~100 s each). Owner decisions: P2 dual roots; one strip per zone for aggregation leaves (best
-`rpr = 2`). Next: ROADMAP §0 order: S1 stencil AIR framework (life as toy 1), S2 fixed-point diffusion toy, S3 generic root and
-statement, S4 generic aggregation backend, S5 lookups, S6 stateless beacon.
+`rpr = 2`). S1 done (2026-11-22): `crates/umis-stencil` (`Rule`, `StencilAir`, `root`, `halo_digest`, `life::Life`; spec
+`docs/zk/stencil-spec.md`; bench `examples/bench.rs`). Next: S2 heat-diffusion toy (fixed point, range checks), then
+S4 generic aggregation backend over `StencilAir`, S5 hash table/lookups (cost), S6 stateless beacon.

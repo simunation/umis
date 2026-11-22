@@ -6076,6 +6076,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "umis-stencil"
+version = "0.1.0"
+dependencies = [
+ "p3-air",
+ "p3-field",
+ "p3-koala-bear",
+ "p3-matrix",
+ "p3-maybe-rayon",
+ "p3-poseidon2",
+ "p3-symmetric",
+ "p3-uni-stark",
+ "postcard",
+ "rand_chacha 0.10.0",
+ "umis-stark",
+]
+
+[[package]]
 name = "umis-task"
 version = "0.1.0"
 dependencies = [

@@ -17,7 +17,16 @@ the group proof format, the chain check, the proof-pool DoS fixes and the failur
 sponge technique.
 
 **Plan (in order):**
-1. **S1 stencil AIR framework** (`umis-stencil`, new crate). A task declares: the cell state (`V` field elements),
+1. ~~**S1 stencil AIR framework**~~ **done 2026-11-22** (`crates/umis-stencil`, spec `docs/zk/stencil-spec.md`):
+   - generic `Rule` trait, ghost-cell boundary (no masks);
+   - canonical layout-independent roots, so S3's root is built in;
+   - degree = the rule's degree, `MIN_HEIGHT = 64`;
+   - life ported as toy 1;
+   - 13 tests, mutation-checked.
+   
+   Cost: about 5× the hand-tuned life prover (256×256: 101 ms prove, 1.9 MB), mostly the in-trace sponges, which
+   makes S5's separate hash table more valuable. Original text:
+   **S1 stencil AIR framework** (`umis-stencil`, new crate). A task declares: the cell state (`V` field elements),
    the radius `r`, the update as polynomial constraints over the neighbourhood (degree budget from the preset),
    and auxiliary witness columns. The framework provides the layout (rows × generations, halo, padding), a
    prev / halo / next binding by in-trace Poseidon2 sponges, shape-only periodic columns and public parameters.
