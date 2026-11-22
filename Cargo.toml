@@ -17,6 +17,7 @@ members = [
     "crates/umis-web",
     "crates/umis-agg",
     "crates/umis-stencil",
+    "crates/task-stencil",
 ]
 
 exclude = ["vendor"]

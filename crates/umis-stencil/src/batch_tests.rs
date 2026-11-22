@@ -55,16 +55,12 @@ fn honest_batch_proofs_verify_for_both_toys() {
 }
 
 #[test]
-fn the_one_bit_range_trick_would_wrap() {
-    // Why b = 1 is a booleanity constraint (INV-STENCIL-BATCH-3): x = 65025 < 2^16 and
-    // x·2^15 mod p < 2^16, so the two lookups alone would accept a non-bit.
+fn the_one_column_range_trick_would_wrap_for_one_bit() {
+    // Why the range table holds (value, bits) pairs and b = 1 is a booleanity constraint
+    // (INV-STENCIL-BATCH-3): with a single 0..2^16 column, "x and x·2^(16−b) in the table" would
+    // accept x = 65025 for b = 1, because 65025·2^15 mod p < 2^16.
     let x = Val::from_u32(65025) * Val::from_u32(1 << 15);
     assert!(crate::air::to_u32(x) < 1 << 16);
-    // For b ≥ 2 no x < 2^16 can do this: the largest product x·2^(16−b) stays below p.
-    let p = <Val as p3_field::PrimeField32>::ORDER_U32 as u64;
-    for b in 2..16u32 {
-        assert!(std::hint::black_box((1u64 << 16) - 1) << (16 - b) < p, "b = {b}");
-    }
 }
 
 #[test]
@@ -195,4 +191,15 @@ fn batch_leaves_clear_the_target_at_p100() {
         let bits = proven_udr_bits(FriPreset::P100, &sh);
         assert!(bits >= TARGET_BITS, "{n},{k},{rpr}: {bits:.1} bits ({sh:?})");
     }
+}
+
+#[test]
+fn both_range_tables_are_covered_by_the_attack_tests() {
+    // The heat attacks run on the single-column table, the LBM attacks on the pair table.
+    use crate::batch::RangeTable;
+    let h = StencilBatch::new(heat(), 8, 1, 2, FriPreset::Test).unwrap();
+    assert_eq!(h.range_table(), Some(RangeTable::Single));
+    let l = StencilBatch::new(crate::lbm::Lbm::default(), 8, 1, 2, FriPreset::Test).unwrap();
+    assert_eq!(l.range_table(), Some(RangeTable::Pairs));
+    assert_eq!(StencilBatch::new(Life, 8, 1, 2, FriPreset::Test).unwrap().range_table(), None);
 }

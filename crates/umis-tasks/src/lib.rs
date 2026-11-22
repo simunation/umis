@@ -18,6 +18,8 @@ pub use task_water3d;
 pub fn register_all(r: &mut umis_task::TaskRegistry) {
     task_water3d::register(r);
     task_life2d::register(r);
+    #[cfg(not(target_arch = "wasm32"))]
+    task_stencil::register(r);
 }
 
 /// A registry with every task of this build.
@@ -47,11 +49,13 @@ pub fn backend_for(g: &Genesis) -> Result<Arc<dyn ProofBackend>, String> {
                 Some(agg) if agg.starts_with("koalabear-agg") => life_agg(agg)?,
                 _ => Arc::new(task_life2d::air::Life2dStark::from_config_id(id)?),
             };
-            Ok(Arc::new(
-                MultiBackend::new(task_water3d::air::BACKEND_ID)
-                    .with(task_water3d::TASK_ID, Arc::new(water))
-                    .with(task_life2d::TASK_ID, life),
-            ))
+            let multi = MultiBackend::new(task_water3d::air::BACKEND_ID)
+                .with(task_water3d::TASK_ID, Arc::new(water))
+                .with(task_life2d::TASK_ID, life);
+            #[cfg(not(target_arch = "wasm32"))]
+            let multi =
+                multi.with(task_stencil::TASK_ID, Arc::new(task_stencil::air::StencilStark::from_config_id(id)));
+            Ok(Arc::new(multi))
         }
         other => Err(format!("unknown proof backend {other}")),
     }
@@ -91,6 +95,12 @@ pub fn zone_proposal(
             let p = task_life2d::devnet::zone_params_like(g, point, slot_ticks)
                 .ok_or("the genesis has no life zone to copy params from")?;
             Ok((task_life2d::TASK_ID, enc(borsh::to_vec(&p))?))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        l if l == task_stencil::LAYER => {
+            let p = task_stencil::devnet::zone_params_like(g, point, slot_ticks)
+                .ok_or("the genesis has no stencil zone to copy params from")?;
+            Ok((task_stencil::TASK_ID, enc(borsh::to_vec(&p))?))
         }
         other => Err(format!("this build cannot create zones on layer {other}")),
     }

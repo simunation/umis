@@ -17,6 +17,7 @@ umis-proof.workspace = true
 umis-protocol.workspace = true
 task-water3d = { workspace = true, features = ["stark"] }
 task-life2d = { workspace = true, features = ["stark"] }
+task-stencil = { path = "../task-stencil" }
 umis-tasks.workspace = true
 borsh.workspace = true
 serde.workspace = true

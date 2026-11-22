@@ -26,10 +26,13 @@ pub struct GenesisArgs {
     pub keys_dir: PathBuf,
     #[arg(long, default_value = "genesis/devnet.json")]
     pub out: PathBuf,
-    /// Zone task: `water` (3D shallow water, 2×2 genesis zones) or `life`
-    /// (Game of Life, `--region` genesis zones).
+    /// Zone task: `water` (3D shallow water, 2×2 genesis zones), `life` (Game of Life,
+    /// `--region` genesis zones) or `stencil` (the generic local-rule task, `--rule`).
     #[arg(long, default_value = "water")]
     pub task: String,
+    /// stencil: the local rule, `life`, `heat` or `lbm` (lattice Boltzmann fluid).
+    #[arg(long, default_value = "lbm")]
+    pub rule: String,
     /// Cells per zone axis.
     #[arg(long, default_value_t = 16)]
     pub n_loc: u32,
@@ -120,7 +123,27 @@ pub fn genesis(a: GenesisArgs) -> anyhow::Result<()> {
             o.params = params;
             task_life2d::devnet::devnet_genesis(o)
         }
-        other => anyhow::bail!("unknown --task {other} (water or life)"),
+        "stencil" => {
+            anyhow::ensure!(a.region.len() == 2, "--region needs rx,ry");
+            anyhow::ensure!(!a.slot_ticks.is_empty(), "--slot-ticks needs a value");
+            let rule = task_stencil::devnet::default_rule(&a.rule)
+                .ok_or_else(|| anyhow::anyhow!("--rule life|heat|lbm, not {}", a.rule))?;
+            let mut o = task_stencil::devnet::StencilOptions::new(seed, time, faucet.node_id(), rule);
+            o.validators = validators;
+            o.n = a.n_loc;
+            o.gens = a.gens;
+            o.region = [a.region[0], a.region[1]];
+            o.rows_per_trace_row = a.rows_per_trace_row.unwrap_or(2.max(a.gens));
+            o.pattern = match a.pattern.as_str() {
+                "soup" | "random" => 0,
+                "showcase" => 1,
+                other => anyhow::bail!("--pattern random|showcase, not {other}"),
+            };
+            o.slot_ticks = a.slot_ticks.clone();
+            o.params = params;
+            task_stencil::devnet::devnet_genesis(o)
+        }
+        other => anyhow::bail!("unknown --task {other} (water, life or stencil)"),
     };
     g.proof_backend = a.proof_backend.clone();
     if a.proof_backend == "plonky3" {
@@ -174,6 +197,10 @@ pub struct SimArgs {
     /// Write the final zone states (raw blobs) into this directory.
     #[arg(long)]
     pub dump: Option<PathBuf>,
+    /// stencil: write a picture of the world (`frame-NNNN.ppm`) per beacon slot into this
+    /// directory.
+    #[arg(long)]
+    pub frames: Option<PathBuf>,
 }
 
 pub fn load_genesis(path: &std::path::Path) -> anyhow::Result<Genesis> {
@@ -191,6 +218,32 @@ pub fn sim(a: SimArgs) -> anyhow::Result<()> {
     for e in 0..a.beacon_slots {
         s.run_until((e + 1) * b)?;
         let mut line = format!("beacon slot {e:4}:");
+        if g.layers.first().map(String::as_str) == Some(task_stencil::LAYER) {
+            let mut zones = Vec::new();
+            let mut rule = None;
+            let mut n = 0;
+            for z in s.zones.values() {
+                let gz = g.zones.iter().find(|gz| gz.id == z.id).expect("genesis zone");
+                let p: task_stencil::StencilParams = serde_json::from_value(gz.params.clone())?;
+                let st = task_stencil::decode_state(&p, &z.state).context("stencil state")?;
+                line += &format!(" z{} gen={:4}", z.id, st.generation);
+                n = p.n();
+                rule = Some(p.rule);
+                zones.push((gz.point, st.grid));
+            }
+            if let Some(rule) = rule {
+                let w = task_stencil::render::world(&zones, n, &umis_stencil_boundary(&rule));
+                line += &format!(" | {}", task_stencil::render::summary(&rule, &w));
+                if let Some(dir) = &a.frames {
+                    std::fs::create_dir_all(dir)?;
+                    let scale = (512 / w.w.max(1)).max(1);
+                    let (iw, ih, px) = task_stencil::render::rgb(&rule, &w, scale);
+                    task_stencil::render::write_ppm(&dir.join(format!("frame-{e:04}.ppm")), iw, ih, &px)?;
+                }
+            }
+            println!("{line}");
+            continue;
+        }
         if g.layers.first().map(String::as_str) == Some(task_life2d::LAYER) {
             for z in s.zones.values() {
                 let r = z.inst.render(&z.state)?;
@@ -219,4 +272,9 @@ pub fn sim(a: SimArgs) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn umis_stencil_boundary(rule: &task_stencil::RuleId) -> Vec<u32> {
+    use umis_stencil::Rule;
+    rule.rule().boundary()
 }

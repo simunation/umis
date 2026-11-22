@@ -95,6 +95,44 @@ impl Lbm {
     }
 }
 
+impl Lbm {
+    /// Whether the slot from extended board `ext` stays inside the regime the proof covers:
+    /// every streamed cell has `ρ < 2^13` and `|m_x|, |m_y| < 512`, and every result lies in
+    /// `[0, 2^16)` (no clamping). Checked cell by cell, exactly as the constraints do.
+    pub fn provable(&self, ext: &crate::Grid) -> bool {
+        let (w, h) = (ext.w, ext.h);
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                let nb: Vec<&[u32]> = (0..3)
+                    .flat_map(|dy| (0..3).map(move |dx| (dx, dy)))
+                    .map(|(dx, dy)| ext.cell(x + dx - 1, y + dy - 1))
+                    .collect();
+                let f: [i64; 9] = core::array::from_fn(|i| nb[source(i)][i] as i64);
+                let rho: i64 = f.iter().sum();
+                let mx: i64 = (0..9).map(|i| C[i].0 * f[i]).sum();
+                let my: i64 = (0..9).map(|i| C[i].1 * f[i]).sum();
+                if rho >= 1 << RHO_BITS || mx.abs() >= M_MAX || my.abs() >= M_MAX {
+                    return false;
+                }
+                let mut rest = rho;
+                for i in 1..9 {
+                    let (fe, q, _, _) = feq(rho, (mx, my), i);
+                    let n2 = ((1 << self.t) - self.a) * f[i] + self.a * fe + (1 << (self.t - 1));
+                    let g = n2.div_euclid(1 << self.t);
+                    if !(0..1 << 16).contains(&q) || !(0..1 << 16).contains(&fe) || !(0..1 << 16).contains(&g) {
+                        return false;
+                    }
+                    rest -= g;
+                }
+                if !(0..1 << 16).contains(&rest) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
+
 impl Rule for Lbm {
     fn spec(&self) -> Spec {
         Spec {

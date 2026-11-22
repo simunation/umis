@@ -40,6 +40,12 @@ pub enum Scenario {
     JunkProofsL0,
     LifeAgg,
     LifeAggJunk,
+    StencilLife,
+    StencilHeat,
+    StencilLbm,
+    StencilLifeStark,
+    StencilLbmStark,
+    StencilLbmJunk,
 }
 
 /// The Game of Life scenarios (globally exact zones, see `task_life2d`).
@@ -58,6 +64,10 @@ pub const LIFE: [&str; 13] = [
     "life-agg",
     "life-agg-junk",
 ];
+
+/// The generic local-rule scenarios (`task-stencil`).
+pub const STENCIL: [&str; 6] =
+    ["stencil-life", "stencil-heat", "stencil-lbm", "stencil-life-stark", "stencil-lbm-stark", "stencil-lbm-junk"];
 
 pub const ALL: [&str; 13] = [
     "basic",
@@ -105,6 +115,12 @@ impl std::str::FromStr for Scenario {
             "life-stark-l0" => Scenario::LifeStarkL0,
             "life-agg" => Scenario::LifeAgg,
             "life-agg-junk" => Scenario::LifeAggJunk,
+            "stencil-life" => Scenario::StencilLife,
+            "stencil-heat" => Scenario::StencilHeat,
+            "stencil-lbm" => Scenario::StencilLbm,
+            "stencil-life-stark" => Scenario::StencilLifeStark,
+            "stencil-lbm-stark" => Scenario::StencilLbmStark,
+            "stencil-lbm-junk" => Scenario::StencilLbmJunk,
             _ => return Err(format!("unknown scenario {s}")),
         })
     }
@@ -157,6 +173,19 @@ pub fn run(s: Scenario, seed: u64, slots: u64) -> Outcome {
             junk_proofs(cfg, slots.max(30), false)
         }
         Scenario::JunkProofsL0 => junk_proofs(SimConfig::new(seed), slots.max(30), false),
+        // The generic local-rule task (mock proofs, then real stencil STARKs).
+        Scenario::StencilLife => stencil_checked(basic(SimConfig::stencil(seed, "life"), slots.max(30))),
+        Scenario::StencilHeat => stencil_checked(basic(SimConfig::stencil(seed, "heat"), slots.max(30))),
+        Scenario::StencilLbm => stencil_checked(basic(SimConfig::stencil(seed, "lbm"), slots.max(30))),
+        Scenario::StencilLifeStark => stencil_checked(stark(SimConfig::stencil(seed, "life"), slots.clamp(20, 40))),
+        Scenario::StencilLbmStark => stencil_checked(stark(SimConfig::stencil(seed, "lbm"), slots.clamp(20, 40))),
+        Scenario::StencilLbmJunk => {
+            let mut cfg = SimConfig::stencil(seed, "lbm");
+            cfg.proof_backend = task_stencil::air::BACKEND_ID.into();
+            cfg.proof_lag = 1;
+            cfg.members_per_zone = 4;
+            stencil_checked(junk_proofs(cfg, slots.clamp(20, 40), true))
+        }
         // Commitments' advancing slots proved by one recursive aggregate (ROADMAP A4 step 1).
         Scenario::LifeAgg => {
             let mut cfg = SimConfig::life(seed);
@@ -195,6 +224,36 @@ fn aggregated(mut o: Outcome) -> Outcome {
         .count();
     if n == 0 {
         o.report.violations.push("no proof commitment carries an aggregate".into());
+    }
+    o
+}
+
+/// Every stencil zone's committed state decodes and has advanced at least 5 generations (the
+/// oracle already checks agreement, settlement and rollbacks).
+fn stencil_checked(mut o: Outcome) -> Outcome {
+    let a = o.sim.node(o.sim.archive);
+    let head = a.chain.head_state();
+    let mut gens = Vec::new();
+    for (z, zone) in head.zones.iter().filter(|(_, z)| z.task_id == task_stencil::TASK_ID) {
+        let Ok(p) = borsh::from_slice::<task_stencil::StencilParams>(&zone.params) else { continue };
+        let Some(c) = head.commits.get(z).and_then(|v| v.iter().rev().find(|c| c.status != CommitStatus::Invalid))
+        else {
+            o.report.violations.push(format!("stencil zone {z}: no commitment"));
+            continue;
+        };
+        let Some(bs) = c.blocks.last() else { continue };
+        let Some(bytes) = a.engines.get(z).and_then(|e| e.get(&bs.hash)).and_then(|e| e.state.clone()) else {
+            continue;
+        };
+        match task_stencil::decode_state(&p, &bytes) {
+            Some(s) => gens.push((s.generation, p.gens as u64)),
+            None => o.report.violations.push(format!("stencil zone {z}: undecodable state")),
+        }
+    }
+    if gens.is_empty() {
+        o.report.violations.push("stencil: no committed stencil state".into());
+    } else if gens.iter().any(|(g, _)| *g < 5) {
+        o.report.violations.push(format!("stencil: zones barely advanced: {gens:?}"));
     }
     o
 }

@@ -20,6 +20,8 @@ umis-task.workspace = true
 task-water3d = { workspace = true, features = ["stark"] }
 umis-tasks.workspace = true
 task-life2d.workspace = true
+task-stencil = { path = "../task-stencil" }
+umis-stencil = { path = "../umis-stencil" }
 umis-net.workspace = true
 umis-node.workspace = true
 umis-protocol.workspace = true

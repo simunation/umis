@@ -29,9 +29,16 @@ fn main() {
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
     let a = Args::parse();
     let names: Vec<String> = if a.scenario == "all" {
-        scenarios::ALL.iter().chain(scenarios::LIFE.iter()).map(|s| s.to_string()).collect()
+        scenarios::ALL
+            .iter()
+            .chain(scenarios::LIFE.iter())
+            .chain(scenarios::STENCIL.iter())
+            .map(|s| s.to_string())
+            .collect()
     } else if a.scenario == "life-all" {
         scenarios::LIFE.iter().map(|s| s.to_string()).collect()
+    } else if a.scenario == "stencil" {
+        scenarios::STENCIL.iter().map(|s| s.to_string()).collect()
     } else {
         a.scenario.split(',').map(|s| s.to_string()).collect()
     };

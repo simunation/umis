@@ -104,3 +104,38 @@ fn life_agg() {
 fn life_agg_junk() {
     ok("life-agg-junk", 20);
 }
+
+// The generic local-rule task (task-stencil).
+#[test]
+fn stencil_life() {
+    ok("stencil-life", 30);
+}
+
+#[test]
+fn stencil_lbm() {
+    ok("stencil-lbm", 30);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_heat() {
+    ok("stencil-heat", 30);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_life_stark() {
+    ok("stencil-life-stark", 20);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_lbm_stark() {
+    ok("stencil-lbm-stark", 20);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_lbm_junk() {
+    ok("stencil-lbm-junk", 20);
+}

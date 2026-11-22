@@ -22,6 +22,8 @@ task-life2d = { workspace = true, features = ["stark"] }
 # Recursive aggregation (Plonky3-recursion): native only (`koalabear-agg*` configs).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 umis-agg = { path = "../umis-agg" }
+# Generic local-rule zones (life, heat, lattice Boltzmann) on umis-stencil.
+task-stencil = { path = "../task-stencil" }
 
 [lints]
 workspace = true

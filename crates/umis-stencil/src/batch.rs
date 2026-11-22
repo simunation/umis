@@ -5,16 +5,23 @@
 //! - **Cells**: the generations and the rule's constraints, as in [`crate::air`], plus the
 //!   committed limbs of every digest row. Each 8-limb block is sent on [`HASH_BUS`] as
 //!   `(region, seq, block)` when its row belongs to the region; `seq = row·P + m` is the
-//!   block's position in the canonical absorption order. Every range request `(x, b)` is
-//!   looked up on [`RANGE_BUS`]: `x`, and `x·2^(16−b)` when `b < 16`. For `2 ≤ b ≤ 16` both in
-//!   `[0, 2^16)` ⇔ `x ∈ [0, 2^b)`: `x < 2^16` makes `x·2^(16−b) < 2^(32−b) ≤ 2^30 < p`, so the
-//!   product cannot wrap. `b = 1` would wrap (65025·2^15 − p = 2^15 − 1), so it is a
-//!   booleanity constraint instead (INV-STENCIL-BATCH-3).
+//!   block's position in the canonical absorption order. Every range request `(x, b)`,
+//!   `2 ≤ b ≤ 16`, is one lookup of the pair `(x, b)` on [`RANGE_BUS`]; `b = 1` is a booleanity
+//!   constraint (INV-STENCIL-BATCH-3).
 //! - **Hash**: one Poseidon2 permutation per row, the three sponges one after the other in
 //!   canonical order. Each active row is a table entry `(region, seq, block)` with
 //!   multiplicity 1, its capacity chains from the previous row (zero at a region's first
 //!   row), and a region's last row outputs its digest (the public values).
-//! - **Range**: the table `0..2^16` with a multiplicity column.
+//! - **Range**, in one of two forms ([`RangeTable`], chosen per shape):
+//!   - `Pairs`: the pairs `(v, b)`, `v < 2^b`, for every `b` in `2..=16` (2^17 rows). One
+//!     lookup per request.
+//!   - `Single`: the column `0..2^16`. A request looks up `x` and, if `b < 16`, `x·2^(16−b)`:
+//!     both in `[0, 2^16)` ⇔ `x ∈ [0, 2^b)`, since `x < 2^16` keeps the product below
+//!     `2^30 < p` for `b ≥ 2`. Half the table, but two lookups per narrow request.
+//!
+//!   `Pairs` is chosen when a slot makes at least 2^15 narrow (`b < 16`) requests, where the
+//!   lookups it saves outweigh the larger table (LBM 32×32: verify −23 %, proof −16 %; heat
+//!   64×64 would prove 75 % slower with it; measured 2026-11-22).
 //!
 //! Bus keys and counts use only main and preprocessed columns: rc.2's LogUp trace builder
 //! cannot see periodic columns.
@@ -32,8 +39,15 @@ use umis_stark::config::{FriPreset, koala_bear};
 
 pub const HASH_BUS: &str = "stencil-hash";
 pub const RANGE_BUS: &str = "stencil-range";
-/// The range table holds `0..2^RANGE_BITS`.
+/// The widest range request.
 pub const RANGE_BITS: usize = 16;
+/// The range table's height: `Σ_{b=2}^{16} 2^b` rows, padded to `2^17`.
+const RANGE_LOG_HEIGHT: usize = RANGE_BITS + 1;
+
+/// The row of `(v, b)` in the range table.
+fn range_row(v: u64, b: usize) -> usize {
+    ((1usize << b) - 4) + v as usize
+}
 /// Lookup degree budget per AIR: the largest constraint degree the preset's blowup supports
 /// (`blowup + 1`, at most 5). A larger budget packs more lookups per LogUp column (LBM at P100:
 /// budget 5 instead of 3 gives 35 % smaller proofs; measured 2026-11-22). `UMIS_LOOKUP_BUDGET`
@@ -97,9 +111,39 @@ impl Shape {
 /// One of the three AIRs.
 #[derive(Clone)]
 pub enum BatchAir<R> {
-    Cells { rule: R, shape: Shape, periodic: Vec<Vec<Val>> },
+    Cells { rule: R, shape: Shape, periodic: Vec<Vec<Val>>, table: RangeTable },
     Hash { shape: Shape },
-    Range,
+    Range(RangeTable),
+}
+
+/// The form of the range table (see the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RangeTable {
+    Single,
+    Pairs,
+}
+
+impl RangeTable {
+    fn log_height(self) -> usize {
+        match self {
+            Self::Single => RANGE_BITS,
+            Self::Pairs => RANGE_LOG_HEIGHT,
+        }
+    }
+    /// The table rows request `(x, b)` uses (`None`: out of range, no row).
+    fn rows(self, x: u64, b: usize) -> Vec<Option<usize>> {
+        match self {
+            Self::Pairs => vec![(x < 1 << b).then(|| range_row(x, b))],
+            Self::Single => {
+                let mut v = vec![(x < 1 << RANGE_BITS).then_some(x as usize)];
+                if b < RANGE_BITS {
+                    let y = x << (RANGE_BITS - b);
+                    v.push((y < 1 << RANGE_BITS).then_some(y as usize));
+                }
+                v
+            }
+        }
+    }
 }
 
 impl<R: Rule + Clone> BaseAir<Val> for BatchAir<R> {
@@ -107,14 +151,15 @@ impl<R: Rule + Clone> BaseAir<Val> for BatchAir<R> {
         match self {
             Self::Cells { shape, .. } => shape.batch_cells_width(),
             Self::Hash { .. } => H_WIDTH,
-            Self::Range => 1,
+            Self::Range(_) => 1,
         }
     }
     fn preprocessed_width(&self) -> usize {
         match self {
             Self::Cells { shape, .. } => 2 * REGIONS.len() * shape.rpr,
             Self::Hash { .. } => HP_WIDTH,
-            Self::Range => 1,
+            Self::Range(RangeTable::Pairs) => 2,
+            Self::Range(RangeTable::Single) => 1,
         }
     }
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<Val>> {
@@ -150,14 +195,29 @@ impl<R: Rule + Clone> BaseAir<Val> for BatchAir<R> {
                 }
                 RowMajorMatrix::new(v, HP_WIDTH)
             }
-            Self::Range => RowMajorMatrix::new((0..1u32 << RANGE_BITS).map(Val::from_u32).collect(), 1),
+            Self::Range(RangeTable::Single) => {
+                RowMajorMatrix::new((0..1u32 << RANGE_BITS).map(Val::from_u32).collect(), 1)
+            }
+            Self::Range(RangeTable::Pairs) => {
+                // (v, b) for b = 2..=16, v < 2^b; padding rows repeat (0, 2) with multiplicity 0
+                let mut v = Vec::with_capacity(2 << RANGE_LOG_HEIGHT);
+                for b in 2..=RANGE_BITS {
+                    for x in 0..1u32 << b {
+                        v.extend([Val::from_u32(x), Val::from_usize(b)]);
+                    }
+                }
+                while v.len() < 2 << RANGE_LOG_HEIGHT {
+                    v.extend([Val::ZERO, Val::from_usize(2)]);
+                }
+                RowMajorMatrix::new(v, 2)
+            }
         })
     }
     fn main_next_row_columns(&self) -> Vec<usize> {
         match self {
             Self::Cells { shape, .. } => (0..shape.cells_width()).collect(),
             Self::Hash { .. } => (H_IN + RATE..H_IN + WIDTH).collect(),
-            Self::Range => vec![],
+            Self::Range(_) => vec![],
         }
     }
     fn preprocessed_next_row_columns(&self) -> Vec<usize> {
@@ -225,7 +285,7 @@ where
 {
     fn eval(&self, builder: &mut AB) {
         match self {
-            Self::Cells { rule, shape: s, .. } => {
+            Self::Cells { rule, shape: s, table, .. } => {
                 let main = builder.main();
                 let (cur, next) = (main.current_slice(), main.next_slice());
                 let prep = builder.preprocessed().clone();
@@ -248,10 +308,15 @@ where
                         builder.assert_zero(x.clone() * (x - AB::Expr::ONE));
                         continue;
                     }
-                    if b < RANGE_BITS {
-                        range.lookup_key(builder, [x.clone() * AB::Expr::from_u64(1 << (RANGE_BITS - b))], 1);
+                    match table {
+                        RangeTable::Pairs => range.lookup_key(builder, [x, AB::Expr::from_usize(b)], 1),
+                        RangeTable::Single => {
+                            if b < RANGE_BITS {
+                                range.lookup_key(builder, [x.clone() * AB::Expr::from_u64(1 << (RANGE_BITS - b))], 1);
+                            }
+                            range.lookup_key(builder, [x], 1);
+                        }
                     }
-                    range.lookup_key(builder, [x], 1);
                 }
                 // INV-STENCIL-BATCH-1: limbs bound to the cells, blocks sent to the hash table.
                 let hash = LookupBus::new(HASH_BUS);
@@ -302,12 +367,15 @@ where
                     .collect();
                 LookupBus::new(HASH_BUS).table_entry(builder, key, p[HP_ACTIVE]);
             }
-            Self::Range => {
+            Self::Range(t) => {
                 let main = builder.main();
                 let m = main.current_slice();
                 let prep = builder.preprocessed().clone();
                 let p = prep.current_slice();
-                LookupBus::new(RANGE_BUS).table_entry(builder, [p[0]], m[0]);
+                match t {
+                    RangeTable::Pairs => LookupBus::new(RANGE_BUS).table_entry(builder, [p[0], p[1]], m[0]),
+                    RangeTable::Single => LookupBus::new(RANGE_BUS).table_entry(builder, [p[0]], m[0]),
+                }
             }
         }
     }
@@ -330,11 +398,12 @@ impl<R: Rule + Clone> StencilBatch<R> {
             (0..rpr).map(|i| (0..shape.height).map(|r| Val::from_bool(shape.inner0(r, i))).collect()).collect();
         // The range table only when the rule requests ranges (it is a fixed 2^16-row cost).
         let ranged = shape.spec.state_ranges + shape.spec.step_ranges > 0;
-        let mut airs = vec![BatchAir::Cells { rule: rule.clone(), shape, periodic }, BatchAir::Hash { shape }];
+        let table = Self::choose_table(&rule, &shape);
+        let mut airs = vec![BatchAir::Cells { rule: rule.clone(), shape, periodic, table }, BatchAir::Hash { shape }];
         let mut degrees = vec![shape.height.trailing_zeros() as usize, shape.hash_height().trailing_zeros() as usize];
         if ranged {
-            airs.push(BatchAir::Range);
-            degrees.push(RANGE_BITS);
+            airs.push(BatchAir::Range(table));
+            degrees.push(table.log_height());
         }
         let config = koala_bear::config(preset);
         let prover_data = ProverData::from_airs_and_degrees_with_lookup_budgets(
@@ -346,6 +415,28 @@ impl<R: Rule + Clone> StencilBatch<R> {
         )
         .map_err(|e| format!("setup: {e:?}"))?;
         Ok(Self { rule, shape, preset, config, airs, prover_data })
+    }
+
+    /// The range table for a shape: `Pairs` when a slot makes at least 2^15 narrow requests.
+    /// The count comes from the rule's own range requests on one zero cell.
+    fn choose_table(rule: &R, s: &Shape) -> RangeTable {
+        let v = s.spec.values;
+        let zero = vec![Val::ZERO; v];
+        let (mut out, mut state, mut step) = (Vec::new(), Vec::new(), Vec::new());
+        rule.eval_state(&zero, &vec![Val::ZERO; s.spec.aux0], &mut out, &mut state);
+        let nb_cells = vec![zero.clone(); (2 * s.spec.radius + 1).pow(2)];
+        let nb: Vec<&[Val]> = nb_cells.iter().map(|c| c.as_slice()).collect();
+        rule.eval_step(&nb, &zero, &vec![Val::ZERO; s.spec.aux], &mut out, &mut step);
+        let narrow = |r: &[(Val, usize)]| r.iter().filter(|(_, b)| (2..RANGE_BITS).contains(b)).count();
+        let rows = s.rpr * s.height;
+        let cone_cells: usize = (1..=s.k).map(|t| s.cone(t).1).sum();
+        let total = rows * (s.we * narrow(&state) + cone_cells * narrow(&step));
+        if total >= 1 << 15 { RangeTable::Pairs } else { RangeTable::Single }
+    }
+
+    /// The range table this leaf uses.
+    pub fn range_table(&self) -> Option<RangeTable> {
+        self.airs.iter().find_map(|a| if let BatchAir::Range(t) = a { Some(*t) } else { None })
     }
 
     /// The three traces, the public values and the board after `k` generations.
@@ -364,7 +455,11 @@ impl<R: Rule + Clone> StencilBatch<R> {
         let s = &self.shape;
         let (cw, bw, h) = (s.cells_width(), s.batch_cells_width(), s.height);
         let mut v = Val::zero_vec(h * bw);
-        let mut mult = vec![0u32; 1 << RANGE_BITS];
+        let table = match &self.airs[0] {
+            BatchAir::Cells { table, .. } => *table,
+            _ => unreachable!("cells AIR first"),
+        };
+        let mut mult = vec![0u32; 1 << table.log_height()];
         // blocks[g] in canonical order: (trace row, slot) with the gate on
         let mut blocks: [Vec<Vec<Val>>; 3] = Default::default();
         for r in 0..h {
@@ -388,11 +483,9 @@ impl<R: Rule + Clone> StencilBatch<R> {
             rule_rows::<Val, Val, R>(&self.rule, s, &view, &mut out, &mut ranges);
             for (x, b) in ranges.into_iter().filter(|(_, b)| *b > 1) {
                 let x = x.as_canonical_u32() as u64;
-                for y in [Some(x), (b < RANGE_BITS).then(|| x << (RANGE_BITS - b))].into_iter().flatten() {
-                    // An out-of-range value has no table row: the bus cannot balance.
-                    if (y as usize) < mult.len() {
-                        mult[y as usize] += 1;
-                    }
+                // An out-of-range value has no table row: the bus cannot balance.
+                for r in table.rows(x, b).into_iter().flatten() {
+                    mult[r] += 1;
                 }
             }
         }

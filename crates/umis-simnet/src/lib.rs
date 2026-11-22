@@ -32,7 +32,8 @@ pub struct SimConfig {
     pub proof_backend: String,
     /// The plonky3 `stark_config_id` (default `koalabear-test`).
     pub stark_config: Option<String>,
-    /// Genesis task: `water` (water3d) or `life` (globally exact Game of Life).
+    /// Genesis task: `water` (water3d), `life` (globally exact Game of Life), or
+    /// `stencil-<rule>` (the generic local-rule task: `stencil-life`, `stencil-heat`, `stencil-lbm`).
     pub task: String,
 }
 
@@ -56,6 +57,12 @@ impl SimConfig {
     /// A Game of Life world: 2×2 genesis zones of 16² cells, 2 generations per slot.
     pub fn life(seed: u64) -> Self {
         Self { n_loc: 16, slot_ticks: vec![4, 4, 4, 4], task: "life".into(), ..Self::new(seed) }
+    }
+
+    /// A stencil world of `rule` (`life`, `heat`, `lbm`): 2×2 genesis zones of `n_loc²` cells.
+    pub fn stencil(seed: u64, rule: &str) -> Self {
+        let n_loc = if rule == "lbm" { 8 } else { 16 };
+        Self { n_loc, slot_ticks: vec![4, 4, 4, 4], task: format!("stencil-{rule}"), ..Self::new(seed) }
     }
 }
 
@@ -111,7 +118,16 @@ impl Sim {
             }
         }
         let seed = umis_core::keccak256(&cfg.seed.to_be_bytes());
-        let mut genesis = if cfg.task == "life" {
+        let mut genesis = if let Some(rule) = cfg.task.strip_prefix("stencil-") {
+            let rule = task_stencil::devnet::default_rule(rule).expect("stencil rule");
+            let mut o = task_stencil::devnet::StencilOptions::new(seed, GENESIS_MS, faucet.node_id(), rule);
+            o.validators = validators;
+            o.n = cfg.n_loc;
+            o.region = [2, (cfg.slot_ticks.len() as i32 + 1) / 2];
+            o.slot_ticks = cfg.slot_ticks.clone();
+            o.params.proof_lag = cfg.proof_lag;
+            task_stencil::devnet::devnet_genesis(o)
+        } else if cfg.task == "life" {
             let mut o = task_life2d::devnet::LifeOptions::new(seed, GENESIS_MS, faucet.node_id());
             o.validators = validators;
             o.n = cfg.n_loc;

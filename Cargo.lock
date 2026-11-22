@@ -5457,6 +5457,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "task-stencil"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "p3-batch-stark",
+ "p3-field",
+ "postcard",
+ "rand_chacha 0.10.0",
+ "serde",
+ "serde_json",
+ "umis-core",
+ "umis-proof",
+ "umis-stark",
+ "umis-stencil",
+ "umis-task",
+]
+
+[[package]]
 name = "task-water3d"
 version = "0.1.0"
 dependencies = [
@@ -5910,6 +5928,7 @@ dependencies = [
  "serde",
  "serde_json",
  "task-life2d",
+ "task-stencil",
  "task-water3d",
  "tokio",
  "tower-http 0.7.1",
@@ -5920,6 +5939,7 @@ dependencies = [
  "umis-node",
  "umis-proof",
  "umis-protocol",
+ "umis-stencil",
  "umis-task",
  "umis-tasks",
 ]
@@ -6038,6 +6058,7 @@ dependencies = [
  "serde",
  "serde_json",
  "task-life2d",
+ "task-stencil",
  "task-water3d",
  "tracing",
  "tracing-subscriber",
@@ -6114,6 +6135,7 @@ dependencies = [
  "borsh",
  "serde_json",
  "task-life2d",
+ "task-stencil",
  "task-water3d",
  "umis-agg",
  "umis-core",
