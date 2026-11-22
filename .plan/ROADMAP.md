@@ -63,7 +63,12 @@ sponge technique.
    - (b) keep uni-STARK leaves for aggregation (5× costlier, works today) and batch leaves for native checks;
    - (c) move leaves to P3R's binary-field stack (large rewrite).
    
-   Owner decision needed; recommended (a).
+   Owner chose (a) (2026-11-22). **Follow-up finding (same day):**
+   - Building and proving the layer-1 circuit needs **no** visibility patch: `FriRecursionConfig::{prepare_circuit_for_verification, pcs_verifier_params, set_fri_private_data}`, `replay_batch_stark_transcript`, `verify_batch_circuit`, `BatchStarkProver::prepare_circuit` and `PreparedCircuitProver::{prove_with_legacy_data, verifier}` are all public.
+   - The blocker is soundness and size, not visibility. The low-level path allocates every leaf-proof value (commitments, openings, the VK commitment) with `public_input()`. A layer-1 statement would then carry the whole leaf proof, and nothing would pin the leaf's VK.
+   - P3R's trusted owners fix exactly this internally (private proof values, VK as constants, statement = leaf public values), but only for uni-STARK leaves and P3R circuit proofs.
+   
+   So (a) really means a **logic patch** of the pinned P3R: a `TrustedPreparedSource::NativeBatch` that mirrors the uni-STARK trusted path with `verify_batch_circuit`. Estimated a few hundred lines in unaudited, soundness-critical code; needs the owner's OK.
    Original text: **S5 lookups in leaves** (P3R low-level `verify_batch_circuit` path) once a toy needs range checks or tables at
    scale. This is the efficiency path for real physics; spike it right after S2 if bit decomposition proves too
    wide.

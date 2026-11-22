@@ -104,8 +104,8 @@ release only, ~100 s each). Owner decisions: P2 dual roots; one strip per zone f
 `docs/zk/stencil-spec.md`; bench `examples/bench.rs`). S2 done (`heat.rs`; 64×64 = 12.9k columns, 378 ms, 6.9 MB: hashing ~60 %, range bits ~35 %). S5a done
 (`batch.rs`: cells + Poseidon2 hash table + range table over LogUp; heat 64×64 83 ms / 1.4 MB, life 256×256
 28 ms). Next: S5b recursion of batch leaves via P3R's low-level `verify_batch_circuit` (EF5), then S4 generic
-aggregation over it, S6 stateless beacon. S5b blocked on an owner decision (ROADMAP S5b findings: patch P3R visibility, or keep uni-STARK leaves for
-aggregation). Files read:
+aggregation over it, S6 stateless beacon. S5b blocked on an owner decision: ROADMAP S5b follow-up finding. A visibility patch is not enough; native batch
+leaves need a trusted `NativeBatch` source in P3R (a logic patch), or uni-STARK leaves for aggregation. Files read:
 `recursion/src/artifact/native/batch.rs`, `recursion/src/input_contract/stark.rs`, `recursion/src/verifier/batch_stark.rs`,
 `recursion/src/prepared/layer.rs`; tests `recursion/tests/*multi_stark*.rs`. `StencilBatch` is hardcoded to EF4
 `koala_bear::Config`: generalize over the config first (EF5 without OOD/batch/lookup PoW).
