@@ -153,9 +153,11 @@ pub struct Genesis {
     pub zones: Vec<GenesisZone>,
 }
 
-/// The `stark_config_id`s with ≥ 100 proven bits (the P100 FRI preset): `None` means
-/// `koalabear`. Any other id needs `insecure_proofs` (INV-PARAM-1).
-pub const SECURE_STARK_CONFIGS: &[&str] = &["koalabear", "koalabear-keccak"];
+/// The `stark_config_id`s with ≥ 100 proven bits: `None` means `koalabear` (P100);
+/// `koalabear-agg` proves single slots with P100 and aggregates with `umis_agg::AggParams::J101`
+/// (≥ 101 bits for leaves and recursive layers, `docs/zk/aggregation.md`; Plonky3-recursion is
+/// unaudited). Any other id needs `insecure_proofs` (INV-PARAM-1).
+pub const SECURE_STARK_CONFIGS: &[&str] = &["koalabear", "koalabear-keccak", "koalabear-agg"];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum GenesisError {
@@ -336,11 +338,11 @@ mod tests {
     fn insecure_stark_configs_need_the_opt_in() {
         let mut g = sample();
         g.proof_backend = "plonky3".into();
-        for id in [None, Some("koalabear"), Some("koalabear-keccak")] {
+        for id in [None, Some("koalabear"), Some("koalabear-keccak"), Some("koalabear-agg")] {
             g.stark_config_id = id.map(Into::into);
             g.validate().unwrap();
         }
-        for id in ["koalabear-test", "koalabear-keccak-test", "anything"] {
+        for id in ["koalabear-test", "koalabear-keccak-test", "koalabear-agg-test", "anything"] {
             g.stark_config_id = Some(id.into());
             g.insecure_proofs = false;
             assert!(g.validate().is_err(), "{id}");
