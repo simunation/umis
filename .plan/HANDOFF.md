@@ -99,7 +99,7 @@ status, history) and, before touching proof code,
 100 proven bits (not 128) · P100 for leaves verified natively · L = 0 allowed with STARKs · Plonky3 `=0.9.0-rc.2` ·
 P3R pinned `3a69ba6` · aggregation over KoalaBear⁵ (EF4 recursive layers cap at 93–96 bits) · J101 (Johnson) as the
 aggregation default because it is ~1.6× faster with half-size proofs; U101 kept · GPU FRI not built (≤ 3 % gain) · P2 dual state roots (keccak BMT kept, Poseidon2 digest added; 2026-11-21) ·
-aggregation leaves use one strip per zone (2026-11-21) · local P3R patches OK (2026-11-22) · J101 = 60 queries ·
+aggregation leaves use one strip per zone (2026-11-21) · local P3R patches OK (2026-11-22) · local p3-batch-stark degree-cache patch OK (2026-11-23) · J101 = 60 queries ·
 `koalabear-agg` is a secure config · stencil beacon is stateless except `outputs_root` (fault path; S6b next).
 
 ## Owner constraint (2026-11-21)
@@ -110,6 +110,6 @@ fit and the degree intuition: `docs/simulation-fit.md`.
 
 ## Next action
 
-Follow `.plan/NEXT.md` step 1 (S6b: bind the output payloads in-circuit with a `d_faces` sponge). Step 2 (a
-Plonky3 degree-inference cache) needs the owner's OK first. `docs/stencil.md` describes what exists and how to try
+Follow `.plan/NEXT.md` step 1 (S6b: bind the output payloads in-circuit with a `d_faces` sponge). Step 2 (the
+p3-batch-stark degree cache) is done (2026-11-23). `docs/stencil.md` describes what exists and how to try
 it.

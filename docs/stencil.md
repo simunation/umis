@@ -12,7 +12,8 @@ proofs. Four toy rules ship:
 | `grayscott` | Gray–Scott reaction–diffusion (spots that grow and split) | 2 × 14-bit concentrations | 64×64: 170 ms, 43 ms, 2.0 MB (8 slots per proof: 48 ms, 43 ms, 1.7 MB per slot; load ≈ 10) |
 
 A proof commitment's advancing slots of one zone are proved together (up to 8 per proof, shared tables): per slot
-heat 32² drops from 79 to 21 ms, LBM 32² from 313 to 134 ms (P100, CPU, 2026-11-22).
+heat 32² drops from 79 to 21 ms, LBM 32² from 313 to 134 ms (P100, CPU, 2026-11-22), and to 60 ms with the
+cached constraint degree (2026-11-23; LBM verify 156 → 82 ms).
 
 Why these and what comes next: `docs/simulation-fit.md` (intuitive). How the proofs work and what they check:
 `docs/zk/stencil-spec.md`.

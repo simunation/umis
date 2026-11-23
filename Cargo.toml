@@ -25,6 +25,8 @@ exclude = ["vendor"]
 [patch.crates-io]
 # Larger per-channel read buffer for browser WebRTC (see vendor/README.md).
 libp2p-webrtc-websys = { path = "vendor/libp2p-webrtc-websys" }
+# p3-batch-stark with a memoized quotient degree (vendor/README.md), built by scripts/vendor-p3r.sh.
+p3-batch-stark = { path = "vendor/p3-batch-stark" }
 
 # Plonky3-recursion at the pinned rev plus local patches (vendor/README.md); the directory is
 # built by scripts/vendor-p3r.sh (gitignored).

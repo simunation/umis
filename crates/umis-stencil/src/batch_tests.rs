@@ -243,3 +243,31 @@ fn slots_cannot_swap_their_blocks() {
     let (t, public) = b.assemble_ordered(&cells, &[0, 1]);
     assert!(accepted(&b, t, &public));
 }
+
+/// The memoized quotient degree (local p3-batch-stark patch, `vendor/README.md`) changes no
+/// proof: a warm setup (cache filled) and a cold one (the original symbolic inference) accept
+/// each other's proofs, for one and several slots, and agree on the quotient chunk counts.
+#[test]
+fn cached_quotient_degrees_interoperate_with_fresh_ones() {
+    let mut rng = ChaCha8Rng::seed_from_u64(21);
+    for m in [1, 3] {
+        let warm = StencilBatch::new_multi(heat(), 8, 1, 2, FriPreset::Test, m).unwrap();
+        let exts: Vec<Grid> = (0..m).map(|_| random(&mut rng, warm.shape.we, 1 << 16)).collect();
+        let (t, public, _) = warm.generate_multi(&exts);
+        let first = warm.prove(&t, &public).unwrap(); // fills the cache
+        let p_warm = warm.prove(&t, &public).unwrap(); // reads it
+        let cold = || StencilBatch::new_multi(heat(), 8, 1, 2, FriPreset::Test, m).unwrap();
+        let p_cold = cold().prove(&t, &public).unwrap();
+        cold().verify(&p_warm, &public).unwrap();
+        warm.verify(&p_cold, &public).unwrap();
+        warm.verify(&first, &public).unwrap();
+        let chunks = |p: &p3_batch_stark::BatchProof<_>| {
+            p.opened_values.instances.iter().map(|i| i.base_opened_values.quotient_chunks.len()).collect::<Vec<_>>()
+        };
+        assert_eq!(chunks(&p_warm), chunks(&p_cold), "m = {m}");
+        // a false claim is still rejected by a warm verifier
+        let mut wrong = public.clone();
+        wrong[0] += Val::ONE;
+        assert!(warm.verify(&p_warm, &wrong).is_err());
+    }
+}

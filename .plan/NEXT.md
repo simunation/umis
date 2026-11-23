@@ -30,11 +30,8 @@ Read `.plan/HANDOFF.md` first (how to build, test, machine quirks, conventions).
    - Verifier: recompute the digest of each payload's `cur` strips natively and compare with `d_faces`, then
      `keccak(payloads)` → `outputs_root`. Statement grows to 32 elements: update `stencil_chain`, the agg trees.
    - Tests: a payload that differs from the proven board, mutation-checked.
-2. **Plonky3 degree-inference cache** (needs the owner's OK: a local patch of `p3-batch-stark`, like the P3R one):
-   prover and verifier call `get_log_num_quotient_chunks_for_domain` per AIR per proof (LBM 32²: 75–94 ms prove,
-   ~70 ms verify). Patch: compute once in `ProverData`/`CommonData` (they already hold per-AIR data) and read it.
-   Soundness: the degree only sets the quotient chunk count; a wrong one breaks completeness, not soundness. Ask
-   first.
+2. ~~Plonky3 degree-inference cache~~ **done 2026-11-23** (owner OK): `vendor/p3-batch-stark-degree-cache.patch`,
+   LBM 32² 8-slot prove 134 → 60 ms per slot, verify 156 → 82 ms.
 3. **Aggregation over multi-slot leaves:** one layer-1 per commitment instead of per slot (`NativeLayer1` already
    works on any relation; the owner tree is per (relation, m)). LBM layer 1 costs 5.3 s per slot today (60 queries
    × 5.5k opened columns hashed in-circuit), so measure: a multi leaf's layer 1 grows with the opened width.

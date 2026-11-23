@@ -15,3 +15,12 @@
     `CommonDataTargets` (pinning a native batch leaf's verifying key, `docs/zk/aggregation.md`).
   - `p3r-periodic-layout.patch`: declare periodic columns in two `AirLayout`s (upstream bug; batch AIRs with
     periodic columns panic in `replay_batch_stark_transcript`).
+  - `p3r-common-data-cache-field.patch`: the two `CommonData` struct literals in P3R gain the new cache field
+    (needed by the p3-batch-stark patch below).
+- `p3-batch-stark` (gitignored, built by `scripts/vendor-p3r.sh` from the crates.io 0.9.0-rc.2 source) plus
+  `vendor/p3-batch-stark-degree-cache.patch` (owner-approved 2026-11-23), wired in through `[patch.crates-io]`:
+  `CommonData::quotient_degrees` memoizes each instance's log₂ quotient chunk count (keyed by instance, layout,
+  trace height, ZK flag), so the symbolic evaluation of the whole AIR runs once per setup instead of in every
+  prove and verify (LBM 32²: ~75–94 ms per prove, ~70 ms per verify). Proofs are unchanged: warm and cold setups
+  accept each other's proofs (`umis-stencil` `cached_quotient_degrees_interoperate_with_fresh_ones`). A wrong count
+  could only reject honest proofs, never accept a false one.

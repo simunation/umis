@@ -164,8 +164,9 @@ Measured per slot (P100, CPU, load about 8; `M=m RULE=… BATCH=1 bench`):
 
 Where the rest goes (LBM 32², m = 1, `TRACE=1`): the cells AIR's symbolic degree inference runs on every prove
 (~75–94 ms) and every verify (~70 ms) in p3-batch-stark 0.9.0-rc.2, which has no API to pass a cached degree; the
-cells quotient ~72–80 ms; the 32² zone fills 17 of its 64 trace rows (`MIN_HEIGHT`). Caching the degree needs a
-Plonky3 patch (not done: needs the owner's OK).
+cells quotient ~72–80 ms; the 32² zone fills 17 of its 64 trace rows (`MIN_HEIGHT`). Caching the degree needed a
+Plonky3 patch, done 2026-11-23 (`vendor/p3-batch-stark-degree-cache.patch`): warm LBM 32² prove 290 → 220 ms,
+8 slots per proof 134 → 60 ms per slot, verify 156 → 82 ms (load ≈ 4); the inference runs once per setup.
 
 ## 6d. Toy 3: lattice Boltzmann (`lbm.rs`)
 

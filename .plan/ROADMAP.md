@@ -30,7 +30,7 @@ patches), S4 generic stencil aggregation (`koalabear-agg`), multi-slot leaves (2
 
 **Next (in order; detailed plan in `.plan/NEXT.md`):**
 1. **S6b** `d_faces`: bind output payloads in-circuit, so the beacon checks `outputs_root` statelessly.
-2. Plonky3 degree-inference cache (owner OK needed; 25–45 % of leaf prove/verify).
+2. ~~Plonky3 degree-inference cache~~ done 2026-11-23 (LBM verify 156 → 82 ms, 8-slot prove 134 → 60 ms/slot).
 3. Aggregation over multi-slot leaves; cheaper layer 1 for wide leaves (LBM 5.3 s per slot).
 4. Small zones (`MIN_HEIGHT` padding), then the GPU batch leaf.
 

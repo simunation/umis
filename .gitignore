@@ -11,3 +11,4 @@
 /.demo
 /tmp
 /vendor/plonky3-recursion
+/vendor/p3-batch-stark

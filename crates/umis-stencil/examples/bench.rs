@@ -115,6 +115,8 @@ fn run_batch<R: Rule + Clone>(rule: R, l: &[usize], fill: impl Fn(usize) -> u32)
     let t = Instant::now();
     let (traces, public, _) = b.generate_multi(&exts);
     let t_gen = t.elapsed();
+    // Warm: a node keeps its setup, so the quotient degree cache is filled after one proof.
+    let _ = b.prove(&traces, &public).unwrap();
     let t = Instant::now();
     let proof = b.prove(&traces, &public).unwrap();
     let t_prove = t.elapsed();
