@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>umis Compute Atlas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Plan: an engineering field guide to where CPU goes. Ink-slate neutrals, one amber "heat" accent for compute cost,
+   a cool teal for data/network, semantic chips for GPU fit. Layout: controls → summary → system map + detail → timeline
+   → proof anatomy → scaling → optimisation ladder → Game of Life preview. */
+:root {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --ink: #18202b;
+  --muted: #5b6573;
+  --line: #d5dae1;
+  --accent: #c26a00;        /* compute heat */
+  --accent-soft: #fbe9d2;
+  --data: #0f7c86;          /* data / network */
+  --good: #23864a;
+  --warn: #a86a00;
+  --bad: #b33a3a;
+  --heat-0: #e9edf2;
+  --heat-1: #f6dcb6;
+  --heat-2: #f0b46b;
+  --heat-3: #e0832a;
+  --heat-4: #b8520a;
+  --font-display: "Sora", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f141b; --panel: #161d27; --ink: #e6ebf1; --muted: #98a3b3; --line: #2a3442;
+    --accent: #f0a14a; --accent-soft: #3a2a17; --data: #4fc3cc;
+    --good: #5cc287; --warn: #e6b04e; --bad: #ef7a7a;
+    --heat-0: #222b37; --heat-1: #4a3720; --heat-2: #7a4e1e; --heat-3: #b16a22; --heat-4: #e08a2c;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f141b; --panel: #161d27; --ink: #e6ebf1; --muted: #98a3b3; --line: #2a3442;
+  --accent: #f0a14a; --accent-soft: #3a2a17; --data: #4fc3cc;
+  --good: #5cc287; --warn: #e6b04e; --bad: #ef7a7a;
+  --heat-0: #222b37; --heat-1: #4a3720; --heat-2: #7a4e1e; --heat-3: #b16a22; --heat-4: #e08a2c;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5; }
+main { max-width: 1240px; margin: 0 auto; padding: 28px 20px 64px; display: grid; gap: 28px; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.2; }
+h1 { font-size: 30px; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 20px; font-weight: 600; }
+h3 { font-size: 16px; font-weight: 600; }
+p { margin: 0; max-width: 72ch; }
+.mono, .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+header.top { display: grid; gap: 10px; }
+.lede { color: var(--muted); font-size: 16px; }
+section { display: grid; gap: 14px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+
+/* controls */
+.controls { display: flex; flex-wrap: wrap; gap: 18px; align-items: end; }
+.ctl { display: grid; gap: 6px; }
+.ctl label, .ctl .lab { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+.seg button { font: inherit; font-size: 13px; padding: 7px 12px; border: 0; background: transparent; color: var(--ink); cursor: pointer; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+:root[data-theme="dark"] .seg button[aria-pressed="true"] { color: #1a1206; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .seg button[aria-pressed="true"] { color: #1a1206; } }
+button:focus-visible, select:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--data); outline-offset: 2px; }
+select, input[type="range"] { font: inherit; }
+select { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+.rangewrap { display: flex; gap: 10px; align-items: center; }
+.rangewrap output { font-family: var(--font-mono); min-width: 3ch; }
+
+/* tiles */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 4px; border-left: 4px solid var(--line); }
+.tile.hot { border-left-color: var(--accent); }
+.tile.data { border-left-color: var(--data); }
+.tile.bad { border-left-color: var(--bad); }
+.tile .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+.tile .v { font-family: var(--font-mono); font-size: 26px; font-weight: 500; }
+.tile .s { font-size: 13px; color: var(--muted); }
+
+/* map */
+.mapgrid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+@media (max-width: 980px) { .mapgrid { grid-template-columns: 1fr; } }
+.svgwrap { overflow-x: auto; }
+svg { display: block; max-width: 100%; height: auto; }
+#map { min-width: 760px; width: 100%; color: var(--ink); }
+.node { cursor: pointer; }
+.node rect.box { stroke: var(--line); stroke-width: 1.2; }
+.node:hover rect.box { stroke: var(--ink); }
+.node.sel rect.box { stroke: var(--data); stroke-width: 2.5; }
+.node.future rect.box { stroke-dasharray: 5 4; }
+.node text { fill: var(--ink); font-family: var(--font-body); }
+.node .t1 { font-size: 12.5px; font-weight: 600; }
+.node .t2 { font-size: 11px; font-family: var(--font-mono); fill: var(--ink); opacity: 0.8; }
+.edge path { fill: none; stroke: var(--muted); stroke-width: 1.4; }
+.edge.dashed path { stroke-dasharray: 5 4; }
+.edge.data path { stroke: var(--data); }
+.edge text { font-size: 10.5px; fill: var(--muted); font-family: var(--font-body); }
+.edge rect { fill: var(--bg); }
+.group rect { fill: none; stroke: var(--line); stroke-dasharray: 2 4; }
+.group text { font-size: 11px; fill: var(--muted); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; font-family: var(--font-body); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--muted); align-items: center; }
+.sw { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; margin-right: 5px; border: 1px solid var(--line); }
+
+/* detail */
+.detail { position: sticky; top: 12px; display: grid; gap: 12px; }
+.detail h3 { font-size: 18px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.chip.gpu-strong { color: var(--good); border-color: var(--good); }
+.chip.gpu-partial { color: var(--warn); border-color: var(--warn); }
+.chip.gpu-no { color: var(--muted); }
+.chip.gpu-notworth { color: var(--bad); border-color: var(--bad); }
+.chip.role { color: var(--data); border-color: var(--data); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13.5px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.detail ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13.5px; }
+.detail .why { font-size: 14px; }
+.code { font-family: var(--font-mono); font-size: 12px; color: var(--muted); word-break: break-word; }
+
+/* bars */
+.bar { display: flex; height: 34px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
+.bar div { display: flex; align-items: center; justify-content: center; font-size: 11.5px; color: #1a1206; font-family: var(--font-mono); white-space: nowrap; overflow: hidden; cursor: default; }
+.anat-legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+.anat-legend div { font-size: 13px; display: grid; gap: 2px; }
+.anat-legend b { font-weight: 600; }
+
+/* ladder */
+.ladder { display: grid; gap: 10px; }
+.lever { display: grid; grid-template-columns: 32px minmax(0, 1fr) 150px 120px; gap: 12px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; border-left: 4px solid var(--line); }
+.lever.cpu { border-left-color: var(--accent); }
+.lever.gpu { border-left-color: var(--good); }
+.lever.arch { border-left-color: var(--data); }
+.lever .rank { font-family: var(--font-mono); color: var(--muted); }
+.lever .gain { font-family: var(--font-mono); font-size: 13px; }
+.lever .eff { font-size: 12.5px; color: var(--muted); }
+.lever p { font-size: 13.5px; color: var(--muted); }
+@media (max-width: 720px) { .lever { grid-template-columns: 28px 1fr; } .lever .gain, .lever .eff { grid-column: 2; } }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* two col */
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 860px) { .two { grid-template-columns: 1fr; } }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+td.num { text-align: right; }
+.tablewrap { overflow-x: auto; }
+footer { color: var(--muted); font-size: 13px; display: grid; gap: 6px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <h1>Where the compute goes in umis</h1>
+    <p class="lede">The work that runs when a water simulation is split across zones and every zone slot is proven with a Plonky3 STARK. Each process shows what it does, why it exists, its CPU time and RAM, and whether it would gain from a GPU or from other changes. Click any process.</p>
+    <div class="controls panel">
+      <div class="ctl">
+        <span class="lab" id="lab-prof">Prover build</span>
+        <div class="seg" role="group" aria-labelledby="lab-prof" id="prof">
+          <button type="button" data-v="scalar" aria-pressed="true">Native, as shipped</button>
+          <button type="button" data-v="avx2" aria-pressed="false">Native + AVX2</button>
+          <button type="button" data-v="wasm" aria-pressed="false">Browser (wasm, 1 thread)</button>
+        </div>
+      </div>
+      <div class="ctl">
+        <label for="zones">Zones in the network</label>
+        <select id="zones">
+          <option value="4" selected>4 (genesis devnet)</option>
+          <option value="16">16</option>
+          <option value="64">64</option>
+          <option value="128">128 (lattice maximum)</option>
+        </select>
+      </div>
+      <div class="ctl">
+        <label for="members">Members per zone</label>
+        <div class="rangewrap"><input type="range" id="members" min="1" max="16" value="4"><output id="members-out" for="members">4</output></div>
+      </div>
+    </div>
+  </header>
+
+  <section aria-label="Summary">
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section>
+    <h2>System map: processes and how they connect</h2>
+    <p class="muted">Box colour shows each process's share of the network's CPU per 4-second beacon slot; darker means more. The arrows carry data. Dashed boxes and arrows are planned (roadmap phase 3).</p>
+    <div class="mapgrid">
+      <div class="panel svgwrap">
+        <svg id="map" viewBox="0 0 1120 640" role="img" aria-label="Process graph: zone execution feeds the prover pipeline, whose proof shares go to the delegate and then to the beacon chain, which verifies every proof."></svg>
+        <div class="legend" style="margin-top:10px">
+          <span><span class="sw" style="background:var(--heat-0)"></span>negligible</span>
+          <span><span class="sw" style="background:var(--heat-1)"></span></span>
+          <span><span class="sw" style="background:var(--heat-2)"></span></span>
+          <span><span class="sw" style="background:var(--heat-3)"></span></span>
+          <span><span class="sw" style="background:var(--heat-4)"></span>dominant CPU</span>
+          <span>● GPU fit: <b style="color:var(--good)">strong</b> · <b style="color:var(--warn)">partial</b> · <b style="color:var(--bad)">fits but not worth it</b> · <b>CPU-bound</b></span>
+        </div>
+      </div>
+      <aside class="panel detail" id="detail" aria-live="polite"></aside>
+    </div>
+  </section>
+
+  <section>
+    <h2>One beacon slot, second by second</h2>
+    <p class="muted">Zone 0 (S_z = 1 s, 4 slots per 4 s beacon slot), as seen by its members, its provers and the beacon validators. The simulation itself is the thin tick at the start of each slot.</p>
+    <div class="panel svgwrap"><svg id="timeline" viewBox="0 0 1120 330" role="img" aria-label="Timeline: each 1 s zone slot starts with a sub-millisecond simulation step, followed by hundreds of milliseconds of proving; the delegate and beacon validators verify in the next beacon slot."></svg></div>
+  </section>
+
+  <section>
+    <h2>Anatomy of one proof (n_loc = 16, 2<sup>14</sup> rows)</h2>
+    <div class="panel" style="display:grid;gap:14px">
+      <div class="bar" id="anat" role="img" aria-label="Stacked bar of prover time by phase"></div>
+      <div class="anat-legend" id="anat-legend"></div>
+      <p class="small muted" id="anat-note"></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>What happens as the network grows</h2>
+    <div class="two">
+      <div class="panel svgwrap"><svg id="scale" viewBox="0 0 560 330" role="img" aria-label="Per-node CPU per 4 s beacon slot versus number of zones. Beacon verification grows linearly and crosses the 4 s budget; proving per node stays flat; aggregation keeps verification flat."></svg></div>
+      <div class="panel" style="display:grid;gap:10px">
+        <h3>Why one line climbs</h3>
+        <p class="small">Every node applies every beacon block, so every node verifies <b>every</b> zone's proofs. The number of proofs grows with the number of zones, and per-node verification grows with it. Proving is spread across members, so each node's proving load stays roughly flat.</p>
+        <p class="small">With recursive aggregation, the beacon chain checks one proof per slot. The work moves to aggregator nodes, and aggregation itself is proving, so it parallelises and can run on a GPU.</p>
+        <div class="tablewrap"><table id="scaletab"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Optimisation ladder</h2>
+    <p class="muted">Ordered by impact per effort. Gains are measured where marked <span class="mono">[m]</span>; the rest are estimates <span class="mono">[e]</span>.</p>
+    <div class="filters seg" role="group" aria-label="Filter levers" id="lfilter">
+      <button type="button" data-v="all" aria-pressed="true">All</button>
+      <button type="button" data-v="cpu" aria-pressed="false">CPU and build</button>
+      <button type="button" data-v="gpu" aria-pressed="false">GPU</button>
+      <button type="button" data-v="arch" aria-pressed="false">Architecture</button>
+    </div>
+    <div class="ladder" id="ladder"></div>
+  </section>
+
+  <section>
+    <h2>Preview: the same recipe for Game of Life</h2>
+    <div class="two">
+      <div class="panel" style="display:grid;gap:10px">
+        <p class="small">A local rule per zone or per cell maps cleanly onto this pipeline. One cell is one bit; its next state is <span class="mono">rule[state][count of 8 neighbours]</span>. A Born/Survive rule is 18 bits, so each cell's rule id can sit in a preprocessed column, or be a public input when rules change at runtime.</p>
+        <ul class="small" style="margin:0;padding-left:18px;display:grid;gap:4px">
+          <li>No division or remainder, and no 16-bit range checks: the floor-division columns go away.</li>
+          <li>The count is a linear sum, so it needs no constraint degree. The next state is one LogUp lookup into a table of (rule, state, count, next).</li>
+          <li>Neighbour reads use the same memory bus, with 8 single-value reads instead of 6 reads of 4 values.</li>
+          <li>The simulation stays negligible; proving still dominates. The levers on this page apply unchanged.</li>
+        </ul>
+      </div>
+      <div class="panel tablewrap">
+        <table>
+          <thead><tr><th>Per cell, per step</th><th>water3d (today)</th><th>Game of Life [e]</th></tr></thead>
+          <tbody>
+            <tr><td>State values</td><td class="num">4 × i32</td><td class="num">1 bit</td></tr>
+            <tr><td>Neighbours read</td><td class="num">6 × 4 values</td><td class="num">8 × 1</td></tr>
+            <tr><td>Main trace columns</td><td class="num">46</td><td class="num">≈ 12–14</td></tr>
+            <tr><td>Lookups per row</td><td class="num">23</td><td class="num">≈ 10</td></tr>
+            <tr><td>Constraint degree</td><td class="num">≤ 3</td><td class="num">≤ 2</td></tr>
+            <tr><td>Prover cost vs today</td><td class="num">1×</td><td class="num">≈ 0.25–0.35×</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p><b>Sources.</b> Simulation step, keccak BMT, ed25519, prover time and peak RSS were measured on 2026-11-06 on a 24-core x86 machine shared with other jobs (load average ≈ 14), and the native vs AVX2 A/B runs were back to back. Prover-phase split from a profiling run (2 threads, scalar). Browser figures, and n_loc = 16 verification on an idle machine, are from <span class="mono">docs/ARCHITECTURE.md</span>. Aggregation timing is from the Plonky3-recursion book (Apple M4 Pro). Details are in <span class="mono">docs/zk/</span> in the repo.</p>
+    <p>The network model assumes 2.75 proof leaves per zone per beacon slot (the genesis mix of S_z = 1, 2, 1, 4 s) and that every node applies every beacon block.</p>
+  </footer>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  // ---------- measured / sourced constants ----------
+  const PROF = {
+    scalar: { label: "native, as shipped", prove: 400, verify: 11, setup: 180, step: 0.25, threads: 2,
+              note: "2 prover threads, scalar field arithmetic (AVX2 packing compiled out). A/B measured 355–419 ms; 690 ms under heavy machine load." },
+    avx2:   { label: "native + AVX2", prove: 90, verify: 8, setup: 30, step: 0.25, threads: 2,
+              note: "Same code built with -C target-cpu=native: Plonky3's packed KoalaBear and Poseidon2 turn on. A/B measured 89–92 ms; proofs stay byte-identical." },
+    wasm:   { label: "browser wasm", prove: 682, verify: 11, setup: 300, step: 0.5, threads: 1,
+              note: "Single-threaded Web Worker. Plonky3 has no wasm SIMD path for KoalaBear, so the arithmetic is scalar (setup and step times are estimates)." }
+  };
+  const LEAVES_PER_ZONE = 2.75;         // genesis mix: k_z = 4, 2, 4, 1
+  const PROOF_KB = 261, STATE_KB = 64;
+  const PHASES = [ // share of prover time (profiling run, 2 threads scalar; ~467 ms total)
+    { k: "Poseidon2 Merkle commits", f: 0.51, c: "var(--heat-4)", d: "Hashing every row of the main trace, the LogUp trace and the quotient into Merkle trees (88 + 112 + 40 ms). The largest single cost, and the one AVX2 and GPUs speed up most." },
+    { k: "Quotient evaluation", f: 0.23, c: "var(--heat-3)", d: "Evaluating all constraints at every point of the 2× extended domain and dividing by the vanishing polynomial. Embarrassingly parallel." },
+    { k: "Trace and LogUp generation", f: 0.11, c: "var(--heat-2)", d: "Re-running the stencil to fill 46 witness columns, then building 13 extension-field LogUp fraction columns (batch inversions)." },
+    { k: "FRI folding and queries", f: 0.08, c: "var(--heat-1)", d: "14 binary folding rounds, each committed, then 100 queries with Merkle openings. Mostly hashing." },
+    { k: "LDE / NTT", f: 0.07, c: "var(--heat-1)", d: "Interpolating each column and evaluating it on the 2^15-point domain (blowup 2)." }
+  ];
+
+  // ---------- process catalogue ----------
+  // cost(ctx) returns { perOp ms, opsPerSlot (network-wide), runs: who }
+  const P = [
+    { id: "inputs", g: "zone", x: 40, y: 60, title: "Input checks", sub: "halo faces from neighbours",
+      role: "minter + every member", gpu: "no",
+      what: "For each of up to 6 face links: checks the producer's signed header, hashes the 4 KB face and checks its inclusion proof under the producer's outputs_root, then checks causality and monotonicity.",
+      why: "Neighbours' outputs are used optimistically, before they are proven. These cheap checks stop forged or out-of-order inputs at once; the deeper checks (proof, producer's committed chain) run in parallel.",
+      cost: c => ({ per: 6 * 0.1, ops: c.leaves * (1 + c.m) }),
+      ram: "≈ 30 KB (6 faces + proofs)",
+      gpuNote: "Signature checks and small hashes. Latency-bound and tiny, so a GPU doesn't help.",
+      speed: ["Batch ed25519 verification (about 2× fewer cycles per signature).", "Cache each producer header once per producer block, instead of once per consumer."],
+      code: "umis-protocol/src/zone/engine.rs (input selection), exec.rs" },
+    { id: "step", g: "zone", x: 40, y: 165, title: "Stencil step", sub: "the actual simulation",
+      role: "minter (rank 0)", gpu: "notworth",
+      what: "Runs k_sub = 4 substeps of the 7-point integer stencil over 4096 cells × 4 values: about 460 k multiply-adds per zone slot, entirely in i64 integer arithmetic.",
+      why: "This is the useful work. Everything else on this page exists to make it trustworthy across untrusted peers.",
+      cost: c => ({ per: c.p.step, ops: c.leaves }),
+      ram: "≈ 1 MB (2 × 64 KiB state + per-cell coefficients ≈ 0.7 MB)",
+      gpuNote: "Perfectly data-parallel, but a whole zone slot takes 0.25 ms, less than a GPU kernel launch plus transfer. It only becomes worth it at millions of cells per zone.",
+      speed: ["Vectorise the i32 inner loop (it is scalar today); this matters only for much larger zones.", "For Game of Life, use bit-sliced boards: 64 cells per machine word."],
+      code: "task-water3d/src/stencil.rs: substep(); lib.rs: Water3d::step" },
+    { id: "roots", g: "zone", x: 40, y: 270, title: "State & output roots", sub: "keccak BMT, Swarm-compatible",
+      role: "minter + every member", gpu: "partial",
+      what: "Hashes the 64 KiB state into a bmt-js/Swarm file address (≈ 2,100 keccak calls) and the 6 output faces into outputs_root; then signs the block header.",
+      why: "Roots identify states in blocks, commitments and Swarm. The STARK doesn't prove these hashes, so every verifier recomputes them from the full blobs.",
+      cost: c => ({ per: 0.8 + 0.36, ops: c.leaves * (1 + c.m) }),
+      ram: "≈ 70 KB",
+      gpuNote: "Keccak trees parallelise, but 64 KiB is too small to amortise a GPU. 4-way AVX2 keccak on the CPU is the better lever.",
+      speed: ["SIMD (multi-lane) keccak: about 2–4×.", "Poseidon2 roots computed inside the proof (phase 2), so verifiers no longer need the blob."],
+      code: "umis-core/src/bmt.rs" },
+    { id: "validate", g: "zone", x: 40, y: 400, title: "Member re-execution", sub: "every member, every block",
+      role: "every zone member + full nodes", gpu: "notworth",
+      what: "Each member re-runs the stencil step, recomputes the roots, checks the minter's signature and rank, and compares. A mismatch becomes slashable InvalidTransition evidence.",
+      why: "In mock mode this is the only validity check. Under Plonky3 it is still kept: proofs serve beacon validators and consumers, while members catch faults earliest by re-executing. It also currently masks the non-canonical state-blob bug.",
+      cost: c => ({ per: c.p.step + 0.8 + 0.36 + 0.6 + 0.03, ops: c.leaves * c.m }),
+      ram: "≈ 1 MB per zone followed",
+      gpuNote: "Same as the stencil step: too small to be worth it.",
+      speed: ["Cheap enough to keep. Dropping it is only safe after the canonical-encoding fix (INV-CANON-1) and aggregation."],
+      code: "umis-protocol/src/node/duties.rs:204, zone/engine.rs:394" },
+
+    { id: "job", g: "prove", x: 330, y: 40, title: "ProveJob queue", sub: "deadline-ordered, 1 job at a time",
+      role: "priority prover / delegate", gpu: "no",
+      what: "Wraps each accepted block slot into a job (full copy of the previous state + inputs). Jobs for pooled commitments run first, then the canonical chain by earliest slot; stale jobs are dropped.",
+      why: "Proving takes hundreds of milliseconds and must not block the event loop; without the bounded queue, re-proving after forks used to blow the proof deadline L.",
+      cost: c => ({ per: 0.05, ops: c.leaves }),
+      ram: "≈ 100 KB per queued job",
+      gpuNote: "Scheduling only.",
+      speed: ["Feed several queued jobs to one GPU batch instead of one-at-a-time, the precondition for GPU efficiency."],
+      code: "umis-protocol/src/node/duties.rs:311 pump_jobs; umis-node/src/lib.rs ThreadExecutor; umis-web/src/prover.rs" },
+    { id: "trace", g: "prove", x: 330, y: 125, title: "Trace generation", sub: "16,384 rows × 46 columns", phase: 2,
+      role: "prover", gpu: "partial",
+      what: "Re-runs the stencil, writing every intermediate value, neighbour, quotient, remainder and byte limb as field elements, plus the LogUp multiplicities and fraction columns.",
+      why: "A STARK proves facts about a table of values. This turns the 0.25 ms computation into a 3 MB witness, plus about 3.6 MB of LogUp columns.",
+      cost: c => ({ per: c.p.prove * PHASES[2].f, ops: c.leaves }),
+      ram: "≈ 3 MB main + 3.6 MB LogUp",
+      gpuNote: "Can be done on the GPU if the rest of the prover lives there (avoids a host-to-device copy). On its own, not a big win.",
+      speed: ["Merge range checks (14-bit limb against ADDR): 8 fraction columns → 7, two fewer tables.", "LogUp-GKR (Plonky3 multi-stark) removes the ~56 committed LogUp columns."],
+      code: "task-water3d/src/air.rs:348 generate_trace" },
+    { id: "lde", g: "prove", x: 330, y: 210, title: "LDE / NTT", sub: "2× blowup to 2^15 points", phase: 4,
+      role: "prover", gpu: "strong",
+      what: "Interpolates every column and re-evaluates it on a domain twice as large (Reed–Solomon encoding), for 134 base columns including preprocessed and LogUp.",
+      why: "The low-degree extension is what makes cheating detectable by sampling: a wrong trace stops being a low-degree polynomial almost everywhere.",
+      cost: c => ({ per: c.p.prove * PHASES[4].f, ops: c.leaves }),
+      ram: "≈ 17 MB extended columns",
+      gpuNote: "A textbook GPU kernel. At 2^15 points per column it is small, so batch many columns and proofs per launch.",
+      speed: ["Larger traces per proof (one proof per commitment) improve GPU and SIMD efficiency."],
+      code: "p3-dft Radix2DitParallel (umis-stark/src/config.rs)" },
+    { id: "merkle", g: "prove", x: 330, y: 295, title: "Poseidon2 Merkle commits", sub: "≈ half of all proving", phase: 0,
+      role: "prover", gpu: "strong",
+      what: "Hashes each row of the extended main trace, the LogUp trace and the quotient chunks into Merkle trees with Poseidon2 (width 16), and later opens 100 query paths.",
+      why: "Commitments make the prover fix its tables before seeing the random challenges (Fiat–Shamir). Poseidon2 is used because a future recursive verifier must recompute these hashes inside a circuit.",
+      cost: c => ({ per: c.p.prove * PHASES[0].f, ops: c.leaves }),
+      ram: "≈ 4 MB trees",
+      gpuNote: "Strongest GPU candidate: millions of independent permutations. In browsers WebGPU could do it (experimental). On the CPU, AVX2/AVX-512 packing already gives about 4×.",
+      speed: ["Turn on AVX2 in native builds: ≈4× for the whole prover [m].", "wasm SIMD128 packing for KoalaBear (not in Plonky3 yet) for browsers.", "A Keccak/BLAKE3 Merkle tree for browser-only leaves (has wasm SIMD), at the cost of more expensive recursion."],
+      code: "p3-merkle-tree MerkleTreeMmcs; config.rs Poseidon2KoalaBear<16>" },
+    { id: "quotient", g: "prove", x: 330, y: 380, title: "Quotient evaluation", sub: "all constraints on 2^15 points", phase: 1,
+      role: "prover", gpu: "strong",
+      what: "Evaluates every AIR and LogUp constraint at each point of the extended domain, combines them with a random challenge and divides by the vanishing polynomial.",
+      why: "This is where 'the stencil identity holds on every row' becomes one polynomial the verifier can spot-check.",
+      cost: c => ({ per: c.p.prove * PHASES[1].f, ops: c.leaves }),
+      ram: "≈ 4 MB",
+      gpuNote: "Embarrassingly parallel arithmetic over a 4-degree extension field: an excellent GPU fit.",
+      speed: ["Fewer LogUp columns means fewer constraints to evaluate.", "AVX2 packing (already in Plonky3, just not enabled)."],
+      code: "p3-batch-stark prover; air.rs:226 eval" },
+    { id: "fri", g: "prove", x: 330, y: 465, title: "FRI folding + queries", sub: "100 queries, 16-bit grinding", phase: 3,
+      role: "prover", gpu: "partial",
+      what: "Repeatedly halves the committed polynomial (14 rounds, each Merkle-committed), grinds a 16-bit proof-of-work, and answers 100 random queries with Merkle paths.",
+      why: "FRI proves 'these committed values are close to a low-degree polynomial'. Its query count and blowup set the security level, about 66 proven bits today.",
+      cost: c => ({ per: c.p.prove * PHASES[3].f, ops: c.leaves }),
+      ram: "≈ 2 MB",
+      gpuNote: "Folding parallelises; the query phase is light and sequential. GPU provers usually keep this on the GPU to avoid transfers.",
+      speed: ["Arity 4–8 and a final polynomial of 8–32: 15–20% smaller proofs.", "Blowup 4–8 with fewer queries: smaller proofs and more proven security, but more hashing."],
+      code: "p3-fri; umis-stark/src/config.rs FriPreset" },
+    { id: "setup", g: "prove", x: 330, y: 560, title: "Zone setup (cached)", sub: "preprocessed commitment, once per zone",
+      role: "every prover and verifier, once per zone", gpu: "strong",
+      what: "Builds the zone's 32 preprocessed columns (stencil weights, forcing, selectors, range tables) from the genesis seed and commits to them. The result acts as the verifying key.",
+      why: "The weights come from on-chain parameters, so verifiers rebuild them rather than trust the prover.",
+      cost: c => ({ per: c.p.setup, ops: c.z / 100 }),
+      ram: "≈ 8 MiB per zone kept in memory (prover data)",
+      gpuNote: "Same kernels as proving, but it runs once per zone.",
+      speed: ["Cache only the verifier part (CommonData) on verifier-only nodes: a few KB instead of about 8 MiB per zone."],
+      code: "task-water3d/src/air.rs:456 setup" },
+
+    { id: "share", g: "verify", x: 640, y: 110, title: "Share verification", sub: "on the event loop", vfy: true,
+      role: "every member of the zone", gpu: "no",
+      what: "Each ProofShare gossiped on zone/<z>/proof and zone/<z>/out is verified by the zone's members before pooling (single-slot blocks only; otherwise it is stored unverified).",
+      why: "Members want to know early whether a slot is proven. Today this blocks the node's event loop for each verify, and unverified shares can stall commitments (DoS).",
+      cost: c => ({ per: c.p.verify, ops: c.leaves * c.m }),
+      ram: "≈ 0.5 MB per share (proof + states)",
+      gpuNote: "A verify is ≈ 10 ms of latency-bound hashing and small arithmetic; nothing to batch on a GPU.",
+      speed: ["Move it off the event loop.", "Memoise failed verifications.", "Stop gossiping proofs on /out; consumers never use them (≈ 2× less proof traffic)."],
+      code: "umis-protocol/src/zone/engine.rs:670 on_share" },
+    { id: "delegate", g: "verify", x: 640, y: 250, title: "Delegate: proof commitment", sub: "collects shares, proves missing ones",
+      role: "commit delegate (one per zone per beacon slot)", gpu: "no",
+      what: "At B/8 into the next beacon slot, collects the zone's shares, proves any missing slots itself, hashes every proof into a leaf, and ships the ProofCommitment with LeafData (the state at every leaf boundary plus inputs).",
+      why: "The beacon chain needs one root per zone per slot. Because the STARK doesn't prove the keccak roots, it also needs every full state to re-check them.",
+      cost: c => ({ per: LEAVES_PER_ZONE * 3.5, ops: c.z }),
+      ram: "≈ 1 MB per commitment (proofs + LeafData)",
+      gpuNote: "Bookkeeping and hashing proof bytes.",
+      speed: ["One proof per commitment instead of per slot (phase 2): fewer, larger proofs.", "Poseidon2 state commitments in-circuit: LeafData (64 KiB per leaf) goes away."],
+      code: "umis-protocol/src/node/duties.rs:622 build_proof_commitment" },
+    { id: "agg", g: "verify", x: 640, y: 420, title: "Recursive aggregation", sub: "planned: Plonky3-recursion", future: true,
+      role: "aggregator nodes (native, ideally GPU)", gpu: "strong",
+      what: "Verifies two proofs inside a new proof, in a 2-to-1 tree, until one proof covers all zones for the slot.",
+      why: "It is the only way to stop the beacon chain's verification and bandwidth from growing with the number of zones.",
+      cost: c => ({ per: 130, ops: c.agg ? Math.max(c.leaves - 1, 0) : 0 }),
+      ram: "≈ 100s of MB per aggregator [e]",
+      gpuNote: "Aggregation is proving, so it gains from GPUs as much as the leaf prover does.",
+      speed: ["WHIR on inner layers (fast in-circuit verification), FRI outermost.", "Recursion forbids proof-of-work at the batch, lookup and OOD steps and periodic per-claim data; plan phase 2 accordingly."],
+      code: "tmp/zk-research/src/p3r (Plonky3-recursion)" },
+
+    { id: "bverify", g: "beacon", x: 900, y: 150, title: "Verify every leaf", sub: "every node, every proof", vfy: true,
+      role: "every node (beacon state transition)", gpu: "no",
+      what: "Before accepting a ProofCommitment, checks that the leaves chain, recomputes the keccak roots from LeafData and verifies every STARK. In parallel natively, sequential in browsers, and memoised.",
+      why: "The beacon state must only mark commitments proven if they are. Because every node applies every block, every node pays for every zone.",
+      cost: c => ({ per: c.agg ? 0 : c.p.verify + 2, ops: c.agg ? 0 : c.leaves * c.n, aggPer: c.p.verify + 2, aggOps: c.agg ? c.n : 0 }),
+      ram: "≈ 8 MiB × zones of cached setups; ≈ 4 MB per beacon block",
+      gpuNote: "Not a GPU problem; it is an O(zones) problem. Aggregation turns it into one verify per slot.",
+      speed: ["Recursive aggregation: per-node cost drops from O(zones) to O(1).", "Cache only verifier data per zone (not full prover data)."],
+      code: "umis-protocol/src/beacon/state.rs:987 apply_proof_commitment; ctx.rs memo" },
+    { id: "bapply", g: "beacon", x: 900, y: 290, title: "Block build & apply", sub: "fork choice, settlement, rollbacks",
+      role: "every node; proposer builds", gpu: "no",
+      what: "Applies transactions, commitments, cross-link checks and settlement (a greatest fixed point). Block building re-applies the body once per transaction.",
+      why: "The deterministic beacon state transition is the control plane: time, randomness, membership, stake, rollbacks.",
+      cost: c => ({ per: 50 * Math.max(1, c.z / 4) * 0.5, ops: c.n }),
+      ram: "≈ tens of MB of beacon state",
+      gpuNote: "Branchy control logic.",
+      speed: ["Remove the quadratic re-apply in block building.", "Incremental settlement instead of a full fixed-point pass."],
+      code: "umis-protocol/src/beacon/state.rs, node/duties.rs:495" },
+    { id: "net", g: "beacon", x: 900, y: 440, title: "Gossip & sync", sub: "libp2p: QUIC, WebRTC, WebSocket", data: true,
+      role: "every node", gpu: "no",
+      what: "Moves blocks, attachments, proof shares (twice), proof commitments and beacon blocks; serves sync requests in 4 KiB pieces over WebRTC.",
+      why: "Zones exchange faces directly. Proofs and states travel to the beacon chain through gossip.",
+      cost: c => ({ per: 0.02 * (c.bytesMB), ops: c.n }),
+      ram: "up to 32 MiB per gossip message; 8 MiB per sync batch",
+      gpuNote: "The cost here is bandwidth.",
+      speed: ["Aggregation plus in-circuit state roots cut beacon bytes from O(zones × 330 KB) to about 200 KB per slot.", "Don't send proofs on consumer topics."],
+      code: "umis-net/src/behaviour.rs, codec.rs; umis-protocol/src/node/sync.rs" }
+  ];
+  const BY = Object.fromEntries(P.map(p => [p.id, p]));
+
+  const EDGES = [
+    ["inputs", "step", "halos 6 × 4 KB", "v"],
+    ["step", "roots", "X(j+1) 64 KiB", "v"],
+    ["roots", "validate", "ZoneBlock + attachments", "v", "data"],
+    ["roots", "job", "X(j) + inputs", "h"],
+    ["job", "trace", "", "v"],
+    ["trace", "lde", "trace 3 MB", "v"],
+    ["lde", "merkle", "LDE 17 MB", "v"],
+    ["merkle", "quotient", "challenges", "v"],
+    ["quotient", "fri", "composition", "v"],
+    ["setup", "merkle", "", "u", "dashed"],
+    ["fri", "share", "ProofShare 261 KB", "h", "data"],
+    ["share", "delegate", "pooled shares", "v"],
+    ["delegate", "bverify", "ProofCommitment + LeafData", "h", "data"],
+    ["bverify", "bapply", "proven", "v"],
+    ["delegate", "agg", "leaf proofs", "v", "dashed"],
+    ["agg", "bverify", "1 proof / slot", "h", "dashed"],
+    ["bapply", "net", "beacon block", "v", "data"]
+  ];
+
+  // ---------- state ----------
+  const S = { prof: "scalar", z: 4, m: 4, sel: "merkle", agg: false, filter: "all" };
+  try { const saved = JSON.parse(localStorage.getItem("umis-atlas") || "{}"); Object.assign(S, saved); } catch (e) { /* no storage */ }
+  function save() { try { localStorage.setItem("umis-atlas", JSON.stringify({ prof: S.prof, z: S.z, m: S.m })); } catch (e) { /* ignore */ } }
+
+  function ctx(over) {
+    const z = (over && over.z) || S.z, m = S.m;
+    const p = PROF[(over && over.prof) || S.prof];
+    const leaves = LEAVES_PER_ZONE * z;
+    const n = z * m;
+    const agg = !!(over && over.agg);
+    const bytesMB = agg ? 0.4 : (leaves * PROOF_KB + (leaves + z) * STATE_KB) / 1024;
+    return { z, m, p, leaves, n, agg, bytesMB };
+  }
+  function costOf(proc, c) {
+    const r = proc.cost(c);
+    let total = r.per * r.ops;
+    if (r.aggOps) total += r.aggPer * r.aggOps;
+    return { per: r.per || r.aggPer || 0, ops: r.ops || r.aggOps || 0, total };
+  }
+
+  const fmtMs = v => v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 0 : 1) + " s" : v >= 10 ? Math.round(v) + " ms" : v >= 1 ? v.toFixed(1) + " ms" : v >= 0.01 ? (v * 1000).toFixed(0) + " µs" : "≈ 0";
+  const fmtN = v => v >= 100 ? Math.round(v).toLocaleString("en-US") : v >= 10 ? v.toFixed(0) : v.toFixed(1);
+  const el = (tag, attrs, kids) => { const e = document.createElementNS("http://www.w3.org/2000/svg", tag); for (const k in attrs) e.setAttribute(k, attrs[k]); (kids || []).forEach(k => e.appendChild(k)); return e; };
+  const txt = (s, attrs) => { const t = el("text", attrs); t.textContent = s; return t; };
+
+  // ---------- tiles ----------
+  function renderTiles() {
+    const c = ctx();
+    const sim = c.leaves * c.p.step;
+    const prove = c.leaves * c.p.prove * c.p.threads;
+    const verifyPerNode = c.leaves * (c.p.verify + 2);
+    const ratio = c.p.prove * c.p.threads / c.p.step;
+    const t = [
+      ["hot", "Proving vs simulating", Math.round(ratio).toLocaleString("en-US") + "×", "CPU time to prove one zone slot ÷ time to compute it (" + fmtMs(c.p.prove) + " × " + c.p.threads + " threads vs " + fmtMs(c.p.step) + ")"],
+      ["hot", "Network proving per beacon slot", fmtMs(prove) + " CPU", fmtN(c.leaves) + " proofs; the simulation they prove: " + fmtMs(sim)],
+      [verifyPerNode > 4000 ? "bad" : "", "Beacon verification per node", fmtMs(verifyPerNode), "every node verifies all " + fmtN(c.leaves) + " leaves" + (verifyPerNode > 4000 ? ", more than the 4 s slot on one core" : "") ],
+      ["data", "Beacon block size", c.bytesMB.toFixed(1) + " MB", "per 4 s: " + fmtN(c.leaves) + " × 261 KB proofs + " + fmtN(c.leaves + c.z) + " × 64 KiB states; proofs cross gossip about 4×"]
+    ];
+    document.getElementById("tiles").innerHTML = t.map(([cls, k, v, s]) =>
+      `<div class="tile ${cls}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${s}</span></div>`).join("");
+  }
+
+  // ---------- map ----------
+  const W = 190, H = 56;
+  function heatColor(share) {
+    const lv = share > 0.3 ? 4 : share > 0.1 ? 3 : share > 0.02 ? 2 : share > 0.002 ? 1 : 0;
+    return `var(--heat-${lv})`;
+  }
+  const GPU_LBL = { strong: "GPU: strong fit", partial: "GPU: partial", notworth: "GPU: fits, not worth it", no: "CPU-bound / not GPU" };
+  const GPU_COL = { strong: "var(--good)", partial: "var(--warn)", notworth: "var(--bad)", no: "var(--muted)" };
+
+  function anchor(n, side) {
+    if (side === "r") return [n.x + W, n.y + H / 2];
+    if (side === "l") return [n.x, n.y + H / 2];
+    if (side === "b") return [n.x + W / 2, n.y + H];
+    return [n.x + W / 2, n.y];
+  }
+  function renderMap() {
+    const svg = document.getElementById("map");
+    svg.innerHTML = "";
+    const defs = el("defs", {}, [
+      el("marker", { id: "ah", viewBox: "0 0 10 10", refX: "9", refY: "5", markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse" }, [el("path", { d: "M0,0 L10,5 L0,10 z", fill: "currentColor" })])
+    ]);
+    svg.appendChild(defs);
+    const groups = [
+      ["Zone execution · per zone slot", 22, 30, 226, 446],
+      ["Prover · native pool (2 threads) or browser worker", 312, 14, 226, 612],
+      ["Commit path", 622, 84, 226, 412],
+      ["Beacon chain · every node", 882, 124, 226, 392]
+    ];
+    groups.forEach(([label, x, y, w, h]) => {
+      svg.appendChild(el("g", { class: "group" }, [el("rect", { x, y, width: w, height: h, rx: 10 }), txt(label, { x: x + 10, y: y - 6 })]));
+    });
+    const c = ctx();
+    const totals = P.map(p => costOf(p, c).total);
+    const sum = totals.reduce((a, b) => a + b, 0) || 1;
+
+    // edges
+    EDGES.forEach(([a, b, label, dir, kind]) => {
+      const A = BY[a], B = BY[b];
+      let p1, p2, d;
+      if (dir === "h") {
+        p1 = anchor(A, "r"); p2 = anchor(B, "l");
+        const mx = (p1[0] + p2[0]) / 2;
+        d = `M${p1[0]},${p1[1]} C${mx},${p1[1]} ${mx},${p2[1]} ${p2[0] - 2},${p2[1]}`;
+      } else if (dir === "u") {
+        p1 = anchor(A, "r"); p2 = anchor(B, "r");
+        const bx = Math.max(p1[0], p2[0]) + 24;
+        d = `M${p1[0]},${p1[1]} C${bx},${p1[1]} ${bx},${p2[1]} ${p2[0] + 2},${p2[1]}`;
+      } else {
+        p1 = anchor(A, "b"); p2 = anchor(B, "t");
+        if (A.g !== B.g) { p1 = anchor(A, "b"); }
+        d = `M${p1[0]},${p1[1]} L${p2[0]},${p2[1] - 2}`;
+      }
+      const g = el("g", { class: "edge" + (kind ? " " + kind : "") });
+      const path = el("path", { d, "marker-end": "url(#ah)" });
+      g.style.color = kind === "data" ? "var(--data)" : "var(--muted)";
+      g.appendChild(path);
+      if (label) {
+        let lx = (p1[0] + p2[0]) / 2, ly = (p1[1] + p2[1]) / 2;
+        if (dir === "v") { lx += 8; }
+        if (dir === "u") { lx = Math.max(p1[0], p2[0]) + 26; }
+        const anchorTxt = dir === "v" || dir === "u" ? "start" : "middle";
+        const w = label.length * 5.6 + 8;
+        const rx = anchorTxt === "start" ? lx - 3 : lx - w / 2;
+        g.appendChild(el("rect", { x: rx, y: ly - 9, width: w, height: 14, rx: 3 }));
+        g.appendChild(txt(label, { x: lx + (anchorTxt === "start" ? 1 : 0), y: ly + 2, "text-anchor": anchorTxt }));
+      }
+      svg.appendChild(g);
+    });
+    // special feedback edge: beacon anchors → zone (drawn along top)
+    const fb = el("g", { class: "edge dashed" });
+    fb.style.color = "var(--muted)";
+    fb.appendChild(el("path", { d: `M${BY.bapply.x + W / 2},${BY.bapply.y} L${BY.bapply.x + W / 2},${BY.bverify.y + H + 4}`, stroke: "none" }));
+    fb.appendChild(el("path", { d: `M${BY.bverify.x + W / 2},${BY.bverify.y} C${BY.bverify.x + W / 2},4 ${BY.inputs.x + W / 2},4 ${BY.inputs.x + W / 2},${BY.inputs.y - 2}`, "marker-end": "url(#ah)" }));
+    fb.appendChild(el("rect", { x: 742, y: 1, width: 236, height: 14, rx: 3 }));
+    fb.appendChild(txt("anchor: seed, members, rollbacks (D = 2 slots later)", { x: 860, y: 12, "text-anchor": "middle" }));
+    svg.appendChild(fb);
+
+    // nodes
+    P.forEach((p, i) => {
+      const share = totals[i] / sum;
+      const cc = costOf(p, c);
+      const g = el("g", { class: "node" + (p.future ? " future" : "") + (S.sel === p.id ? " sel" : ""), tabindex: "0", role: "button", "aria-label": p.title + ": " + fmtMs(cc.total) + " CPU per beacon slot" });
+      g.appendChild(el("rect", { class: "box", x: p.x, y: p.y, width: W, height: H, rx: 8, fill: p.future && !S.agg ? "var(--panel)" : heatColor(share) }));
+      g.appendChild(txt(p.title, { class: "t1", x: p.x + 12, y: p.y + 22 }));
+      const metric = cc.ops ? `${fmtMs(cc.per)} × ${fmtN(cc.ops)}/slot` : (p.future ? "off: toggle in detail" : p.sub);
+      g.appendChild(txt(metric, { class: "t2", x: p.x + 12, y: p.y + 41 }));
+      g.appendChild(el("circle", { cx: p.x + W - 12, cy: p.y + 13, r: 5, fill: GPU_COL[p.gpu] }));
+      g.addEventListener("click", () => { S.sel = p.id; renderMap(); renderDetail(); });
+      g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); S.sel = p.id; renderMap(); renderDetail(); } });
+      svg.appendChild(g);
+    });
+  }
+
+  function renderDetail() {
+    const p = BY[S.sel];
+    const c = ctx({ agg: S.agg });
+    const cc = costOf(p, c);
+    const sumAll = P.reduce((a, q) => a + costOf(q, c).total, 0) || 1;
+    const share = (cc.total / sumAll * 100);
+    const phaseInfo = p.phase !== undefined ? `<p class="small muted">${PHASES[p.phase].d}</p>` : "";
+    document.getElementById("detail").innerHTML = `
+      <div class="chips"><span class="chip role">${p.role}</span><span class="chip gpu-${p.gpu}">${GPU_LBL[p.gpu]}</span>${p.future ? '<span class="chip">planned</span>' : ""}</div>
+      <h3>${p.title}</h3>
+      <p class="why">${p.what}</p>
+      <dl class="kv">
+        <dt>Per execution</dt><dd>${cc.per ? fmtMs(cc.per) : "–"}</dd>
+        <dt>Executions / 4 s slot</dt><dd>${cc.ops ? fmtN(cc.ops) + " (network)" : "–"}</dd>
+        <dt>CPU / 4 s slot</dt><dd>${fmtMs(cc.total)} · ${share.toFixed(share < 1 ? 2 : 0)}% of all</dd>
+        <dt>RAM</dt><dd>${p.ram}</dd>
+        <dt>Build</dt><dd>${PROF[S.prof].label}</dd>
+      </dl>
+      <div><h3 style="font-size:14px;margin-bottom:4px">Why it exists</h3><p class="small">${p.why}</p></div>
+      <div><h3 style="font-size:14px;margin-bottom:4px">GPU</h3><p class="small">${p.gpuNote}</p></div>
+      <div><h3 style="font-size:14px;margin-bottom:4px">Other speed-ups</h3><ul>${p.speed.map(s => `<li>${s}</li>`).join("")}</ul></div>
+      ${phaseInfo}
+      ${p.id === "agg" || p.id === "bverify" ? `<label class="small" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="aggt" ${S.agg ? "checked" : ""}> Show the network with aggregation on</label>` : ""}
+      <p class="code">${p.code}</p>`;
+    const t = document.getElementById("aggt");
+    if (t) t.addEventListener("change", e => { S.agg = e.target.checked; renderDetail(); renderMap(); });
+  }
+
+  // ---------- timeline ----------
+  function renderTimeline() {
+    const svg = document.getElementById("timeline");
+    svg.innerHTML = "";
+    const p = PROF[S.prof];
+    const x0 = 170, x1 = 1100, T = 8000; // ms, two beacon slots
+    const X = ms => x0 + (x1 - x0) * ms / T;
+    const lanes = ["Minter (sim step)", "Members (re-execute)", "Priority prover", "Members (verify share)", "Delegate", "Beacon validators"];
+    const laneY = i => 40 + i * 44;
+    svg.appendChild(el("defs", {}, []));
+    // axis
+    for (let s = 0; s <= 8; s++) {
+      svg.appendChild(el("line", { x1: X(s * 1000), x2: X(s * 1000), y1: 26, y2: 300, stroke: s % 4 === 0 ? "var(--ink)" : "var(--line)", "stroke-width": s % 4 === 0 ? 1.2 : 1 }));
+      svg.appendChild(txt(s + " s", { x: X(s * 1000), y: 318, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)", "font-family": "var(--font-mono)" }));
+    }
+    svg.appendChild(txt("beacon slot e", { x: X(2000), y: 18, "text-anchor": "middle", "font-size": 11.5, fill: "var(--muted)", "font-weight": 600 }));
+    svg.appendChild(txt("beacon slot e + 1", { x: X(6000), y: 18, "text-anchor": "middle", "font-size": 11.5, fill: "var(--muted)", "font-weight": 600 }));
+    lanes.forEach((l, i) => svg.appendChild(txt(l, { x: 8, y: laneY(i) + 18, "font-size": 12, fill: "var(--ink)" })));
+    const bar = (lane, start, dur, color, label, minW) => {
+      const w = Math.max(X(start + dur) - X(start), minW || 0);
+      svg.appendChild(el("rect", { x: X(start), y: laneY(lane) + 4, width: w, height: 22, rx: 3, fill: color }));
+      if (label && w > 46) svg.appendChild(txt(label, { x: X(start) + 5, y: laneY(lane) + 19, "font-size": 10.5, fill: "#1a1206", "font-family": "var(--font-mono)" }));
+    };
+    const memb = p.step + 2;
+    for (let j = 0; j < 8; j++) {
+      const t0 = j * 1000;
+      bar(0, t0, p.step, "var(--heat-1)", "", 2);
+      bar(1, t0 + 120, memb, "var(--heat-1)", "", 2);
+      // prover: starts after block accepted (~150 ms), one job at a time, may queue
+      bar(2, t0 + 150, p.prove, "var(--heat-4)", fmtMs(p.prove));
+      bar(3, t0 + 150 + p.prove + 60, p.verify, "var(--heat-2)", "", 2);
+    }
+    // delegate at B/8 into next slot, beacon validators verify the block in slot e+1 (after quarter-slot pause)
+    bar(4, 4000 + 500, 4 * 3.5, "var(--heat-2)", "", 3);
+    svg.appendChild(txt("assemble at B/8: 4 leaves + LeafData", { x: X(4500) + 8, y: laneY(4) + 19, "font-size": 10.5, fill: "var(--muted)" }));
+    const leavesTotal = LEAVES_PER_ZONE * S.z;
+    const verifyAll = leavesTotal * (p.verify + 2);
+    bar(5, 5000, verifyAll, verifyAll > 3000 ? "var(--bad)" : "var(--heat-3)", "verify " + fmtN(leavesTotal) + " leaves · " + fmtMs(verifyAll));
+    // annotation for invisible sim
+    svg.appendChild(txt("← sim step " + fmtMs(p.step) + ": a hairline at this scale", { x: X(0) + 8, y: laneY(0) + 19, "font-size": 10.5, fill: "var(--muted)" }));
+    if (p.prove > 900) svg.appendChild(txt("jobs queue up: proving takes longer than the 1 s slot", { x: X(1000) + 8, y: laneY(2) - 2, "font-size": 10.5, fill: "var(--bad)" }));
+  }
+
+  // ---------- anatomy ----------
+  function renderAnatomy() {
+    const p = PROF[S.prof];
+    document.getElementById("anat").innerHTML = PHASES.map(ph =>
+      `<div style="width:${ph.f * 100}%;background:${ph.c}" title="${ph.k}: ${fmtMs(ph.f * p.prove)}">${ph.f > 0.1 ? fmtMs(ph.f * p.prove) : ""}</div>`).join("");
+    document.getElementById("anat-legend").innerHTML = PHASES.map(ph =>
+      `<div><b><span class="sw" style="background:${ph.c}"></span>${ph.k} · ${Math.round(ph.f * 100)}%</b><span class="muted">${ph.d}</span></div>`).join("");
+    const perValue = p.prove * p.threads * 1e3 / (4096 * 4 * 4);
+    document.getElementById("anat-note").innerHTML =
+      `Total ${fmtMs(p.prove)} on ${PROF[S.prof].label}; proof 261 KB, peak RAM ≈ 42 MB [m]. Per proven value update: ≈ ${perValue.toFixed(1)} µs of CPU, against ≈ 4 ns to compute it. ${p.note}`;
+  }
+
+  // ---------- scaling chart ----------
+  function renderScale() {
+    const svg = document.getElementById("scale");
+    svg.innerHTML = "";
+    const zs = [4, 8, 16, 32, 64, 128];
+    const L = 64, R = 540, Tp = 20, B = 280;
+    const ymax = 20000;
+    const X = z => L + (R - L) * (Math.log2(z) - 2) / 5;
+    const Y = v => B - (B - Tp) * Math.log10(Math.max(v, 1)) / Math.log10(ymax);
+    [1, 10, 100, 1000, 10000].forEach(v => {
+      svg.appendChild(el("line", { x1: L, x2: R, y1: Y(v), y2: Y(v), stroke: "var(--line)" }));
+      svg.appendChild(txt(v >= 1000 ? v / 1000 + " s" : v + " ms", { x: L - 8, y: Y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)", "font-family": "var(--font-mono)" }));
+    });
+    zs.forEach(z => svg.appendChild(txt(String(z), { x: X(z), y: B + 18, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)", "font-family": "var(--font-mono)" })));
+    svg.appendChild(txt("zones", { x: (L + R) / 2, y: B + 36, "text-anchor": "middle", "font-size": 11.5, fill: "var(--muted)" }));
+    // budget
+    svg.appendChild(el("line", { x1: L, x2: R, y1: Y(4000), y2: Y(4000), stroke: "var(--bad)", "stroke-dasharray": "6 4", "stroke-width": 1.5 }));
+    svg.appendChild(txt("4 s beacon slot", { x: L + 6, y: Y(4000) - 6, "font-size": 11, fill: "var(--bad)" }));
+    const p = PROF[S.prof];
+    const series = [
+      { k: "Beacon verification (today)", c: "var(--bad)", f: z => LEAVES_PER_ZONE * z * (p.verify + 2) },
+      { k: "Proving per node", c: "var(--accent)", f: z => LEAVES_PER_ZONE * p.prove * p.threads / S.m },
+      { k: "Re-execution per member", c: "var(--muted)", f: z => LEAVES_PER_ZONE / 1 * (p.step + 2) },
+      { k: "Beacon verification (aggregated)", c: "var(--good)", f: z => p.verify + 2, dash: "5 4" }
+    ];
+    series.forEach((s, i) => {
+      const pts = zs.map(z => [X(z), Y(s.f(z))]);
+      svg.appendChild(el("polyline", { points: pts.map(q => q.join(",")).join(" "), fill: "none", stroke: s.c, "stroke-width": 2.2, "stroke-dasharray": s.dash || "" }));
+      const last = pts[pts.length - 1];
+      svg.appendChild(el("circle", { cx: last[0], cy: last[1], r: 3.5, fill: s.c }));
+      svg.appendChild(el("rect", { x: L + 8, y: Tp + 4 + i * 16, width: 10, height: 3, fill: s.c }));
+      svg.appendChild(txt(s.k, { x: L + 24, y: Tp + 9 + i * 16, "font-size": 11, fill: "var(--ink)" }));
+    });
+    // marker for current zone count
+    svg.appendChild(el("line", { x1: X(S.z), x2: X(S.z), y1: Tp, y2: B, stroke: "var(--data)", "stroke-width": 1, "stroke-dasharray": "2 3" }));
+    // table
+    const rows = zs.map(z => {
+      const v = LEAVES_PER_ZONE * z * (p.verify + 2);
+      const bytes = (LEAVES_PER_ZONE * z * PROOF_KB + (LEAVES_PER_ZONE * z + z) * STATE_KB) / 1024;
+      return `<tr${z === S.z ? ' style="background:var(--accent-soft)"' : ""}><td class="num">${z}</td><td class="num">${fmtN(LEAVES_PER_ZONE * z)}</td><td class="num">${fmtMs(v)}</td><td class="num">${bytes.toFixed(1)} MB</td></tr>`;
+    }).join("");
+    document.getElementById("scaletab").innerHTML = `<thead><tr><th>Zones</th><th>Proofs / slot</th><th>Verify / node</th><th>Beacon block</th></tr></thead><tbody>${rows}</tbody>`;
+  }
+
+  // ---------- ladder ----------
+  const LEVERS = [
+    { k: "cpu", t: "Turn on AVX2 / AVX-512 in native builds", g: "≈ 4× prove [m]", e: "hours", d: "Plonky3's packed KoalaBear and Poseidon2 are compiled out today because .cargo/config.toml sets no target feature. Proofs stay byte-identical [m]." },
+    { k: "arch", t: "Recursive aggregation per beacon slot", g: "verify O(zones) → O(1)", e: "1–3 months", d: "Plonky3-recursion 2-to-1 trees with WHIR on inner layers. It is the only fix for the climbing line in the scaling chart and for beacon bandwidth." },
+    { k: "arch", t: "One proof per commitment, not per slot", g: "≈ 3–4× fewer proofs [e]", e: "weeks", d: "Prove a zone's n_z slots in one taller trace. FRI and Merkle overhead amortise, and larger traces suit SIMD and GPUs better." },
+    { k: "arch", t: "Poseidon2 state commitment inside the proof", g: "drops 64 KiB per leaf", e: "weeks", d: "Verifiers then need roots instead of full states, so LeafData disappears. Required before recursion anyway (no per-claim periodic columns). Costs about +60–90% proving per slot until amortised." },
+    { k: "gpu", t: "GPU prover for native provers and aggregators", g: "5–20× per proof [e]", e: "weeks–months", d: "Poseidon2 Merkle, NTT and quotient are all strong GPU kernels. It pays off with batched jobs or taller traces; single 2^14-row proofs underuse a GPU." },
+    { k: "cpu", t: "wasm SIMD128 packing for KoalaBear", g: "≈ 2–3× in browsers [e]", e: "weeks (upstream)", d: "Plonky3 has wasm SIMD only for Goldilocks, Keccak and BLAKE3. Browser provers are the slowest provers, so this is a good upstream contribution." },
+    { k: "cpu", t: "Multi-threaded wasm workers", g: "≈ 2–3× on 4 cores [e]", e: "days–weeks", d: "wasm-bindgen-rayon with cross-origin isolation (COOP/COEP headers, nightly build-std). Otherwise keep today's one-job-per-worker pool." },
+    { k: "cpu", t: "Fewer LogUp columns", g: "≈ 15–25% prove [e]", e: "days → weeks", d: "Merge range checks (14-bit limb against ADDR) now; LogUp-GKR via multi-stark later. The LogUp trace currently costs more to commit than the main trace." },
+    { k: "arch", t: "Verify shares off the event loop; stop proofs on /out", g: "≈ 2× less proof traffic [e]", e: "days", d: "Also memoise failed verifications and stop pooling unverified items, which closes the MissingProof rollback DoS." },
+    { k: "cpu", t: "FRI arity 4–8 and final polynomial 8–32", g: "15–20% smaller proofs [e]", e: "hours", d: "Choose it together with the security preset (≥ 100 proven bits; recursion-compatible: no PoW at the batch, lookup and OOD steps)." },
+    { k: "gpu", t: "GPU for the simulation itself", g: "none at this size", e: "–", d: "0.25 ms per zone slot. Only worth it for zones of millions of cells, for example a large Game of Life board." }
+  ];
+  function renderLadder() {
+    const items = LEVERS.filter(l => S.filter === "all" || l.k === S.filter);
+    document.getElementById("ladder").innerHTML = items.map((l, i) => `
+      <div class="lever ${l.k}">
+        <span class="rank">${String(LEVERS.indexOf(l) + 1).padStart(2, "0")}</span>
+        <div style="display:grid;gap:3px"><h3>${l.t}</h3><p>${l.d}</p></div>
+        <span class="gain">${l.g}</span>
+        <span class="eff">effort: ${l.e}</span>
+      </div>`).join("");
+  }
+
+  // ---------- controls ----------
+  function wireSeg(id, key, cb) {
+    const root = document.getElementById(id);
+    root.querySelectorAll("button").forEach(b => {
+      b.setAttribute("aria-pressed", String(b.dataset.v === String(S[key])));
+      b.addEventListener("click", () => {
+        S[key] = b.dataset.v;
+        root.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+        save(); cb();
+      });
+    });
+  }
+  function all() { renderTiles(); renderMap(); renderDetail(); renderTimeline(); renderAnatomy(); renderScale(); renderLadder(); }
+  wireSeg("prof", "prof", all);
+  wireSeg("lfilter", "filter", renderLadder);
+  const zsel = document.getElementById("zones");
+  zsel.value = String(S.z);
+  zsel.addEventListener("change", () => { S.z = Number(zsel.value); save(); all(); });
+  const mr = document.getElementById("members"), mo = document.getElementById("members-out");
+  mr.value = String(S.m); mo.value = String(S.m);
+  mr.addEventListener("input", () => { S.m = Number(mr.value); mo.value = mr.value; save(); all(); });
+  all();
+})();
+</script>
+</body>
+</html>

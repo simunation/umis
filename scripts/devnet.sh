@@ -5,6 +5,9 @@
 #   scripts/devnet.sh [N=4]          fresh genesis, run in the foreground (Ctrl-C stops all)
 #   DETACH=1 scripts/devnet.sh 4     start in the background (stop: scripts/devnet.sh stop)
 #   scripts/devnet.sh stop
+#   CLI_FEATURES=cuda UMIS_GPU_PROVE=1 UMIS_GPU=3090 scripts/devnet.sh 4   nodes prove life2d on the GPU
+#   MEMBERS=6 scripts/devnet.sh 4   also start 6 native nodes that join as zone members
+#                                 (devnet validators are full nodes; zones get members only from joiners)
 #
 # Logs, keys and status endpoints live in .devnet/. `umis-cli status --all`
 # compares the running nodes.
@@ -23,7 +26,7 @@ if [ "${1:-}" = "stop" ]; then
 fi
 
 N=${1:-4}
-cargo build --release -p umis-cli
+cargo build --release -p umis-cli ${CLI_FEATURES:+--features $CLI_FEATURES}
 [ -f "$DIR/pids" ] && { xargs -r kill < "$DIR/pids" 2>/dev/null || true; }
 rm -rf "$DIR"
 mkdir -p "$DIR"
@@ -41,7 +44,12 @@ for i in $(seq 0 $((N - 1))); do
     --bootstrap-http "http://$HTTP" > "$DIR/node-$i.log" 2>&1 &
   echo $! >> "$DIR/pids"
 done
-echo "devnet: bootstrap http://$HTTP and $N nodes (logs in $DIR/)"
+for i in $(seq 0 $((${MEMBERS:-0} - 1))); do
+  "$BIN" node --genesis "$DIR/genesis.json" --key "$DIR/keys/member-$i.key" --data-dir "$DIR/member-$i" \
+    --bootstrap-http "http://$HTTP" --join member > "$DIR/member-$i.log" 2>&1 &
+  echo $! >> "$DIR/pids"
+done
+echo "devnet: bootstrap http://$HTTP, $N nodes and ${MEMBERS:-0} joining members (logs in $DIR/)"
 
 if [ -z "${DETACH:-}" ]; then
   trap 'xargs -r kill < "$DIR/pids" 2>/dev/null || true; rm -f "$DIR/pids"' EXIT INT TERM

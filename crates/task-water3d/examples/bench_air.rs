@@ -32,7 +32,7 @@ fn main() {
             inputs_commitment: umis_core::records::list_root_of::<umis_core::records::InputRef>(&[]),
             outputs_root: bmt::list_root(&leaves),
         };
-        let b = Water3dStark::new(FriPreset::Benchmark);
+        let b = Water3dStark::new(FriPreset::P100);
         let w = Witness {
             instance: inst.as_ref(),
             params: &params,
@@ -47,12 +47,15 @@ fn main() {
         let proof = b.prove(&stmt, &w, &SecretKey::from_label("x")).unwrap();
         let prove = t.elapsed();
         let pd = PublicData {
+            task_id: Some(task_water3d::TASK_ID),
             params: Some(&params),
             genesis_seed: Some(seed),
             prev_state: Some(&prev),
             next_state: Some(&next),
             inputs: Some(&inputs),
             input_refs: Some(&[]),
+            prev_witness: None,
+            next_witness: None,
         };
         let t = std::time::Instant::now();
         b.verify(&stmt, &pd, &proof).unwrap();

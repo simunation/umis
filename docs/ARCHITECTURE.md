@@ -1,5 +1,9 @@
 # simunation architecture (as implemented)
 
+> **2026-11-22: native only.** Browser nodes (`umis-web`, `web/`) are no longer participants. The browser build is
+> frozen and checked only with `WITH_WASM=1 scripts/check.sh`; sections on browser transports and wasm proving below
+> describe that frozen path. Plan: `.plan/ROADMAP.md` §0–§1.
+
 This document maps the plan (`.plan/simunation-poc-plan.md`) onto the code,
 and lists every place where the implementation deviates from it and why.
 Symbols follow the plan's Notation section (beacon slot `e`, zone slot `j`,
@@ -48,7 +52,13 @@ same core runs in `umis-simnet` with a virtual clock and network.
   windows), with property tests.
 - **genesis**: JSON; its hash is the bmt file address of its canonical JSON.
 
-## Tasks (umis-task, task-water3d)
+## Tasks (umis-task, task-water3d, task-life2d, umis-tasks)
+
+`umis-tasks` holds the tasks this build ships (`registry()`), the proof
+backend a genesis selects (`backend_for`: `mock`, or `plonky3` as a
+`MultiBackend` with one STARK per task) and `zone_proposal` for new zones.
+life2d (Game of Life, globally exact by generation-tagged halos, diagonal
+links on its layer) is described in [`life2d.md`](life2d.md).
 
 `ZoneTask` is the plan's trait plus `type Ctx` and `prepare(params, seed)`:
 the genesis field (background current, stencil weights, forcing) is
@@ -145,7 +155,19 @@ under an anchor that already holds the zone's latest rollback record. Minting: r
 freshest causal producer outputs that are not discarded, not minted before a
 producer rollback, and not in conflict with the producer's committed chain;
 otherwise the last value is held. Blocks covering several slots (after a gap
-or as a recovery block) hold every input.
+or as a recovery block) hold every input they had; a link without an input
+yet may take its first causal one. Tasks with `STRICT_INPUTS` (life2d) must
+carry an input on every link whose producer has a causal block: `validate`
+rejects a block without it and `mint` waits for it.
+
+*Batched proofs:* a `ProofBackend` may prove a task's zones a commitment at a
+time (`batches(task)`; life2d). Then the zone committer proves all slots of its
+commitment in one container `ProveJob` (`members` = the slot jobs, result =
+`borsh(Vec<proof>)`) right after committing, priority provers do not prove
+those slots, and other members or full nodes prove the commitment themselves
+if no proof commitment appears `slot/4` after the beacon slot. The beacon chain
+verifies a proof commitment's leaves together (`verify_group` via
+`Ctx::warm_proofs`, memoized), since batched leaf proofs reference each other.
 
 *Deviation:* `ZoneBlock` gossip carries **input attachments** (the producer's
 signed header, the port payload and its inclusion proof per InputRef) instead
@@ -199,9 +221,15 @@ action. *Not done:* autonat and NTP-lite clock offset estimation.
 ## Proofs (umis-proof, umis-stark, task-water3d::air)
 
 The genesis selects the backend (`proof_backend`: `mock` or `plonky3`, plus
-`stark_config_id`: `koalabear` = Plonky3's benchmark FRI preset, or
-`koalabear-test` = 4 queries, insecure, for tests). Every node, native or
-browser, builds it with `task_water3d::air::backend_for(genesis)`.
+`stark_config_id`: `koalabear` / `koalabear-keccak` = the P100 FRI preset,
+≥ 101 proven bits (`docs/zk/air-spec.md` INV-PARAM-3), or the `-test`
+variants = 4 queries, insecure, for tests, allowed only with the genesis
+opt-in `insecure_proofs` and `umis-cli node --allow-insecure-proofs`). Every
+node, native or browser, builds it with `umis_tasks::backend_for(genesis)`.
+The tables below were measured with the older benchmark preset. Plonky3 is pinned
+`=0.9.0-rc.2`. Recursive aggregation (prototype, not in the protocol):
+`crates/umis-agg`, Plonky3-recursion pinned to `3a69ba6`, KoalaBear⁵
+(`docs/zk/aggregation.md`). Plan: `.plan/ROADMAP.md`.
 
 **Field: KoalaBear** (7a). The toy AIR (`umis-stark::toy`, a 1D stencil with a
 LogUp memory bus, a range-check lookup and periodic public columns, 50

@@ -73,8 +73,7 @@ export class Nodes {
     if (params.get('transport') === 'webrtc') node.preferWebrtc(true);
     // STARK jobs run in workers (`?prover=inline` proves on the page thread).
     if (params.get('prover') !== 'inline') {
-      const secret = node.secretHex;
-      node.setProver((job: Uint8Array) => provers().prove(this.genesisJson, secret, job));
+      node.setProver((job: Uint8Array) => provers().prove(this.genesisJson, job));
     }
     node.start(this.addrs);
     this.list.push(pn);

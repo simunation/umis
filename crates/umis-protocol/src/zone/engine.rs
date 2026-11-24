@@ -78,6 +78,11 @@ pub struct ZoneEngine {
     pub seen_headers: BTreeMap<(u64, NodeId), SignedHeader>,
     /// `(block hash, slot)` → proof share.
     pub shares: BTreeMap<(Hash, u64), ProofShare>,
+    /// Shares this node made or verified. A received share that could not be verified
+    /// alone (a batch reference, a multi-slot block, a missing parent state) is only a
+    /// candidate: it never stops this node from proving the slot, and a verified share
+    /// replaces it (proof-pool DoS fix).
+    pub trusted: BTreeSet<(Hash, u64)>,
     /// Slots with a proving job in flight.
     pub proving: BTreeSet<(Hash, u64)>,
     pub sent_commit: BTreeSet<u64>,
@@ -99,6 +104,7 @@ impl ZoneEngine {
             minted: BTreeSet::new(),
             seen_headers: BTreeMap::new(),
             shares: BTreeMap::new(),
+            trusted: BTreeSet::new(),
             proving: BTreeSet::new(),
             sent_commit: BTreeSet::new(),
             sent_proof: BTreeSet::new(),
@@ -377,6 +383,17 @@ impl ZoneEngine {
             }
             last.insert(r.link_id, (r.clone(), att.clone()));
         }
+        // Strict tasks: no link may fall back to the empty boundary once its
+        // producer has a causal block.
+        let inst = ctx
+            .instance(&zone.task_id, &zone.params, &zone.params_hash)
+            .map_err(|e| Verdict::Retry(format!("instance: {e}")))?;
+        if inst.strict_inputs()
+            && let Some(l) =
+                missing_strict_input(head, &zone, &links, h.from_slot, |id| b.inputs.iter().any(|r| r.link_id == id))
+        {
+            return bad(format!("strict task: no input on link {l} although its producer has a causal block"));
+        }
         // Votes.
         if h.vote_count as usize != b.votes.len() || exec::votes_root(&b.votes) != h.votes_root {
             return bad("votes_root".into());
@@ -393,9 +410,6 @@ impl ZoneEngine {
         // Re-execution.
         let (state, slot_roots) = if reexecute {
             let Some(pstate) = parent.state.as_ref() else { return Err(Verdict::Retry("parent state unknown".into())) };
-            let inst = ctx
-                .instance(&zone.task_id, &zone.params, &zone.params_hash)
-                .map_err(|e| Verdict::Retry(format!("instance: {e}")))?;
             match exec::reexecute_block(inst.as_ref(), pstate, b) {
                 Ok(ex) if exec::matches_header(&ex, h) => (Some(Arc::new(ex.state)), ex.slots),
                 _ => {
@@ -459,7 +473,12 @@ impl ZoneEngine {
         let mut chosen: Vec<Candidate> = Vec::new();
         for l in &links {
             let last = tip.last_inputs.get(&l.link_id);
-            let pick = if from < j || variant == MintVariant::HoldInputs {
+            // A multi-slot block holds each link's last input; a link without
+            // one may still take its first causal input (validate allows it,
+            // and a strict task cannot advance without it: without this a
+            // zone whose first mint found no producer block yet would wait
+            // forever).
+            let pick = if (from < j && last.is_some()) || variant == MintVariant::HoldInputs {
                 last.cloned()
             } else {
                 let pz = head.zones.get(&l.from_zone)?;
@@ -511,6 +530,12 @@ impl ZoneEngine {
             }
         }
         let inst = ctx.instance(&zone.task_id, &zone.params, &zone.params_hash).ok()?;
+        if inst.strict_inputs()
+            && missing_strict_input(&head, &zone, &links, from, |id| chosen.iter().any(|c| c.0.link_id == id)).is_some()
+        {
+            // Wait for the producer's block: a strict task never guesses a neighbour.
+            return None;
+        }
         let input_refs: Vec<InputRef> = chosen.iter().map(|c| c.0.clone()).collect();
         let attachments: Vec<InputAttachment> = chosen.iter().map(|c| c.1.clone()).collect();
         let pstate = tip.state.clone()?;
@@ -612,10 +637,14 @@ impl ZoneEngine {
         let mut out = Vec::new();
         let mut prev = e.prev_root;
         for sr in &e.slot_roots {
-            let mine = all || ranks::priority_prover(&a, self.z, sr.0, &b.header().minter) == Some(key.node_id());
+            // Batching tasks are proved a commitment at a time by its committer
+            // (`all`), not slot by slot by priority provers.
+            let mine = all
+                || (!ctx.backend.batches(&zone.task_id)
+                    && ranks::priority_prover(&a, self.z, sr.0, &b.header().minter) == Some(key.node_id()));
             let stmt = exec::slot_statement(b.header(), prev, *sr);
             prev = sr.1;
-            let wanted = mine && !self.shares.contains_key(&(e.hash, sr.0)) && !self.proving.contains(&(e.hash, sr.0));
+            let wanted = mine && !self.trusted.contains(&(e.hash, sr.0)) && !self.proving.contains(&(e.hash, sr.0));
             if wanted {
                 if ctx.backend.is_async() {
                     *next_job += 1;
@@ -629,6 +658,7 @@ impl ZoneEngine {
                         genesis_seed: ctx.genesis.seed,
                         prev_state: state.clone(),
                         inputs: inputs.clone(),
+                        members: Vec::new(),
                     })));
                 } else {
                     let w = umis_proof::Witness {
@@ -642,6 +672,7 @@ impl ZoneEngine {
                         let share =
                             ProofShare { leaf: umis_proof::proof_leaf(&stmt, &proof), proof, block_hash: e.hash };
                         self.shares.insert((e.hash, sr.0), share.clone());
+                        self.trusted.insert((e.hash, sr.0));
                         out.push(ProveOut::Share(share));
                     }
                 }
@@ -663,41 +694,97 @@ impl ZoneEngine {
         self.proving.remove(&(job.block_hash, slot));
         let share = ProofShare { leaf: umis_proof::proof_leaf(&job.stmt, &proof), proof, block_hash: job.block_hash };
         self.shares.insert((job.block_hash, slot), share.clone());
+        self.trusted.insert((job.block_hash, slot));
         share
     }
 
-    /// Stores a received proof share if it verifies.
-    pub fn on_share(&mut self, ctx: &Ctx, chain: &BeaconChain, s: ProofShare) -> bool {
-        let Some(e) = self.entries.get(&s.block_hash) else { return false };
+    /// Stores a received proof share: verified shares are trusted and replace an unchecked
+    /// candidate; a share this node cannot verify alone is kept only while the slot has none.
+    pub fn on_share(&mut self, ctx: &Ctx, chain: &BeaconChain, s: ProofShare) -> ShareVerdict {
+        let Some(e) = self.entries.get(&s.block_hash) else { return ShareVerdict::Ignored };
         let slot = s.leaf.from_slot;
-        if self.shares.contains_key(&(s.block_hash, slot)) {
-            return false;
+        let key = (s.block_hash, slot);
+        if self.trusted.contains(&key) {
+            return ShareVerdict::Ignored;
         }
-        let Some(sr) = e.slot_roots.iter().find(|r| r.0 == slot) else { return false };
+        let Some(sr) = e.slot_roots.iter().find(|r| r.0 == slot) else { return ShareVerdict::Ignored };
         if s.leaf.state_root != sr.1
             || s.leaf.outputs_root != sr.2
             || s.leaf.proof_address != ctx.proof_address(&s.proof)
         {
-            return false;
+            return ShareVerdict::Ignored;
         }
         let stmt = umis_proof::statement_of(&s.leaf);
-        let ok = if ctx.backend.is_async() {
-            // Verified where this node holds the states (single-slot blocks);
-            // the beacon chain verifies every proof of a proof commitment anyway.
-            let zone = chain.head_state().zones.get(&self.z).cloned();
+        let head = chain.head_state();
+        let verified = if ctx.backend.is_async() {
+            // Verified where this node holds the states (single-slot blocks) and the proof
+            // stands alone; the beacon chain verifies every proof of a proof commitment anyway.
+            let zone = head.zones.get(&self.z).cloned();
             let inputs = e.block.as_ref().map(|b| exec::input_map(&b.inputs, &b.attachments)).unwrap_or_default();
             match zone.as_ref().and_then(|z| self.share_public(ctx, z, e, &inputs)) {
-                Some(pd) => ctx.verify_proof(&stmt, &pd, &s.proof).is_ok(),
-                None => true,
+                Some(pd) if !ctx.backend.batches(&zone.as_ref().expect("zone").task_id) || !is_batch_part(&s.proof) => {
+                    Some(ctx.verify_proof(&stmt, &pd, &s.proof).is_ok())
+                }
+                _ => None,
             }
         } else {
-            ctx.verify_proof(&stmt, &umis_proof::PublicData::default(), &s.proof).is_ok()
+            // Mock: the signature, and the prover must be able to act for the zone (as the
+            // beacon chain checks).
+            Some(
+                ctx.verify_proof(&stmt, &umis_proof::PublicData::default(), &s.proof)
+                    .is_ok_and(|prover| !ctx.backend.identifies_prover() || head.can_act_for(self.z, &prover)),
+            )
         };
-        if !ok {
-            return false;
+        match verified {
+            Some(false) => ShareVerdict::Bad,
+            Some(true) => {
+                self.shares.insert(key, s);
+                self.trusted.insert(key);
+                ShareVerdict::Stored
+            }
+            None if self.shares.contains_key(&key) => ShareVerdict::Ignored,
+            None => {
+                self.shares.insert(key, s);
+                ShareVerdict::Stored
+            }
         }
-        self.shares.insert((s.block_hash, slot), s);
-        true
+    }
+
+    /// For an adversarial node (tests): a proof commitment and shares for `zc` with the
+    /// honest leaves' roots but garbage proofs.
+    pub fn junk_proofs(
+        &self,
+        key: &SecretKey,
+        zc: &ZoneCommitEnvelope,
+    ) -> Option<(ProofCommitEnvelope, Vec<ProofShare>)> {
+        let mut leaves = Vec::new();
+        let mut proofs = Vec::new();
+        let mut shares = Vec::new();
+        for cb in &zc.blocks {
+            let h = cb.signed.hash();
+            let e = self.entries.get(&h)?;
+            let mut prev = e.prev_root;
+            for sr in &e.slot_roots {
+                let stmt = exec::slot_statement(&cb.signed.header, prev, *sr);
+                prev = sr.1;
+                let mut proof = vec![3u8];
+                proof.extend_from_slice(&umis_core::keccak256(&h.0).0);
+                proof.extend_from_slice(&[0, 1]);
+                let leaf = umis_proof::proof_leaf(&stmt, &proof);
+                shares.push(ProofShare { leaf: leaf.clone(), proof: proof.clone(), block_hash: h });
+                leaves.push(leaf);
+                proofs.push(proof);
+            }
+        }
+        let pc = ProofCommitment {
+            zone: self.z,
+            beacon_slot: zc.commitment.beacon_slot,
+            leaf_count: leaves.len() as u32,
+            proof_bmt_root: umis_proof::proof_bmt_root(&leaves),
+            signer: key.node_id(),
+        };
+        let sig = key.sign(&pc.address());
+        Some((ProofCommitEnvelope { pc, sig, leaves, proofs, data: Default::default() }, shares))
     }
 
     // ------------------------------------------------------------ commitments
@@ -811,7 +898,9 @@ impl ZoneEngine {
             let h = cb.signed.hash();
             let hdr = &cb.signed.header;
             for j in hdr.from_slot..=hdr.slot {
-                if !self.shares.contains_key(&(h, j)) {
+                // A self-proving builder uses only shares it made or verified.
+                let have = if self_prove { self.trusted.contains(&(h, j)) } else { self.shares.contains_key(&(h, j)) };
+                if !have {
                     if !self_prove || ctx.backend.is_async() {
                         return None;
                     }
@@ -835,6 +924,14 @@ impl ZoneEngine {
         Some(ProofCommitEnvelope { pc, sig, leaves, proofs, data })
     }
 
+    /// Whether every slot of `zc` has a share this node made or verified.
+    pub fn all_trusted(&self, zc: &ZoneCommitEnvelope) -> bool {
+        zc.blocks.iter().all(|cb| {
+            let h = cb.signed.hash();
+            (cb.signed.header.from_slot..=cb.signed.header.slot).all(|j| self.trusted.contains(&(h, j)))
+        })
+    }
+
     /// States at every covered slot boundary and each slot's inputs.
     fn leaf_data(&self, ctx: &Ctx, chain: &BeaconChain, zc: &ZoneCommitEnvelope) -> Option<umis_proof::LeafData> {
         let zone = chain.head_state().zones.get(&self.z)?.clone();
@@ -855,6 +952,11 @@ impl ZoneEngine {
                 data.inputs.push(inputs.clone().into_iter().collect());
             }
         }
+        if ctx.backend.stateless(&zone.task_id) {
+            // S6: witnesses instead of the states.
+            data.witnesses = data.states.iter().map(|s| inst.state_witness(s)).collect::<Option<_>>()?;
+            data.states.clear();
+        }
         Some(data)
     }
 
@@ -871,12 +973,15 @@ impl ZoneEngine {
             return None;
         }
         Some(umis_proof::PublicData {
+            task_id: Some(&zone.task_id),
             params: Some(&zone.params),
             genesis_seed: Some(ctx.genesis.seed),
             prev_state: Some(self.entries.get(&e.parent)?.state.as_ref()?),
             next_state: Some(e.state.as_ref()?),
             inputs: Some(inputs),
             input_refs: Some(&b.inputs),
+            prev_witness: None,
+            next_witness: None,
         })
     }
 
@@ -919,8 +1024,23 @@ impl ZoneEngine {
         self.seen_headers.retain(|(s, _), _| s.saturating_add(keep_slots.saturating_mul(4)) >= floor);
         let entries = &self.entries;
         self.shares.retain(|(h, _), _| entries.contains_key(h));
+        self.trusted.retain(|(h, _)| entries.contains_key(h));
         self.minted.retain(|s| s.saturating_add(keep_slots.saturating_mul(4)) >= floor);
     }
+}
+
+/// What [`ZoneEngine::on_share`] did with a share.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShareVerdict {
+    Stored,
+    Ignored,
+    /// It failed verification.
+    Bad,
+}
+
+/// A batch head or reference (life2d tags 2 and 3): verifies only with its whole group.
+fn is_batch_part(proof: &[u8]) -> bool {
+    matches!(proof.first(), Some(2 | 3))
 }
 
 /// A proof made inline, or a job for an async backend.
@@ -950,6 +1070,23 @@ enum Verdict {
 }
 
 /// Whether `r` is a newly consumed input (not the held last value).
+/// For a strict task: the first link without an input although its producer
+/// already has a causal block for consumer slot `from` (its first slot ends
+/// by the consumer slot's start, `(j_start_p + 1)·S_p ≤ from·S_c`).
+pub fn missing_strict_input(
+    head: &BeaconState,
+    zone: &crate::beacon::ZoneEntry,
+    links: &[crate::beacon::state::LinkIn],
+    from: u64,
+    present: impl Fn(u32) -> bool,
+) -> Option<u32> {
+    links.iter().find_map(|l| {
+        let pz = head.zones.get(&l.from_zone)?;
+        let causal = (pz.j_start + 1) * pz.slot_ticks <= from * zone.slot_ticks;
+        (causal && !present(l.link_id)).then_some(l.link_id)
+    })
+}
+
 fn from_new_input(last: &BTreeMap<u32, Candidate>, r: &InputRef) -> bool {
     last.get(&r.link_id).is_none_or(|(prev, _)| prev != r)
 }

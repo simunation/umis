@@ -66,6 +66,9 @@ pub struct RenderGrid {
     /// Values per cell, e.g. `vx, vy, vz, dye`.
     pub channels: u32,
     pub data: Vec<f32>,
+    /// Task-specific display facts (e.g. a cellular automaton's generation).
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub meta: serde_json::Value,
 }
 
 /// A typed simulation task. Everything is deterministic and integer-only.
@@ -96,10 +99,22 @@ pub trait ZoneTask: Send + Sync + 'static {
     fn render(_ctx: &Self::Ctx, _s: &Self::State) -> RenderGrid {
         RenderGrid::default()
     }
+    /// Strict inputs: a block must carry an input on every link whose
+    /// producer already has a causal block (the engine never lets the minter
+    /// fall back to the empty-neighbour boundary there). Tasks whose
+    /// correctness depends on knowing *which* neighbour state they consume,
+    /// such as the globally exact cellular automaton, set this.
+    const STRICT_INPUTS: bool = false;
     /// Checked when a zone is proposed: do the params describe a zone at
     /// `point` with slot length `slot_ticks`?
     fn check_zone(_p: &Self::Params, _point: [i32; 3], _slot_ticks: u64) -> Result<()> {
         Ok(())
+    }
+    /// A compact witness of an encoded state that a proof verifier can check against the
+    /// state's `state_root` without the state (stateless beacon, S6); `None`: the task ships
+    /// full states.
+    fn state_witness(_ctx: &Self::Ctx, _state: &[u8]) -> Option<Bytes> {
+        None
     }
 }
 
@@ -114,9 +129,17 @@ pub trait ZoneInstance: Send + Sync {
     fn step(&self, state: &[u8], inputs: &BTreeMap<PortId, Bytes>, slot: u64) -> Result<Bytes>;
     fn outputs(&self, state: &[u8]) -> Result<BTreeMap<PortId, Bytes>>;
     fn render(&self, state: &[u8]) -> Result<RenderGrid>;
+    /// See [`ZoneTask::STRICT_INPUTS`].
+    fn strict_inputs(&self) -> bool {
+        false
+    }
     /// `state_root`: bmt file address of the raw state blob.
     fn state_root(&self, state: &[u8]) -> Hash {
         umis_core::bmt::file_address(state)
+    }
+    /// See [`ZoneTask::state_witness`].
+    fn state_witness(&self, _state: &[u8]) -> Option<Bytes> {
+        None
     }
 }
 
@@ -194,6 +217,14 @@ impl<T: ZoneTask> ZoneInstance for Instance<T> {
     fn render(&self, state: &[u8]) -> Result<RenderGrid> {
         let s = T::decode_state(&self.ctx, state)?;
         Ok(T::render(&self.ctx, &s))
+    }
+
+    fn strict_inputs(&self) -> bool {
+        T::STRICT_INPUTS
+    }
+
+    fn state_witness(&self, state: &[u8]) -> Option<Bytes> {
+        T::state_witness(&self.ctx, state)
     }
 }
 

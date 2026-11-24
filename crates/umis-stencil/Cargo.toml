@@ -1,0 +1,28 @@
+[package]
+name = "umis-stencil"
+description = "Generic local-rule (stencil) AIR framework: a rule declares its cell state and update; the framework proves k generations of a zone with canonical Poseidon2 state, halo and output digests (native only)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+p3-air = "=0.9.0-rc.2"
+p3-field = "=0.9.0-rc.2"
+p3-matrix = "=0.9.0-rc.2"
+p3-koala-bear = "=0.9.0-rc.2"
+p3-poseidon2 = "=0.9.0-rc.2"
+p3-symmetric = "=0.9.0-rc.2"
+p3-maybe-rayon = { version = "=0.9.0-rc.2", features = ["parallel"] }
+p3-batch-stark = "=0.9.0-rc.2"
+p3-lookup = "=0.9.0-rc.2"
+umis-stark = { path = "../umis-stark" }
+
+[dev-dependencies]
+p3-uni-stark = "=0.9.0-rc.2"
+rand_chacha.workspace = true
+postcard = { version = "1.1", features = ["alloc"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[lints]
+workspace = true

@@ -1,6 +1,10 @@
 //! The composed libp2p behaviour. Every role uses the same struct; parts a role
 //! does not need are switched off with `Toggle`.
 
+// The `NetworkBehaviour` derive matches on uninhabited event types (`Infallible`), which
+// Rust ≥ 1.100 reports as unreachable code inside the generated impl.
+#![allow(unreachable_code)]
+
 use crate::codec::{BytesCodec, SYNC_PROTOCOL};
 use crate::config::Role;
 use libp2p::swarm::NetworkBehaviour;
@@ -37,7 +41,9 @@ fn message_id(m: &gossipsub::Message) -> gossipsub::MessageId {
 pub fn gossipsub_config() -> gossipsub::Config {
     gossipsub::ConfigBuilder::default()
         // Beacon blocks carry STARK proofs and their public data.
-        .max_transmit_size(32 << 20)
+        // Beacon blocks carry unaggregated leaf proofs (up to ~50 MB with four lattice
+        // Boltzmann zones at P100); aggregation (ROADMAP S5b) will shrink this.
+        .max_transmit_size(128 << 20)
         .message_id_fn(message_id)
         .validate_messages()
         .validation_mode(gossipsub::ValidationMode::Strict)

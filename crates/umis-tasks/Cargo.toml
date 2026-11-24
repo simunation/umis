@@ -1,0 +1,29 @@
+[package]
+name = "umis-tasks"
+description = "The zone tasks this build ships (water3d, life2d) and their proof backends"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+# GPU-resident life2d prover (`UMIS_GPU_PROVE=1` with a koalabear-keccak genesis; needs CUDA to build).
+cuda = ["task-life2d/cuda"]
+
+[dependencies]
+umis-core.workspace = true
+umis-task.workspace = true
+umis-proof.workspace = true
+borsh.workspace = true
+serde_json.workspace = true
+task-water3d = { workspace = true, features = ["stark"] }
+task-life2d = { workspace = true, features = ["stark"] }
+
+# Recursive aggregation (Plonky3-recursion): native only (`koalabear-agg*` configs).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+umis-agg = { path = "../umis-agg" }
+# Generic local-rule zones (life, heat, lattice Boltzmann) on umis-stencil.
+task-stencil = { path = "../task-stencil" }
+
+[lints]
+workspace = true

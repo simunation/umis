@@ -42,13 +42,13 @@ fn toy_proves_and_verifies_in_wasm() {
     prove_verify!(koala_bear, ToyParams::new(16, 16, 2), FriPreset::Test);
 }
 
-/// Benchmark-preset timings at 2^14 and 2^16 rows, 50 columns (slow in debug builds).
+/// P100-preset timings at 2^14 and 2^16 rows, 50 columns (slow in debug builds).
 #[wasm_bindgen_test]
 #[ignore]
 fn toy_bench_in_wasm() {
     for log_rows in [14, 16] {
         let params = ToyParams::new(256, (1 << log_rows) / 256, 42);
-        prove_verify!(goldilocks, params, FriPreset::Benchmark);
-        prove_verify!(koala_bear, params, FriPreset::Benchmark);
+        prove_verify!(goldilocks, params, FriPreset::P100);
+        prove_verify!(koala_bear, params, FriPreset::P100);
     }
 }

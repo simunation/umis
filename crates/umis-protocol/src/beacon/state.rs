@@ -816,6 +816,26 @@ impl BeaconState {
         Ok(())
     }
 
+    /// This state with the given zone commitments applied (those that apply), whatever the
+    /// proof lag: their commitments are then optimistic, so a proof commitment for one can
+    /// be checked with [`Self::check_proof_commitment`] before either is included.
+    pub fn with_zone_commitments(
+        &self,
+        ctx: &Ctx,
+        view: &dyn ChainView,
+        e_next: u64,
+        zcs: &[&ZoneCommitEnvelope],
+    ) -> BeaconState {
+        let mut s = self.clone();
+        for zc in zcs {
+            let mut trial = s.clone();
+            if trial.apply_zone_commitment(ctx, view, e_next, zc).is_ok() {
+                s = trial;
+            }
+        }
+        s
+    }
+
     /// This state with pending zone commitments applied (those that apply),
     /// as the next beacon block would see them. Delegates build on it so a
     /// commitment for `e` can be made before the one for `e − 1` is included.
@@ -833,10 +853,21 @@ impl BeaconState {
                 continue;
             }
             let mut trial = s.clone();
-            let ok = trial.apply_zone_commitment(ctx, view, e_next, zc).is_ok()
-                && pc.is_none_or(|pc| trial.apply_proof_commitment(ctx, view, e_next, pc).is_ok());
-            if ok {
-                s = trial;
+            if trial.apply_zone_commitment(ctx, view, e_next, zc).is_err() {
+                continue;
+            }
+            match pc {
+                Some(pc) => {
+                    let mut proven = trial.clone();
+                    if proven.apply_proof_commitment(ctx, view, e_next, pc).is_ok() {
+                        s = proven;
+                    } else if ctx.p.proof_lag > 0 {
+                        // A bad pooled proof commitment must not hide its zone commitment
+                        // (with L ≥ 1 the zone commitment is includable on its own).
+                        s = trial;
+                    }
+                }
+                None => s = trial,
             }
         }
         s
@@ -991,6 +1022,23 @@ impl BeaconState {
         _e: u64,
         pce: &ProofCommitEnvelope,
     ) -> VResult<()> {
+        let (idx, root) = self.check_proof_commitment(ctx, view, pce)?;
+        let c = &mut self.commits.get_mut(&pce.pc.zone).expect("z")[idx];
+        c.status = CommitStatus::Proven;
+        c.proof_bmt_root = Some(root);
+        Ok(())
+    }
+
+    /// Every check of [`Self::apply_proof_commitment`] without applying it: the index of the
+    /// optimistic commitment it proves and the proof root. Nodes run it before pooling a
+    /// received proof commitment, so junk never occupies a pool slot (proof verification is
+    /// memoized in `Ctx`, so the beacon block that includes it does not pay again).
+    pub fn check_proof_commitment(
+        &self,
+        ctx: &Ctx,
+        view: &dyn ChainView,
+        pce: &ProofCommitEnvelope,
+    ) -> VResult<(usize, Hash)> {
         let pc = &pce.pc;
         let z = pc.zone;
         ensure!(self.can_act_for(z, &pc.signer), "proof commitment signer");
@@ -1012,8 +1060,17 @@ impl BeaconState {
         ensure!(first.prev_state_root == c.prev_state_root && last.state_root == c.state_root, "leaf ends");
         let zone = &self.zones[&z];
         let needs_data = ctx.backend.is_async();
+        // S6: a stateless backend verifies from state witnesses; the beacon never sees states.
+        let stateless = needs_data && ctx.backend.stateless(&zone.task_id);
         if needs_data {
-            ensure!(pce.data.states.len() == pce.leaves.len() + 1, "proof data: states");
+            if stateless {
+                ensure!(
+                    pce.data.witnesses.len() == pce.leaves.len() + 1 && pce.data.states.is_empty(),
+                    "proof data: witnesses"
+                );
+            } else {
+                ensure!(pce.data.states.len() == pce.leaves.len() + 1, "proof data: states");
+            }
             ensure!(pce.data.inputs.len() == pce.leaves.len(), "proof data: inputs");
         }
         let input_maps: Vec<BTreeMap<u32, Bytes>> =
@@ -1027,10 +1084,13 @@ impl BeaconState {
                 return umis_proof::PublicData::default();
             }
             umis_proof::PublicData {
+                task_id: Some(&zone.task_id),
                 params: Some(&zone.params),
                 genesis_seed: Some(ctx.genesis.seed),
-                prev_state: Some(&pce.data.states[i]),
-                next_state: Some(&pce.data.states[i + 1]),
+                prev_state: (!stateless).then(|| pce.data.states[i].as_slice()),
+                next_state: (!stateless).then(|| pce.data.states[i + 1].as_slice()),
+                prev_witness: stateless.then(|| pce.data.witnesses[i].as_slice()),
+                next_witness: stateless.then(|| pce.data.witnesses[i + 1].as_slice()),
                 inputs: Some(&input_maps[i]),
                 input_refs: Some(&c.inputs[b.input_start as usize..(b.input_start + b.input_count) as usize]),
             }
@@ -1067,10 +1127,13 @@ impl BeaconState {
         }
         let root = umis_proof::proof_bmt_root(&pce.leaves);
         ensure!(pc.proof_bmt_root == root, "proof_bmt_root");
-        let c = &mut self.commits.get_mut(&z).expect("z")[idx];
-        c.status = CommitStatus::Proven;
-        c.proof_bmt_root = Some(root);
-        Ok(())
+        Ok((idx, root))
+    }
+
+    /// Whether zone `z` has an optimistic commitment for beacon slot `e` (a proof
+    /// commitment for it can be checked against this state).
+    pub fn awaits_proof(&self, z: ZoneId, e: u64) -> bool {
+        self.commits.get(&z).is_some_and(|l| l.iter().any(|c| c.e == e && c.status == CommitStatus::Optimistic))
     }
 
     // ------------------------------------------------------------ faults

@@ -1,0 +1,189 @@
+From 013a10de807457aabf967107518d1137f51cec92 Mon Sep 17 00:00:00 2001
+From: v <chickenhun@gmail.com>
+Date: Tue, 24 Nov 2026 02:40:02 +0100
+Subject: [PATCH] fix(recursion): declare periodic columns in batch replay and
+ interaction layouts
+
+replay_batch_stark_transcript and RecursiveAir::declares_interactions
+built their AirLayout without the AIR's periodic columns. For any batch
+AIR with periodic columns the replay panicked in
+AirLayout::validate_against_air ("num_periodic_columns does not match
+AIR"), and declares_interactions evaluated the AIR with no periodic
+values: an AIR indexing them panics, and one that tolerates their
+absence can under-report its interactions to a check that decides
+whether lookups are enforced. Both now declare num_periodic_columns,
+as eval_folded_circuit and get_log_num_quotient_chunks already do.
+
+Tests: a batch proof of an AIR gated by a periodic column replays; an
+AIR whose bus interaction reads a periodic column is detected. Both
+fail without the fix.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KqWRePEfraoyFYZbASEoDF
+---
+ recursion/src/generation.rs             |  1 +
+ recursion/src/traits/air.rs             | 36 +++++++++++++
+ recursion/tests/periodic_columns.rs     | 71 +++++++++++++++++++++++++
+ recursion/tests/suites/fri_recursion.rs |  2 +
+ 4 files changed, 110 insertions(+)
+ create mode 100644 recursion/tests/periodic_columns.rs
+
+diff --git a/recursion/src/generation.rs b/recursion/src/generation.rs
+index 09eaaae1..e632399f 100644
+--- a/recursion/src/generation.rs
++++ b/recursion/src/generation.rs
+@@ -341,6 +341,7 @@ where
+             preprocessed_width: pre_w,
+             main_width: air.width(),
+             num_public_values: air.num_public_values(),
++            num_periodic_columns: air.num_periodic_columns(),
+             ..Default::default()
+         };
+         let base_db = degree_bits[i].checked_sub(config.is_zk()).ok_or(
+diff --git a/recursion/src/traits/air.rs b/recursion/src/traits/air.rs
+index 4e131472..71c43d7d 100644
+--- a/recursion/src/traits/air.rs
++++ b/recursion/src/traits/air.rs
+@@ -238,6 +238,7 @@ where
+             preprocessed_width,
+             main_width: self.width(),
+             num_public_values: self.num_public_values(),
++            num_periodic_columns: p3_air::BaseAir::<F>::num_periodic_columns(self),
+             ..Default::default()
+         };
+         let mut builder = InteractionSymbolicBuilder::<F, EF>::new(layout);
+@@ -300,6 +301,41 @@ mod tests {
+         }
+     }
+ 
++    /// An AIR whose bus interaction reads a periodic column.
++    struct PeriodicBusAir;
++
++    impl BaseAir<F> for PeriodicBusAir {
++        fn width(&self) -> usize {
++            1
++        }
++        fn num_periodic_columns(&self) -> usize {
++            1
++        }
++        fn periodic_columns(&self) -> alloc::borrow::Cow<'_, [alloc::vec::Vec<F>]> {
++            alloc::borrow::Cow::Owned(alloc::vec![alloc::vec![F::ONE, F::ZERO]])
++        }
++    }
++
++    impl Air<Builder> for PeriodicBusAir {
++        fn eval(&self, builder: &mut Builder) {
++            // Indexing fails loudly if the builder was created without the periodic column.
++            let gate = builder.periodic_values()[0];
++            builder.push_interaction(
++                "test_bus",
++                core::iter::once(<Builder as AirBuilder>::Expr::ONE),
++                Count::bounded(gate.into(), 1),
++            );
++        }
++    }
++
++    #[test]
++    fn interaction_air_with_periodic_columns_is_detected() {
++        assert!(RecursiveAir::<F, EF, LogUpGadget>::declares_interactions(
++            &PeriodicBusAir,
++            0
++        ));
++    }
++
+     #[test]
+     fn plain_air_declares_no_interactions() {
+         assert!(!RecursiveAir::<F, EF, LogUpGadget>::declares_interactions(
+diff --git a/recursion/tests/periodic_columns.rs b/recursion/tests/periodic_columns.rs
+new file mode 100644
+index 00000000..2c0fb1c8
+--- /dev/null
++++ b/recursion/tests/periodic_columns.rs
+@@ -0,0 +1,71 @@
++//! Batch AIRs with periodic columns: the transcript replay must build each AIR's symbolic
++//! layout with its periodic columns (it asserted otherwise: `AirLayout num_periodic_columns
++//! does not match AIR`).
++
++use std::borrow::Cow;
++
++use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
++use p3_batch_stark::{ProverData, StarkInstance, prove_batch, verify_batch};
++use p3_field::PrimeCharacteristicRing;
++use p3_lookup::logup::LogUpGadget;
++use p3_matrix::dense::RowMajorMatrix;
++use p3_recursion::replay_batch_stark_transcript;
++use p3_test_utils::baby_bear_params::*;
++
++const ROWS: usize = 8;
++
++/// One column `x` with `x = 1` on even rows, selected by a periodic column `[1, 0]`.
++#[derive(Clone, Copy)]
++struct EvenRowsAreOne;
++
++impl BaseAir<F> for EvenRowsAreOne {
++    fn width(&self) -> usize {
++        1
++    }
++    fn num_periodic_columns(&self) -> usize {
++        1
++    }
++    fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
++        Cow::Owned(vec![vec![F::ONE, F::ZERO]])
++    }
++}
++
++impl<AB: AirBuilder<F = F>> Air<AB> for EvenRowsAreOne {
++    fn eval(&self, builder: &mut AB) {
++        // Indexing fails loudly if a builder was created without the periodic column.
++        let even: AB::Expr = builder.periodic_values()[0].into();
++        let x: AB::Expr = builder.main().current_slice()[0].into();
++        builder.assert_zero(even * (x - AB::Expr::ONE));
++    }
++}
++
++#[test]
++fn batch_transcript_replay_supports_periodic_columns() {
++    let config = make_test_config();
++    let air = EvenRowsAreOne;
++    let trace = RowMajorMatrix::new(
++        (0..ROWS)
++            .map(|r| if r % 2 == 0 { F::ONE } else { F::from_u32(7) })
++            .collect(),
++        1,
++    );
++    let public_values: Vec<F> = vec![];
++    let instances = vec![StarkInstance {
++        air: &air,
++        trace: &trace,
++        public_values: public_values.clone(),
++    }];
++    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
++    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
++    let publics = core::slice::from_ref(&public_values);
++    verify_batch(&config, &[air], &proof, publics, &prover_data.common).unwrap();
++    replay_batch_stark_transcript(
++        &[air],
++        &config,
++        &proof,
++        publics,
++        &prover_data.common,
++        &LogUpGadget::new(),
++    )
++    .expect("replay of a batch proof whose AIR has a periodic column");
++}
+diff --git a/recursion/tests/suites/fri_recursion.rs b/recursion/tests/suites/fri_recursion.rs
+index 627db7f4..cc8f1cdc 100644
+--- a/recursion/tests/suites/fri_recursion.rs
++++ b/recursion/tests/suites/fri_recursion.rs
+@@ -34,6 +34,8 @@ mod mmcs_leaf_hash_binding;
+ mod mul_air;
+ #[path = "../per_table_min_height.rs"]
+ mod per_table_min_height;
++#[path = "../periodic_columns.rs"]
++mod periodic_columns;
+ #[path = "../poseidon2_shared_compat.rs"]
+ mod poseidon2_shared_compat;
+ #[path = "../preprocessing.rs"]
+-- 
+2.34.1
+

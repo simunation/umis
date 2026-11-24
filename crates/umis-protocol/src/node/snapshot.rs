@@ -196,6 +196,21 @@ pub struct CommitView {
     pub status: String,
     pub proof_root: Option<String>,
     pub leaves: Vec<LeafView>,
+    /// Who signed the commitment (a zone member or full node).
+    pub signer: String,
+    /// `(slot, minter)` of every covered zone block: who simulated and published it.
+    pub minters: Vec<(u64, String)>,
+}
+
+/// A proof commitment included in a beacon block: who proved which commitment.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProofView {
+    pub zone: ZoneId,
+    /// Commit slot of the proven commitment.
+    pub e: u64,
+    pub signer: String,
+    /// Covered zone slots.
+    pub slots: Vec<(u64, u64)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -205,6 +220,7 @@ pub struct BeaconView {
     pub proposer: String,
     pub txs: Vec<String>,
     pub commits: Vec<CommitView>,
+    pub proofs: Vec<ProofView>,
     pub zones_root: String,
     pub proofs_root: String,
 }
@@ -270,7 +286,24 @@ impl Node {
                                     .collect()
                             })
                             .unwrap_or_default(),
+                        signer: c.signer.to_hex(),
+                        minters: zc
+                            .blocks
+                            .iter()
+                            .map(|cb| (cb.signed.header.slot, cb.signed.header.minter.to_hex()))
+                            .collect(),
                     }
+                })
+                .collect();
+            let proofs = b
+                .body
+                .proof_commitments
+                .iter()
+                .map(|p| ProofView {
+                    zone: p.pc.zone,
+                    e: p.pc.beacon_slot,
+                    signer: p.pc.signer.to_hex(),
+                    slots: p.leaves.iter().map(|l| (l.from_slot, l.to_slot)).collect(),
                 })
                 .collect();
             blocks.push(BeaconView {
@@ -279,16 +312,18 @@ impl Node {
                 proposer: b.header.proposer.to_hex(),
                 txs: b.body.txs.iter().map(|t| t.tx.kind_name().to_string()).collect(),
                 commits,
+                proofs,
                 zones_root: b.header.zones_root.to_hex(),
                 proofs_root: b.header.proofs_root.to_hex(),
             });
         }
-        // Free water locations next to existing zones (candidates for creation).
+        // Free locations next to existing zones of the same layer (candidates
+        // for creation).
         let mut free = std::collections::BTreeSet::new();
-        use umis_task::Topology;
-        for z in st.zones.values().filter(|z| z.layer == "water") {
-            for p in self.ctx.topo.adjacent(&z.point) {
-                if st.zone_at(&p, "water").is_none() {
+        for z in st.zones.values() {
+            let layer = umis_task::LayerId::new(&z.layer);
+            for p in self.ctx.topo.adjacent_in(&layer, &z.point) {
+                if st.zone_at(&p, &z.layer).is_none() {
                     free.insert(p);
                 }
             }

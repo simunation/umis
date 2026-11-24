@@ -17,7 +17,7 @@ use umis_node::{Handle, Runtime};
 use umis_protocol::{Command, Ctx, Node, NodeConfig};
 
 pub fn proof_backend(g: &Genesis) -> anyhow::Result<Arc<dyn umis_proof::ProofBackend>> {
-    task_water3d::air::backend_for(g).map_err(|e| anyhow::anyhow!(e))
+    umis_tasks::backend_for(g).map_err(|e| anyhow::anyhow!(e))
 }
 
 pub fn build_ctx(g: &Genesis) -> anyhow::Result<Arc<Ctx>> {
@@ -159,6 +159,12 @@ pub fn status_router(handle: Handle) -> Router {
                 Json(serde_json::to_value(h.render(z).await).unwrap_or_default())
             }),
         )
+        .route(
+            "/zonemeta/{z}",
+            get(|State(h): State<Handle>, AxPath(z): AxPath<u32>| async move {
+                Json(h.render(z).await.map(|r| r.meta).unwrap_or_default())
+            }),
+        )
         .with_state(handle)
 }
 
@@ -200,10 +206,19 @@ pub struct NodeArgs {
     /// Not a genesis validator: get faucet stake and join (`member` or `full`).
     #[arg(long)]
     pub join: Option<String>,
+    /// Run a genesis that opts into an insecure STARK configuration (`insecure_proofs`,
+    /// the `-test` presets): proofs then carry about 2 bits of security (INV-PARAM-1).
+    #[arg(long)]
+    pub allow_insecure_proofs: bool,
 }
 
 pub async fn node(a: NodeArgs) -> anyhow::Result<()> {
     let g = load_genesis(&a.genesis)?;
+    anyhow::ensure!(
+        !g.insecure_proofs || a.allow_insecure_proofs,
+        "genesis uses the insecure STARK configuration {:?}; pass --allow-insecure-proofs to run it",
+        g.stark_config_id
+    );
     let key = keys::load_or_create_secret(&a.key)?;
     std::fs::create_dir_all(&a.data_dir)?;
     let bootstrap = resolve_bootstrap(&a.bootstrap, a.bootstrap_http.as_deref()).await?;
@@ -345,24 +360,16 @@ pub struct ProposeArgs {
 /// `umis-cli propose-zone --point 2,1,0 --layer water --slot-ticks 4 --key k --founder-key f…`
 pub async fn propose_zone(a: ProposeArgs) -> anyhow::Result<()> {
     anyhow::ensure!(a.point.len() == 3, "--point needs x,y,z");
-    anyhow::ensure!(a.layer == task_water3d::LAYER, "this build only creates water zones");
     let g = load_genesis(&a.genesis)?;
     let key = keys::load_or_create_secret(&a.key)?;
     let founders: Vec<umis_core::SecretKey> =
         a.founder_keys.iter().map(|p| keys::load_or_create_secret(p)).collect::<Result<_, _>>()?;
-    let n_loc = g.zones.first().and_then(|z| z.params["n_loc"].as_u64()).unwrap_or(16) as u32;
     let point = [a.point[0], a.point[1], a.point[2]];
-    let params = borsh::to_vec(&task_water3d::devnet::zone_params(point, a.slot_ticks, n_loc))?;
+    let (task_id, params) =
+        umis_tasks::zone_proposal(&g, &a.layer, point, a.slot_ticks).map_err(|e| anyhow::anyhow!(e))?;
     let refs: Vec<&umis_core::SecretKey> = founders.iter().collect();
-    let p = umis_protocol::types::build_propose_tx(
-        key.node_id(),
-        &refs,
-        point,
-        &a.layer,
-        task_water3d::TASK_ID,
-        params,
-        a.slot_ticks,
-    );
+    let p =
+        umis_protocol::types::build_propose_tx(key.node_id(), &refs, point, &a.layer, task_id, params, a.slot_ticks);
     let id = p.proposal_id();
     let tx = umis_protocol::types::Tx::ProposeZone(p);
     let signed = umis_protocol::types::SignedTx { sig: key.sign(&tx.address()), tx };

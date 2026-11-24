@@ -51,10 +51,122 @@ fn zone_sparse() {
 }
 
 #[test]
+fn junk_proofs() {
+    ok("junk-proofs", 30);
+}
+
+#[test]
+fn junk_proofs_l0() {
+    ok("junk-proofs-l0", 30);
+}
+
+#[test]
 fn same_seed_same_trace() {
     let a = scenarios::run(Scenario::Basic, 7, 15);
     let b = scenarios::run(Scenario::Basic, 7, 15);
     assert_eq!(a.trace, b.trace);
     let c = scenarios::run(Scenario::Basic, 8, 15);
     assert_ne!(a.trace, c.trace);
+}
+
+// Real Plonky3 proofs (test FRI preset). Each scenario proves every advancing slot, so they
+// are the slowest here; `slots` is the minimum each scenario clamps to.
+#[test]
+fn stark() {
+    ok("stark", 20);
+}
+
+#[test]
+fn life_stark_keccak() {
+    ok("life-stark-keccak", 20);
+}
+
+#[test]
+fn life_stark_junk() {
+    ok("life-stark-junk", 20);
+}
+
+#[test]
+fn life_stark_l0() {
+    ok("life-stark-l0", 20);
+}
+
+// Recursive aggregation (koalabear-agg-test): about 100 s each in release, far longer in
+// debug, so release only (`cargo test --release -p umis-simnet`).
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn life_agg() {
+    ok("life-agg", 20);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn life_agg_junk() {
+    ok("life-agg-junk", 20);
+}
+
+// The generic local-rule task (task-stencil).
+#[test]
+fn stencil_life() {
+    ok("stencil-life", 30);
+}
+
+#[test]
+fn stencil_lbm() {
+    ok("stencil-lbm", 30);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_heat() {
+    ok("stencil-heat", 30);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_life_stark() {
+    ok("stencil-life-stark", 20);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_lbm_stark() {
+    ok("stencil-lbm-stark", 20);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_lbm_junk() {
+    ok("stencil-lbm-junk", 20);
+}
+
+// Stencil commitments aggregated recursively (S4, koalabear-agg-test).
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_agg() {
+    ok("stencil-agg", 20);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_agg_lbm() {
+    ok("stencil-agg-lbm", 20);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_agg_junk() {
+    ok("stencil-agg-junk", 20);
+}
+
+// Gray–Scott (toy 4).
+#[test]
+fn stencil_gs() {
+    ok("stencil-gs", 30);
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_gs_stark() {
+    ok("stencil-gs-stark", 20);
 }

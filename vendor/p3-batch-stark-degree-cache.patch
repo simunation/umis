@@ -1,0 +1,165 @@
+diff -ruN a/src/common.rs
+--- a/src/common.rs
++++ b/src/common.rs
+@@ -74,6 +74,53 @@
+     /// There is one `Lookups<Val<SC>>` per STARK instance.
+     /// They are stored in the same order as the STARK instance inputs provided to `new`.
+     pub lookups: Vec<Lookups<Val<SC>>>,
++    /// umis local patch: memoized quotient chunk counts (see [`QuotientDegreeCache`]).
++    pub quotient_degrees: QuotientDegreeCache,
++}
++
++/// umis local patch: the log₂ quotient chunk count of each instance, inferred symbolically on
++/// the first prove or verify and reused afterwards (the inference evaluates the whole AIR
++/// symbolically and dominated small proofs). Keyed by the instance index and every input of
++/// the inference that is not fixed by the AIR list this `CommonData` was built for: the
++/// layout, the trace height and the ZK flag. Callers must pair a `CommonData` with the AIRs it
++/// was built from (as for its lookups and preprocessed commitment).
++///
++/// A wrong count could only make honest proofs fail (the quotient identity is checked at a
++/// random point against chunks whose degree FRI bounds, whatever their number), never accept a
++/// false one.
++#[derive(Default)]
++pub struct QuotientDegreeCache(
++    std::sync::Mutex<alloc::collections::BTreeMap<(usize, [usize; 4], usize, usize), usize>>,
++);
++
++impl QuotientDegreeCache {
++    /// The cached count for `key`, or `f()` (stored).
++    pub fn get_or_compute(
++        &self,
++        instance: usize,
++        layout: &p3_air::symbolic::AirLayout,
++        log_degree: usize,
++        is_zk: usize,
++        f: impl FnOnce() -> usize,
++    ) -> usize {
++        let key = (
++            instance,
++            [
++                layout.preprocessed_width,
++                layout.main_width,
++                layout.num_public_values,
++                layout.num_periodic_columns,
++            ],
++            log_degree,
++            is_zk,
++        );
++        if let Some(v) = self.0.lock().expect("quotient degree cache").get(&key) {
++            return *v;
++        }
++        let v = f();
++        self.0.lock().expect("quotient degree cache").insert(key, v);
++        v
++    }
+ }
+ 
+ /// Prover-exclusive data not shared with the verifier.
+@@ -107,6 +154,7 @@
+         Self {
+             preprocessed,
+             lookups,
++            quotient_degrees: QuotientDegreeCache(std::sync::Mutex::new(alloc::collections::BTreeMap::new())),
+         }
+     }
+ 
+@@ -118,6 +166,7 @@
+         Self {
+             preprocessed: None,
+             lookups,
++            quotient_degrees: QuotientDegreeCache::default(),
+         }
+     }
+ }
+@@ -406,6 +455,7 @@
+             common: CommonData {
+                 preprocessed,
+                 lookups,
++                quotient_degrees: QuotientDegreeCache::default(),
+             },
+             prover_only: ProverOnlyData {
+                 preprocessed_prover_data,
+diff -ruN a/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2,6 +2,8 @@
+ #![no_std]
+ 
+ extern crate alloc;
++// umis local patch: `std::sync::Mutex` for the quotient degree cache (native and wasm32 have std).
++extern crate std;
+ 
+ #[cfg(debug_assertions)]
+ mod check_constraints;
+@@ -17,7 +19,7 @@
+ pub mod verifier;
+ 
+ // Re-export main types and functions for convenience
+-pub use common::{CommonData, ProverData, ProverOnlyData};
++pub use common::{CommonData, ProverData, ProverOnlyData, QuotientDegreeCache};
+ pub use config::{
+     Challenge, Commitment, Domain, PackedChallenge, PackedVal, PcsError, PcsProof,
+     StarkGenericConfig, Val,
+diff -ruN a/src/prover.rs
+--- a/src/prover.rs
++++ b/src/prover.rs
+@@ -207,17 +207,25 @@
+             };
+ 
+             // Infer the log of the quotient polynomial degree from symbolic analysis.
+-            let lq_chunks =
+-                info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
+-                    get_log_num_quotient_chunks_for_domain::<_, SC::Challenge, A, _>(
+-                        air,
+-                        layout,
+-                        pcs.natural_domain_for_degree(degrees[i]),
+-                        all_lookups[i],
+-                        config.is_zk(),
+-                        &lookup_gadget,
+-                    )
+-                });
++            // umis local patch: memoized per CommonData (QuotientDegreeCache).
++            let lq_chunks = common.quotient_degrees.get_or_compute(
++                i,
++                &layout,
++                degrees[i].trailing_zeros() as usize,
++                config.is_zk(),
++                || {
++                    info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
++                        get_log_num_quotient_chunks_for_domain::<_, SC::Challenge, A, _>(
++                            air,
++                            layout,
++                            pcs.natural_domain_for_degree(degrees[i]),
++                            all_lookups[i],
++                            config.is_zk(),
++                            &lookup_gadget,
++                        )
++                    })
++                },
++            );
+             // Actual number of quotient chunks (doubled when ZK is enabled).
+             let n_chunks = 1 << (lq_chunks + config.is_zk());
+             (lq_chunks, n_chunks)
+diff -ruN a/src/verifier/mod.rs
+--- a/src/verifier/mod.rs
++++ b/src/verifier/mod.rs
+@@ -448,7 +448,8 @@
+             num_periodic_columns: air.num_periodic_columns(),
+             ..Default::default()
+         };
+-        let log_num_chunks =
++        // umis local patch: memoized per CommonData (QuotientDegreeCache).
++        let log_num_chunks = common.quotient_degrees.get_or_compute(i, &layout, base_db, config.is_zk(), || {
+             info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
+                 get_log_num_quotient_chunks_for_domain::<_, SC::Challenge, A, _>(
+                     air,
+@@ -458,7 +459,8 @@
+                     config.is_zk(),
+                     &lookup_gadget,
+                 )
+-            });
++            })
++        });
+         log_num_quotient_chunks.push(log_num_chunks);
+ 
+         let (_, n_chunks) =

@@ -1,0 +1,22 @@
+diff -ruN a/recursion/src/prepared/input.rs
+--- a/recursion/src/prepared/input.rs
++++ b/recursion/src/prepared/input.rs
+@@ -322,6 +322,7 @@
+                 // Lookup contexts are rebuilt from the trusted reconstructed table AIRs, so
+                 // supplied lookups do not select behavior in these built-in high-level paths.
+                 lookups: _,
++                ..
+             } = common_data;
+             let preprocessed = common_preprocessed
+                 .as_ref()
+diff -ruN a/recursion/src/verifier/batch_stark.rs
+--- a/recursion/src/verifier/batch_stark.rs
++++ b/recursion/src/verifier/batch_stark.rs
+@@ -2331,6 +2331,7 @@
+                 .iter()
+                 .map(|_| Lookups::<F>::default())
+                 .collect(),
++            quotient_degrees: Default::default(),
+         };
+         let lookup_gadget = LogUpGadget::new();
+         let layouts: Vec<_> = airs

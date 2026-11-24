@@ -1,0 +1,27 @@
+[package]
+name = "task-stencil"
+description = "Generic local-rule zone task (life, heat, lattice Boltzmann) on the umis-stencil framework, with its STARK proof backend (native only)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+umis-core.workspace = true
+umis-task.workspace = true
+umis-proof.workspace = true
+umis-stencil = { path = "../umis-stencil" }
+umis-stark = { path = "../umis-stark" }
+borsh.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rand_chacha.workspace = true
+postcard = { version = "1.1", features = ["alloc"] }
+p3-field = "=0.9.0-rc.2"
+p3-batch-stark = "=0.9.0-rc.2"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+umis-stencil = { path = "../umis-stencil" }

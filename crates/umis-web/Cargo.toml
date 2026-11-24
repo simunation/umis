@@ -9,24 +9,24 @@ license.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[dependencies]
-umis-core.workspace = true
-umis-task.workspace = true
-task-water3d = { workspace = true, features = ["stark"] }
-umis-proof.workspace = true
-umis-protocol.workspace = true
-umis-net.workspace = true
-umis-node.workspace = true
-anyhow.workspace = true
-futures.workspace = true
-futures-timer.workspace = true
-serde.workspace = true
+# Browser-only crate (frozen since 2026-11-22): every module is wasm32-only, so on native it builds
+# empty and needs no dependencies.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
 serde_json.workspace = true
-tracing.workspace = true
+serde.workspace = true
 hex.workspace = true
 borsh.workspace = true
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+umis-core.workspace = true
+umis-task.workspace = true
+umis-proof.workspace = true
+tracing.workspace = true
+futures.workspace = true
+anyhow.workspace = true
+umis-protocol.workspace = true
+umis-net.workspace = true
+task-water3d = { workspace = true, features = ["stark"] }
+umis-tasks.workspace = true
+umis-node.workspace = true
 wasm-bindgen = "=0.2.108"
 wasm-bindgen-futures = "=0.4.58"
 js-sys = "0.3"

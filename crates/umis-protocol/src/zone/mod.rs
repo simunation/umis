@@ -3,5 +3,5 @@
 pub mod engine;
 pub mod inputs;
 
-pub use engine::{BlockEntry, BlockOutcome, MintVariant, ProveOut, ZoneEngine, check_vote};
+pub use engine::{BlockEntry, BlockOutcome, MintVariant, ProveOut, ShareVerdict, ZoneEngine, check_vote};
 pub use inputs::InputStore;

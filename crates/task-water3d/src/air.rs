@@ -37,8 +37,10 @@
 //!   `in_mult`; it reads `(addr, q)` and `(addr + off_d, nb[d])` for every
 //!   in-zone neighbour. Balance forces every read to equal the value written.
 
+#[cfg(test)]
+use crate::CELL_BYTES;
 use crate::stencil::{Coeffs, OFFSETS, face_index, idx, numerator};
-use crate::{CELL_BYTES, Cell, Ctx, FIELDS, Water3d, Water3dParams};
+use crate::{Cell, Ctx, FIELDS, Water3d, Water3dParams, decode_cells};
 use alloc_shim::*;
 use p3_air::{Air, BaseAir, PermutationAirBuilder, WindowAccess};
 use p3_batch_stark::{BatchProof, ProverData, StarkInstance, prove_batch, verify_batch};
@@ -284,18 +286,24 @@ where
     }
 }
 
+#[cfg(test)]
 fn decode(b: &[u8]) -> Vec<Cell> {
     b.chunks_exact(CELL_BYTES)
         .map(|c| std::array::from_fn(|f| i32::from_le_bytes(c[f * 4..f * 4 + 4].try_into().expect("4 bytes"))))
         .collect()
 }
 
-/// The 6 halos (input faces; the empty-neighbour boundary when absent).
-fn halos(p: &Water3dParams, inputs: &BTreeMap<PortId, Bytes>) -> [Vec<Cell>; 6] {
-    std::array::from_fn(|d| match inputs.get(&(d as PortId)) {
-        Some(b) if b.len() == p.face_bytes() => decode(b),
-        _ => vec![[0; FIELDS]; p.face_cells()],
-    })
+/// The 6 halos (input faces; the empty-neighbour boundary when absent). A present input
+/// must be exactly one face of in-range cells (INV-IO-2, INV-CANON-1); `None` otherwise.
+fn halos(p: &Water3dParams, inputs: &BTreeMap<PortId, Bytes>) -> Option<[Vec<Cell>; 6]> {
+    let mut out: [Vec<Cell>; 6] = Default::default();
+    for (d, h) in out.iter_mut().enumerate() {
+        *h = match inputs.get(&(d as PortId)) {
+            Some(b) => decode_cells(b, p.face_cells())?,
+            None => vec![[0; FIELDS]; p.face_cells()],
+        };
+    }
+    Some(out)
 }
 
 /// Periodic columns and public values of a claim.
@@ -439,11 +447,11 @@ impl Water3dStark {
         Self { preset, config: config(preset), setups: Mutex::new(HashMap::new()) }
     }
 
-    /// From a genesis `stark_config_id`: `koalabear` (benchmark FRI) or
+    /// From a genesis `stark_config_id`: `koalabear` (P100 FRI, ≥ 101 proven bits) or
     /// `koalabear-test` (few queries, fast and insecure, for tests).
     pub fn from_config_id(id: Option<&str>) -> Result<Self, String> {
         match id.unwrap_or("koalabear") {
-            "koalabear" => Ok(Self::new(FriPreset::Benchmark)),
+            "koalabear" => Ok(Self::new(FriPreset::P100)),
             "koalabear-test" => Ok(Self::new(FriPreset::Test)),
             other => Err(format!("unknown stark_config_id {other}")),
         }
@@ -470,7 +478,9 @@ impl Water3dStark {
             std::slice::from_ref(&air),
             &[log_h],
             &[3],
-            1,
+            // INV-PARAM-2: the degree budget follows the preset's blowup. The lookup budget
+            // stays 3, the shape the security bound is computed at (C = 56, d = 3).
+            self.preset.log_blowup(),
         )
         .map_err(|e| ProofError::Prover(format!("setup: {e}")))?;
         let params_hash = umis_task::params_hash(crate::TASK_ID, crate::LAYER, params);
@@ -496,7 +506,12 @@ fn check_roots(
     if bmt::file_address(next) != stmt.state_root {
         return bad("next state does not match state_root");
     }
-    Ok((decode(prev), decode(next)))
+    // INV-CANON-1: an aliased value (v ± p) maps to the same field element as v, so a
+    // non-canonical blob would get the honest blob's proof under a different root.
+    match (decode_cells(prev, ctx.p.cells()), decode_cells(next, ctx.p.cells())) {
+        (Some(a), Some(b)) => Ok((a, b)),
+        _ => bad("non-canonical state (a cell value outside [-2^15, 2^15))"),
+    }
 }
 
 impl ProofBackend for Water3dStark {
@@ -529,11 +544,9 @@ impl Water3dStark {
         if stmt.to_slot != stmt.from_slot + 1 || stmt.params_hash != z.params_hash {
             return Err(ProofError::Prover("statement must cover one slot of this zone".into()));
         }
-        let x_in = decode(w.prev_state);
-        if x_in.len() != z.ctx.p.cells() {
-            return Err(ProofError::Prover("prev state size".into()));
-        }
-        let halo = halos(&z.ctx.p, w.inputs);
+        let x_in = decode_cells(w.prev_state, z.ctx.p.cells())
+            .ok_or_else(|| ProofError::Prover("non-canonical prev state".into()))?;
+        let halo = halos(&z.ctx.p, w.inputs).ok_or_else(|| ProofError::Prover("non-canonical input".into()))?;
         let (mut trace, x_out) = generate_trace(&z.ctx, &x_in, &halo, stmt.from_slot);
         tamper(&mut trace);
         let (per, public) = claim_data(&z.ctx, &z.params_hash, stmt.from_slot, &x_in, &x_out, &halo);
@@ -583,7 +596,8 @@ impl Water3dStark {
         } else {
             return Err(ProofError::Invalid("STARK verification needs the InputRefs".into()));
         }
-        let halo = halos(&z.ctx.p, inputs);
+        let halo = halos(&z.ctx.p, inputs)
+            .ok_or_else(|| ProofError::Invalid("non-canonical or wrong-length input (INV-IO-2, INV-CANON-1)".into()))?;
         let (per, public) = claim_data(&z.ctx, &z.params_hash, stmt.from_slot, &x_in, &x_out, &halo);
         let air = WaterAir::new(Shape::of(&z.ctx.p), z.coeffs.clone(), per);
         let proof: BatchProof<Config> =
@@ -674,12 +688,15 @@ mod tests {
 
         fn public<'a>(&'a self, next: &'a [u8], inputs: &'a BTreeMap<PortId, Bytes>) -> PublicData<'a> {
             PublicData {
+                task_id: Some(crate::TASK_ID),
                 params: Some(&self.params),
                 genesis_seed: Some(self.seed),
                 prev_state: Some(&self.prev),
                 next_state: Some(next),
                 inputs: Some(inputs),
                 input_refs: Some(&self.refs),
+                prev_witness: None,
+                next_witness: None,
             }
         }
     }
@@ -689,7 +706,7 @@ mod tests {
         let f = fixture(4);
         let b = Water3dStark::new(FriPreset::Test);
         let z = b.setup(&f.params, &f.seed).unwrap();
-        let (_, x_out) = generate_trace(&z.ctx, &decode(&f.prev), &halos(&z.ctx.p, &f.inputs), 3);
+        let (_, x_out) = generate_trace(&z.ctx, &decode(&f.prev), &halos(&z.ctx.p, &f.inputs).unwrap(), 3);
         assert_eq!(x_out, decode(&f.next), "AIR witness must match step() bit for bit");
     }
 
@@ -733,6 +750,155 @@ mod tests {
             b.verify(&f.stmt, &f.public(&f.next, &f.inputs), &proof).map(|_| ())
         }));
         !matches!(r, Ok(Ok(())))
+    }
+
+    /// A proof from an honest trace whose claim (periodic data and digest) is built from the
+    /// given cells: what a cheating prover sends for an aliased blob.
+    fn claim_proof(f: &Fixture, b: &Water3dStark, x_in: &[Cell], x_out: &[Cell], halo: &[Vec<Cell>; 6]) -> Vec<u8> {
+        let z = b.setup(&f.params, &f.seed).unwrap();
+        let honest_halo = halos(&z.ctx.p, &f.inputs).unwrap();
+        claim_proof_from(f, b, &honest_halo, x_in, x_out, halo)
+    }
+
+    /// As [`claim_proof`], with the trace computed from `trace_halo`.
+    fn claim_proof_from(
+        f: &Fixture,
+        b: &Water3dStark,
+        trace_halo: &[Vec<Cell>; 6],
+        x_in: &[Cell],
+        x_out: &[Cell],
+        halo: &[Vec<Cell>; 6],
+    ) -> Vec<u8> {
+        let z = b.setup(&f.params, &f.seed).unwrap();
+        let (trace, _) = generate_trace(&z.ctx, &decode(&f.prev), trace_halo, f.stmt.from_slot);
+        let (per, public) = claim_data(&z.ctx, &z.params_hash, f.stmt.from_slot, x_in, x_out, halo);
+        let air = WaterAir::new(Shape::of(&z.ctx.p), z.coeffs.clone(), per);
+        let proof = prove_batch(
+            &b.config,
+            &[StarkInstance { air: &air, trace: &trace, public_values: public }],
+            &z.prover_data,
+        )
+        .unwrap();
+        postcard::to_allocvec(&proof).unwrap()
+    }
+
+    fn encode(cells: &[Cell]) -> Vec<u8> {
+        cells.iter().flat_map(|c| c.iter().flat_map(|v| v.to_le_bytes())).collect()
+    }
+
+    /// `v + p` (or `v - p`) as an i32: the same field element as `v`.
+    fn alias(v: i32) -> i32 {
+        const P: i64 = 0x7f00_0001;
+        let a = v as i64 + P;
+        if a <= i32::MAX as i64 { a as i32 } else { (v as i64 - P) as i32 }
+    }
+
+    /// INV-CANON-1/2, INV-IO-2: aliased X_out, X_in and halo blobs with re-derived roots and
+    /// digest (the 2026-11-03 exploit), and a wrong-length halo, are rejected.
+    #[test]
+    fn non_canonical_blobs_are_rejected() {
+        let f = fixture(4);
+        let b = Water3dStark::new(FriPreset::Test);
+        let z = b.setup(&f.params, &f.seed).unwrap();
+        let (x_in, x_out) = (decode(&f.prev), decode(&f.next));
+        let halo = halos(&z.ctx.p, &f.inputs).unwrap();
+        // The honest claim through the same path verifies (the harness is sound).
+        let honest = claim_proof(&f, &b, &x_in, &x_out, &halo);
+        b.verify(&f.stmt, &f.public(&f.next, &f.inputs), &honest).unwrap();
+
+        // aliased X_out
+        let mut out2 = x_out.clone();
+        out2[0][1] = alias(out2[0][1]);
+        let next2 = encode(&out2);
+        let mut stmt = f.stmt.clone();
+        stmt.state_root = bmt::file_address(&next2);
+        let outs2 = <Water3d as ZoneTask>::outputs(&z.ctx, &crate::State { cells: out2.clone() });
+        stmt.outputs_root = umis_task_outputs_root(&outs2);
+        let proof = claim_proof(&f, &b, &x_in, &out2, &halo);
+        assert!(b.verify(&stmt, &f.public(&next2, &f.inputs), &proof).is_err(), "aliased X_out");
+
+        // aliased X_in
+        let mut in2 = x_in.clone();
+        in2[5][0] = alias(in2[5][0]);
+        let mut f2 = fixture(4);
+        f2.prev = encode(&in2);
+        let mut stmt = f.stmt.clone();
+        stmt.prev_state_root = bmt::file_address(&f2.prev);
+        f2.stmt = stmt.clone();
+        let proof = claim_proof(&f, &b, &in2, &x_out, &halo);
+        assert!(b.verify(&stmt, &f2.public(&f.next, &f.inputs), &proof).is_err(), "aliased X_in");
+
+        // aliased halo cell, with a matching InputRef
+        let mut halo2 = halo.clone();
+        halo2[1][3][0] = alias(halo2[1][3][0]);
+        let inputs2: BTreeMap<PortId, Bytes> = [(1u32, encode(&halo2[1]))].into_iter().collect();
+        let mut f3 = fixture(4);
+        f3.refs[0].payload_address = bmt::file_address(&inputs2[&1]);
+        let mut stmt = f.stmt.clone();
+        stmt.inputs_commitment = umis_core::records::list_root_of(&f3.refs);
+        let proof = claim_proof(&f, &b, &x_in, &x_out, &halo2);
+        assert!(b.verify(&stmt, &f3.public(&f.next, &inputs2), &proof).is_err(), "aliased halo");
+
+        // a halo one cell short, with a matching InputRef (was read as an absent neighbour)
+        let short: BTreeMap<PortId, Bytes> = [(1u32, f.inputs[&1][..f.inputs[&1].len() - CELL_BYTES].to_vec())].into();
+        let mut f4 = fixture(4);
+        f4.refs[0].payload_address = bmt::file_address(&short[&1]);
+        let mut stmt = f.stmt.clone();
+        stmt.inputs_commitment = umis_core::records::list_root_of(&f4.refs);
+        // The attacker proves the honest step with that halo read as an absent neighbour.
+        let mut zero = halo.clone();
+        zero[1] = vec![[0; FIELDS]; z.ctx.p.face_cells()];
+        let (_, out0) = generate_trace(&z.ctx, &x_in, &zero, f.stmt.from_slot);
+        let next0 = encode(&out0);
+        stmt.state_root = bmt::file_address(&next0);
+        let outs0 = <Water3d as ZoneTask>::outputs(&z.ctx, &crate::State { cells: out0.clone() });
+        stmt.outputs_root = umis_task_outputs_root(&outs0);
+        let proof = claim_proof_from(&f, &b, &zero, &x_in, &out0, &zero);
+        assert!(b.verify(&stmt, &f4.public(&next0, &short), &proof).is_err(), "short halo");
+    }
+
+    /// INV-PARAM-3: P100 gives ≥ 101 proven bits (unique decoding, p3-security) at every trace
+    /// height `validate_params` allows (2^8 ..= 2^16: `k_sub ≤ 16`, `n_loc ≤ 16`, `shift ≤ 14`).
+    /// Counts are over-estimates of the measured shape (C = 56, B = 198, 23 interactions of
+    /// width ≤ 5; `fri-soundness-foundations.md` §3.0): main and preprocessed opened at two
+    /// points, 13 + 1 permutation columns.
+    #[test]
+    fn p100_is_secure_for_every_water_shape() {
+        use umis_stark::security::{ProofShape, TARGET_BITS, proven_udr_bits};
+        for log_h in 8..=16 {
+            let shape = ProofShape {
+                log_height: log_h,
+                num_constraints: 64,
+                max_degree: 3,
+                batched_openings: 2 * 46 + 2 * 32 + 2 * 4 + 2 * (13 + 1) * 4,
+                logup: Some((23, 5)),
+            };
+            let bits = proven_udr_bits(FriPreset::P100, &shape);
+            assert!(bits >= TARGET_BITS, "2^{log_h}: {bits:.1}");
+        }
+    }
+
+    /// A real P100 proof (blowup 4, arity 8, grinding at every site, INV-PARAM-2's degree
+    /// budget) verifies, and a Test-preset proof does not verify under P100.
+    #[test]
+    fn p100_proofs_verify_and_bind_the_preset() {
+        let f = fixture(4);
+        let b = Water3dStark::new(FriPreset::P100);
+        let proof = b.prove(&f.stmt, &f.witness(), &SecretKey::from_label("p")).unwrap();
+        b.verify(&f.stmt, &f.public(&f.next, &f.inputs), &proof).unwrap();
+        let weak =
+            Water3dStark::new(FriPreset::Test).prove(&f.stmt, &f.witness(), &SecretKey::from_label("p")).unwrap();
+        assert!(b.verify(&f.stmt, &f.public(&f.next, &f.inputs), &weak).is_err());
+    }
+
+    /// INV-ARITH-1: shift 15 and 16 would let the stencil identity wrap mod p.
+    #[test]
+    fn shift_above_14_is_rejected() {
+        let mut p = Water3dParams::default_for([0, 0, 0], 4);
+        for (shift, ok) in [(14, true), (15, false), (16, false)] {
+            p.shift = shift;
+            assert_eq!(Water3d::validate_params(&p).is_ok(), ok, "shift {shift}");
+        }
     }
 
     #[test]
