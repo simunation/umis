@@ -43,7 +43,6 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
-repository = "https://github.com/nugaon/simunation"
 
 [workspace.dependencies]
 umis-core = { path = "crates/umis-core" }
@@ -54,7 +53,6 @@ task-life2d = { path = "crates/task-life2d" }
 umis-proof = { path = "crates/umis-proof" }
 umis-stark = { path = "crates/umis-stark" }
 umis-protocol = { path = "crates/umis-protocol" }
-umis-simnet = { path = "crates/umis-simnet" }
 umis-net = { path = "crates/umis-net" }
 umis-node = { path = "crates/umis-node" }
 

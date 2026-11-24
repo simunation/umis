@@ -1,6 +1,10 @@
 //! The composed libp2p behaviour. Every role uses the same struct; parts a role
 //! does not need are switched off with `Toggle`.
 
+// The `NetworkBehaviour` derive matches on uninhabited event types (`Infallible`), which
+// Rust ≥ 1.100 reports as unreachable code inside the generated impl.
+#![allow(unreachable_code)]
+
 use crate::codec::{BytesCodec, SYNC_PROTOCOL};
 use crate::config::Role;
 use libp2p::swarm::NetworkBehaviour;

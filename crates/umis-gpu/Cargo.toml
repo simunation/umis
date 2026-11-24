@@ -8,13 +8,13 @@ license.workspace = true
 
 [features]
 # Needs the CUDA toolkit (nvcc) at build time and an NVIDIA GPU at run time.
-cuda = ["dep:cudarc", "dep:p3-commit", "dep:p3-fri", "dep:p3-merkle-tree", "dep:p3-symmetric", "dep:p3-keccak", "dep:p3-challenger", "dep:p3-util", "dep:p3-maybe-rayon", "dep:p3-air", "dep:p3-uni-stark", "dep:p3-batch-stark", "dep:umis-stark", "dep:rayon"]
+cuda = ["dep:cudarc", "dep:p3-field", "dep:p3-matrix", "dep:p3-dft", "dep:p3-koala-bear", "dep:p3-commit", "dep:p3-fri", "dep:p3-merkle-tree", "dep:p3-symmetric", "dep:p3-keccak", "dep:p3-challenger", "dep:p3-util", "dep:p3-maybe-rayon", "dep:p3-air", "dep:p3-uni-stark", "dep:p3-batch-stark", "dep:umis-stark", "dep:rayon"]
 
 [dependencies]
-p3-dft = "=0.9.0-rc.2"
-p3-field = "=0.9.0-rc.2"
-p3-koala-bear = "=0.9.0-rc.2"
-p3-matrix = "=0.9.0-rc.2"
+p3-dft = { version = "=0.9.0-rc.2", optional = true }
+p3-field = { version = "=0.9.0-rc.2", optional = true }
+p3-koala-bear = { version = "=0.9.0-rc.2", optional = true }
+p3-matrix = { version = "=0.9.0-rc.2", optional = true }
 p3-commit = { version = "=0.9.0-rc.2", optional = true }
 p3-fri = { version = "=0.9.0-rc.2", optional = true }
 p3-merkle-tree = { version = "=0.9.0-rc.2", optional = true }

@@ -15,7 +15,6 @@ thiserror.workspace = true
 tiny-keccak.workspace = true
 ed25519-dalek.workspace = true
 rand_core.workspace = true
-rand_chacha.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 proptest.workspace = true

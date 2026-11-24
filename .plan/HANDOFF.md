@@ -75,6 +75,8 @@ status, history) and, before touching proof code,
 
 ## Machine and environment quirks
 
+- Rust is pinned in `rust-toolchain.toml` (1.100.0, same as CI). New stable releases add lints that `-D warnings`
+  turns into errors (1.100 broke CI on 2026-11-24); bump deliberately and run the gate.
 - 16 cores, shared with other users' jobs (load often 5–40): use `-j 8`, compare benchmarks back to back.
 - GPUs: RTX A6000 (index 0) and RTX 3090 Ti (index 1), both shared; `UMIS_GPU=3090` / `A6000` selects by name.
   Driver CUDA 13.2 < toolkit 13.5: NVRTC compiles straight to CUBIN (sm_86); PCIe link runs at about 2 GB/s.
