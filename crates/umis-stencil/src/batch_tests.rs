@@ -13,6 +13,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use rand_chacha::ChaCha8Rng;
 use rand_chacha::rand_core::{Rng, SeedableRng};
 use umis_stark::config::FriPreset;
+use umis_stark::security::worst_bits;
 
 fn heat() -> Heat {
     Heat::new(16, 3, 4, 1000).with_lookups()
@@ -193,10 +194,30 @@ fn batch_leaves_clear_the_target_at_p100() {
         let (t, public, _) = b.generate(&ext);
         let proof = b.prove(&t, &public).unwrap();
         b.verify(&proof, &public).unwrap();
-        let sh = StencilBatch::<Heat>::security_shape(&proof);
-        let bits = proven_udr_bits(FriPreset::P100, &sh);
+        let sh = StencilBatch::<Heat>::security_shapes(&proof);
+        let bits = worst_bits(&sh, |s| proven_udr_bits(FriPreset::P100, s));
         assert!(bits >= TARGET_BITS, "{n},{k},{rpr}: {bits:.1} bits ({sh:?})");
     }
+}
+
+/// INV-STENCIL-PARAM-1 for the batch leaf: its unique-decoding figure is set by the
+/// **shortest** instance (`ρ⁺ = (k + 2)/n`), not the 2^16-row range table, so the cells AIR
+/// keeps `MIN_HEIGHT = 64`: at 2^6 the leaf clears the target, at 2^5 it would not (small zones
+/// cannot drop the padding at P100; 2026-11-24).
+#[test]
+fn the_shortest_instance_sets_the_batch_figure() {
+    use umis_stark::security::{TARGET_BITS, proven_udr_bits};
+    let b = StencilBatch::new(heat(), 8, 1, 2, FriPreset::P100).unwrap();
+    let ext = Grid::filled(b.shape.we, b.shape.we, &[1000]);
+    let (t, public, _) = b.generate(&ext);
+    let proof = b.prove(&t, &public).unwrap();
+    let sh = StencilBatch::<Heat>::security_shapes(&proof);
+    assert_eq!(sh.iter().map(|s| s.log_height).collect::<Vec<_>>(), [16, 6], "tallest, then shortest");
+    let p100 = |s: &umis_stark::security::ProofShape| proven_udr_bits(FriPreset::P100, s);
+    assert!(p100(&sh[1]) < p100(&sh[0]), "the short cells AIR is the binding instance");
+    assert!(worst_bits(&sh, p100) >= TARGET_BITS);
+    let at5 = umis_stark::security::ProofShape { log_height: 5, ..sh[1] };
+    assert!(p100(&at5) < TARGET_BITS, "a 32-row cells AIR would miss the target");
 }
 
 #[test]

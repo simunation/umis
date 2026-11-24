@@ -400,6 +400,12 @@ pub fn proof_bytes(p: &BatchStarkProof<AggConfig>) -> usize {
 /// tallest table, every opened codeword (base columns count 1, extension columns 5), the
 /// degree its quotient chunking allows, and upper estimates for what the proof does not carry
 /// (constraints: 4 per opened codeword; LogUp: 4 interactions of width 8 per permutation column).
+///
+/// Open (2026-11-24, `.plan/NEXT.md`): p3-security models one trace height. Its unique-decoding
+/// term is worst at a proof's shortest instance, and P3R circuit proofs have tables down to one
+/// row, where that per-instance model does not apply (0 bits by its guard; the 8-point codeword
+/// is covered by every query). Leaves report the worse of both heights
+/// (`umis_stencil::batch::security_shapes_of`); recursive proofs need a multi-height argument.
 pub fn recursive_shape(p: &BatchStarkProof<AggConfig>) -> ProofShape {
     const E: usize = 5;
     let bp = &p.proof;

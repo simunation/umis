@@ -32,8 +32,9 @@ patches), S4 generic stencil aggregation (`koalabear-agg`), multi-slot leaves (2
 1. ~~**S6b** `d_faces`~~ done 2026-11-24: the beacon checks `outputs_root` statelessly (leaf statement 32 elements,
    witnesses carry both borders, ~5 KB for LBM 32²; leaf cost within noise).
 2. ~~Plonky3 degree-inference cache~~ done 2026-11-23 (LBM verify 156 → 82 ms, 8-slot prove 134 → 60 ms/slot).
-3. Aggregation over multi-slot leaves; cheaper layer 1 for wide leaves (LBM 5.3 s per slot).
-4. Small zones (`MIN_HEIGHT` padding), then the GPU batch leaf.
+3. ~~Aggregation over multi-slot leaves~~ measured 2026-11-24: no gain (layer 1 ∝ opened width), m = 8 too big.
+4. ~~Small zones~~ answered 2026-11-24: the shortest instance sets the batch figure, so `MIN_HEIGHT = 64` stays at
+   P100. Open: multi-height model for recursive proofs (B9). Then the GPU batch leaf.
 
 **Plan (in order):**
 1. ~~**S1 stencil AIR framework**~~ **done 2026-11-22** (`crates/umis-stencil`, spec `docs/zk/stencil-spec.md`):

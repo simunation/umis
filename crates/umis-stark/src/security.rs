@@ -33,6 +33,26 @@ pub struct ProofShape {
     pub logup: Option<(usize, usize)>,
 }
 
+impl ProofShape {
+    /// The same proof modelled at each of `log_heights` (a batch proof's instance heights).
+    /// p3-security takes one trace length, and its terms pull both ways: the unique-decoding
+    /// agreement uses `ρ⁺ = (k + 2)/n` (the two out-of-domain points), worst at the **shortest**
+    /// instance, the DEEP and list terms are worst at the tallest. A batch proof must clear
+    /// every one ([`worst_bits`]).
+    pub fn at_heights(&self, log_heights: impl IntoIterator<Item = usize>) -> alloc::vec::Vec<ProofShape> {
+        let mut hs: alloc::vec::Vec<usize> = log_heights.into_iter().collect();
+        hs.sort_unstable_by(|a, b| b.cmp(a));
+        hs.dedup();
+        hs.into_iter().map(|log_height| ProofShape { log_height, ..*self }).collect()
+    }
+}
+
+/// The proven bits of a proof modelled by several shapes ([`ProofShape::at_heights`]): the
+/// smallest figure.
+pub fn worst_bits(shapes: &[ProofShape], bits: impl Fn(&ProofShape) -> f64) -> f64 {
+    shapes.iter().map(bits).fold(f64::INFINITY, f64::min)
+}
+
 /// Proven bits (unique-decoding regime) of `shape` under `preset`.
 pub fn proven_udr_bits(preset: FriPreset, shape: &ProofShape) -> f64 {
     let f = preset.fri_params(());

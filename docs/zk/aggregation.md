@@ -149,6 +149,20 @@ Measured (J101, `stencil_agg_bench`, 16 cores, load 5–9; leaf includes its nat
 | LBM 32² | 610 ms, 3.35 MB | 2.86 s | 5.31 s, 0.45 MB | 1.02 s, 0.45 MB | 10 ms |
 | life 64² | 15 ms, 0.23 MB | 171 ms | 359 ms, 0.39 MB | 1.03 s, 0.44 MB | 9 ms |
 
+**Multi-slot leaves under layer 1 (measured 2026-11-24, `M=m stencil_agg_bench`, J101, load 12–14):** one
+layer-1 proof over an `m`-slot leaf costs the same per slot as `m` layer-1 proofs plus their 2-to-1 steps, since
+layer 1 is dominated by hashing the opened columns in-circuit, which grows with `m`:
+
+| LBM 32² | leaf per slot | layer 1 per slot | layer-1 proof |
+|---|---|---|---|
+| per slot + 2-to-1 (today) | 512 ms | 4.32 s + ~0.97 s per 2-to-1 | 0.48 MB, aggregate 0.49 MB |
+| m = 2 | 355 ms | 4.88 s | 0.58 MB |
+| m = 4 | 271 ms | 4.99 s | 0.72 MB |
+| m = 8 | | fails: the circuit's FFT domain exceeds KoalaBear's 2^24 two-adicity | |
+
+So the backend keeps per-slot layer 1. A higher leaf blowup (J101 already uses 8) would save about 25 % of the
+queries for twice the leaf time, about 10 % net: not worth a separate config.
+
 Tests (`tests/native.rs`, release): honest recursion and statement binding; one owner for many slots plus a 2-to-1
 aggregate that chains; a leaf of another rule (same widths, same preprocessed commitment) rejected by the circuit;
 a leaf proved under a forged verifying key rejected by the circuit (mutation-checked: without the pin it recurses);

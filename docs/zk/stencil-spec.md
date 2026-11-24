@@ -71,7 +71,12 @@ Missing neighbours: the caller fills their part of `E` with `Rule::boundary()`, 
   Permutation inputs are committed limbs, and gates multiply only columns (`the_degree_is_the_rules_degree`:
   life is 3). Security inputs use `StencilAir::security_shape()`, which takes the symbolic degree.
 - **PARAM-1:** `MIN_HEIGHT = 64`. Heights 2^3–2^5 give 93.8–100.5 proven bits at P100; 2^6 and up clear 101
-  (`p100_clears_the_target_for_every_shape`).
+  (`p100_clears_the_target_for_every_shape`). It binds the batch leaf too: p3-security models one height, and its
+  unique-decoding agreement uses `ρ⁺ = (k + 2)/n` (the two out-of-domain points), worst at the **shortest**
+  instance, not the 2^16-row range table. `StencilBatch::security_shapes` gives the proof at its tallest and its
+  shortest height and callers take the worse figure (`worst_bits`): heat 8² 101.6 bits (102.8 modelled at the
+  tallest only, as before 2026-11-24). So small zones cannot drop the padding at P100: a 2^5 cells AIR gives
+  100.5 bits (`the_shortest_instance_sets_the_batch_figure`). Lowering it needs more queries.
 
 ## 6. Measured (life rule, P100, CPU, load about 6)
 

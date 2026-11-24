@@ -185,7 +185,8 @@ fn a_leaf_of_another_rule_does_not_recurse() {
 fn stencil_leaves_and_their_recursion_clear_101_bits_at_j101() {
     // INV-AGG-NB-4: EF5 leaves of every toy at its benchmark size, and a layer-1 proof over one.
     use umis_agg::recursive_shape;
-    use umis_stencil::batch::security_shape_of;
+    use umis_stark::security::worst_bits;
+    use umis_stencil::batch::security_shapes_of;
     let j = AggParams::J101;
     fn leaf<R: Rule + Clone>(j: &AggParams, r: R, n: usize, ext: impl Fn(&R, usize) -> Grid) -> f64 {
         let b = StencilBatch::new(r.clone(), n, 1, 2, FriPreset::Test).unwrap();
@@ -193,7 +194,7 @@ fn stencil_leaves_and_their_recursion_clear_101_bits_at_j101() {
             .unwrap();
         let (t, p, _) = b.generate(&ext(&r, b.shape.we));
         let l = rel.prove(j, &t, b.publics(&p)).unwrap();
-        j.bits(&security_shape_of(&l.proof, 5))
+        worst_bits(&security_shapes_of(&l.proof, 5), |s| j.bits(s))
     }
     let lbm = |r: &umis_stencil::lbm::Lbm, w: usize| Grid::filled(w, w, &r.boundary());
     let life = |_: &umis_stencil::life::Life, w: usize| Grid::filled(w, w, &[0]);

@@ -139,6 +139,8 @@ fn lbm_clears_the_target_at_p100() {
     let (t, public, _) = b.generate(&ext);
     let proof = b.prove(&t, &public).unwrap();
     b.verify(&proof, &public).unwrap();
-    let bits = proven_udr_bits(FriPreset::P100, &StencilBatch::<Lbm>::security_shape(&proof));
+    let bits = umis_stark::security::worst_bits(&StencilBatch::<Lbm>::security_shapes(&proof), |s| {
+        proven_udr_bits(FriPreset::P100, s)
+    });
     assert!(bits >= TARGET_BITS, "{bits:.1}");
 }

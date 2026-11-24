@@ -7,7 +7,8 @@ use std::time::Instant;
 use umis_agg::native::{NativeLayer1, NativeRelation};
 use umis_agg::{AggOwner, AggParams, proof_bytes, recursive_shape, stencil_chain};
 use umis_stark::config::FriPreset;
-use umis_stencil::batch::{StencilBatch, lookup_budget_for, security_shape_of};
+use umis_stark::security::worst_bits;
+use umis_stencil::batch::{StencilBatch, lookup_budget_for, security_shapes_of};
 use umis_stencil::heat::Heat;
 use umis_stencil::lbm::{Lbm, U};
 use umis_stencil::life::Life;
@@ -55,7 +56,7 @@ fn run<R: Rule + Clone>(p: &AggParams, rule: R, name: &str, l: &[usize]) {
     let a = rel.prove(p, &t1, b.publics(&p1)).expect("leaf");
     let t_leaf = ms(t);
     let c = rel.prove(p, &t2, b.publics(&p2)).expect("leaf 2");
-    let leaf_bits = p.bits(&security_shape_of(&a.proof, 5));
+    let leaf_bits = worst_bits(&security_shapes_of(&a.proof, 5), |s| p.bits(s));
     let t = Instant::now();
     let owner = NativeLayer1::new(p, &rel, &a).expect("owner");
     let t_owner = ms(t);
@@ -110,7 +111,7 @@ fn run_multi<R: Rule + Clone>(p: &AggParams, rule: R, name: &str, l: &[usize], m
     let t = Instant::now();
     let a = rel.prove(p, &traces, b.publics(&public)).expect("leaf");
     let t_leaf = ms(t);
-    let leaf_bits = p.bits(&security_shape_of(&a.proof, 5));
+    let leaf_bits = worst_bits(&security_shapes_of(&a.proof, 5), |s| p.bits(s));
     let t = Instant::now();
     let owner = NativeLayer1::new(p, &rel, &a).expect("owner");
     let t_owner = ms(t);
@@ -155,13 +156,13 @@ fn main() {
         let ext = board(&Lbm::default(), "lbm", b.shape.we);
         let (t1, p1, _) = b.generate(&ext);
         let a = rel.prove(&p, &t1, b.publics(&p1)).unwrap();
-        let sh = security_shape_of(&a.proof, 5);
-        println!("{sh:?}");
+        let shapes = security_shapes_of(&a.proof, 5);
+        println!("{shapes:?}");
         for (q, c) in [(58, 16), (60, 16), (64, 16), (58, 18), (58, 20)] {
             let mut pp = p;
             pp.fri.num_queries = q;
             pp.fri.commit_pow_bits = c;
-            println!("q={q} commit_pow={c}: {:.2}", pp.bits(&sh));
+            println!("q={q} commit_pow={c}: {:.2}", worst_bits(&shapes, |s| pp.bits(s)));
         }
         return;
     }

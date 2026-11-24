@@ -29,14 +29,20 @@ Read `.plan/HANDOFF.md` first (how to build, test, machine quirks, conventions).
    prove/verify within noise (A/B back to back).
 2. ~~Plonky3 degree-inference cache~~ **done 2026-11-23** (owner OK): `vendor/p3-batch-stark-degree-cache.patch`,
    LBM 32² 8-slot prove 134 → 60 ms per slot, verify 156 → 82 ms.
-3. **Aggregation over multi-slot leaves:** one layer-1 per commitment instead of per slot (`NativeLayer1` already
-   works on any relation; the owner tree is per (relation, m)). LBM layer 1 costs 5.3 s per slot today (60 queries
-   × 5.5k opened columns hashed in-circuit), so measure: a multi leaf's layer 1 grows with the opened width.
-   Cheaper layer 1 for wide leaves: higher leaf blowup (fewer queries) under its own leaf config
-   (`NativeLayer1` with separate in/out params).
-4. **Small zones:** the cells trace is padded to `MIN_HEIGHT = 64` (LBM 32² uses 17 rows). The batch leaf's security
-   is set by its tallest instance (the 2^16–2^17 range table), so a lower minimum for batch cells AIRs may be
-   sound; check with p3-security how mixed heights enter before changing it.
+3. ~~**Aggregation over multi-slot leaves**~~ **measured 2026-11-24, not built:** one layer 1 over an m-slot LBM
+   leaf costs 4.9–5.0 s per slot (m = 2, 4) against 4.3 s + ~1 s of 2-to-1 per slot today, and m = 8 exceeds the
+   2^24 FFT domain (`docs/zk/aggregation.md`). Layer 1 is in-circuit hashing of the opened columns, ∝ queries ×
+   cells width. Real levers, if needed: a narrower cells AIR for LBM (fewer helper columns per cell), or fewer
+   queries in Johnson at higher blowup (~10 % net, measured estimate).
+4. ~~**Small zones**~~ **answered 2026-11-24: no.** The batch figure is set by the **shortest** instance
+   (`ρ⁺ = (k + 2)/n` in the unique-decoding term), not the range table: cells at 2^6 give 101.6 bits, 2^5 would give
+   100.5 (`the_shortest_instance_sets_the_batch_figure`). `security_shapes` now reports the worse height (it
+   modelled the tallest only and overstated leaves by ~1.2 bits; they still cleared 101). Smaller padding needs
+   more queries, a pure trade-off.
+   - **Open (B9):** recursive (P3R circuit) proofs have tables down to one row. p3-security's per-instance model
+     gives 0 bits there (its guard) and 57 bits at 2^1, meaningless for a codeword every query covers, so
+     `recursive_shape` still reports the tallest table (105 bits at layer 1, 103 down to 2^5). Needs a
+     multi-height FRI argument (or asking p3-security upstream how mixed heights should be modelled).
 5. **GPU batch leaf:** not before 2 (the CPU-only symbolic step would dominate). `umis-gpu` is single-table.
 6. **Hygiene:** B1 (P3R upstream issue draft `.plan/drafts/p3r-issue-periodic-columns.md`: now two fixes, ask
    before posting); B8.

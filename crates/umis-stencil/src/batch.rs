@@ -811,12 +811,14 @@ impl<R: Rule + Clone> StencilBatch<R> {
         verify_batch(&self.config, &self.airs, proof, &publics, &self.prover_data.common).map_err(|e| format!("{e:?}"))
     }
 
-    /// The shape of a batch proof for the security calculator, read from the proof: its
-    /// tallest instance, every opened codeword (base columns 1, EF4 columns 4), the degree its
-    /// quotient chunking allows, and upper estimates for what it does not carry (constraints:
-    /// 4 per opened codeword; LogUp: 4 interactions of width 10 per permutation column).
-    pub fn security_shape(proof: &BatchProof<koala_bear::Config>) -> umis_stark::security::ProofShape {
-        security_shape_of(proof, 4)
+    /// The shapes of a batch proof for the security calculator, read from the proof: every
+    /// opened codeword (base columns 1, EF4 columns 4), the degree its quotient chunking
+    /// allows, upper estimates for what it does not carry (constraints: 4 per opened codeword;
+    /// LogUp: 4 interactions of width 10 per permutation column), at its tallest and its
+    /// shortest instance height. The proof's figure is the worse of the two
+    /// (`umis_stark::security::worst_bits`; INV-STENCIL-PARAM-1).
+    pub fn security_shapes(proof: &BatchProof<koala_bear::Config>) -> Vec<umis_stark::security::ProofShape> {
+        security_shapes_of(proof, 4)
     }
 
     /// Widths of the AIRs (cells per slot, hash, and the range table if present).
@@ -844,13 +846,14 @@ impl Shape {
 #[cfg(test)]
 pub(crate) const HASH_IN: usize = H_IN;
 
-/// [`StencilBatch::security_shape`] for a batch proof under any configuration whose challenge
+/// [`StencilBatch::security_shapes`] for a batch proof under any configuration whose challenge
 /// field has degree `ext` over KoalaBear.
-pub fn security_shape_of<SC: p3_batch_stark::StarkGenericConfig>(
+pub fn security_shapes_of<SC: p3_batch_stark::StarkGenericConfig>(
     proof: &BatchProof<SC>,
     ext: usize,
-) -> umis_stark::security::ProofShape {
+) -> Vec<umis_stark::security::ProofShape> {
     let log_height = proof.degree_bits.iter().copied().max().unwrap_or(0);
+    let min_height = proof.degree_bits.iter().copied().min().unwrap_or(0);
     let (mut openings, mut perm_cols, mut chunks) = (0usize, 0usize, 1usize);
     for inst in &proof.opened_values.instances {
         let b = &inst.base_opened_values;
@@ -870,4 +873,5 @@ pub fn security_shape_of<SC: p3_batch_stark::StarkGenericConfig>(
         batched_openings: openings,
         logup: (perm_cols > 0).then_some((4 * perm_cols, 2 + RATE)),
     }
+    .at_heights([log_height, min_height])
 }
