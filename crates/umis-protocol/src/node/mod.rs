@@ -43,6 +43,9 @@ pub struct Adversary {
     /// Send a junk proof commitment and junk shares for every zone commitment as soon as
     /// it is pooled, instead of real ones.
     pub junk_proofs: bool,
+    /// Gossip this node's own proof shares with one proof byte flipped (and the leaf's proof
+    /// address re-derived, so receivers must verify them: B8 tests).
+    pub corrupt_shares: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -134,6 +137,11 @@ pub enum Event {
         id: u64,
         result: Result<Bytes, String>,
     },
+    /// A share check finished (`Action::Verify`): whether the proof verifies.
+    VerifyDone {
+        id: u64,
+        ok: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,6 +190,25 @@ pub enum Action {
     Ui(UiEvent),
     /// Run a proving job off the event loop and report `Event::ComputeDone`.
     Compute(Box<umis_proof::ProveJob>),
+    /// Run a share check off the event loop (`ShareCheck::run` with this node's `ctx`) and
+    /// report `Event::VerifyDone` (B8). The share's gossip validation waits for the result.
+    Verify {
+        id: u64,
+        job: Box<crate::zone::ShareCheck>,
+    },
+}
+
+/// Share checks in flight at most; further verifiable shares are ignored (not forwarded)
+/// until some finish.
+const MAX_CHECKS: usize = 256;
+
+/// A share whose check runs off the event loop: its zone and its gossip message.
+#[derive(Debug, Clone)]
+struct PendingCheck {
+    zone: ZoneId,
+    share: ProofShare,
+    msg_id: Vec<u8>,
+    from: NodeId,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -200,6 +227,11 @@ pub struct Stats {
     /// because their block went stale.
     pub proved: u64,
     pub jobs_dropped: u64,
+    /// Shares checked off the event loop (B8), and those that failed.
+    pub shares_checked: u64,
+    pub shares_bad: u64,
+    /// Proof addresses of the shares this (adversarial) node corrupted (B8 tests).
+    pub corrupted_shares: BTreeSet<Hash>,
     /// Gossip received per topic (diagnostics).
     pub gossip_in: BTreeMap<String, u64>,
 }
@@ -240,6 +272,8 @@ pub struct Node {
     jobs: BTreeMap<u64, (ZoneId, umis_proof::ProveJob)>,
     job_queue: Vec<(ZoneId, umis_proof::ProveJob)>,
     next_job: u64,
+    checks: BTreeMap<u64, PendingCheck>,
+    next_check: u64,
     subscribed: BTreeSet<Topic>,
     peering: (Vec<ZoneId>, Vec<ZoneId>),
     proposed: BTreeSet<u64>,
@@ -286,6 +320,8 @@ impl Node {
             jobs: BTreeMap::new(),
             job_queue: Vec::new(),
             next_job: 0,
+            checks: BTreeMap::new(),
+            next_check: 0,
             subscribed: BTreeSet::new(),
             peering: (Vec::new(), Vec::new()),
             proposed: BTreeSet::new(),
@@ -353,8 +389,9 @@ impl Node {
         match ev {
             Event::Tick => {}
             Event::Gossip { topic, data, from, msg_id } => {
-                let result = self.on_gossip(now, topic, &data, from, &mut out);
-                out.push(Action::Validate { msg_id, from, result });
+                if let Some(result) = self.on_gossip(now, topic, &data, from, &msg_id, &mut out) {
+                    out.push(Action::Validate { msg_id, from, result });
+                }
             }
             Event::Request { peer, id, req } => {
                 let resp = self.on_request(now, peer, req);
@@ -373,6 +410,7 @@ impl Node {
             }
             Event::Command(c) => self.on_command(now, c, &mut out),
             Event::ComputeDone { id, result } => self.on_compute_done(id, result, &mut out),
+            Event::VerifyDone { id, ok } => self.on_verify_done(id, ok, &mut out),
         }
         self.duties(now, &mut out);
         out.push(Action::WakeAt(self.next_wake(now)));
@@ -458,10 +496,39 @@ impl Node {
 
     // ------------------------------------------------------------ gossip
 
-    fn on_gossip(&mut self, now: u64, topic: Topic, data: &[u8], from: NodeId, out: &mut Vec<Action>) -> Validation {
+    /// The gossip validation of a message, or `None` when it is decided later (a share
+    /// checked off the event loop, [`Node::on_verify_done`]).
+    fn on_gossip(
+        &mut self,
+        now: u64,
+        topic: Topic,
+        data: &[u8],
+        from: NodeId,
+        msg_id: &[u8],
+        out: &mut Vec<Action>,
+    ) -> Option<Validation> {
         *self.stats.gossip_in.entry(topic.path()).or_default() += 1;
-        let Ok(g) = Gossip::try_from_slice(data) else { return Validation::Reject };
-        match (topic, g) {
+        let Ok(g) = Gossip::try_from_slice(data) else { return Some(Validation::Reject) };
+        if let (Topic::ZoneProof(z), Gossip::ProofShare(s)) = (topic, &g)
+            && s.leaf.zone == z
+        {
+            let Some(e) = self.engines.get_mut(&z) else { return Some(Validation::Accept) };
+            return match e.on_share(&self.ctx, &self.chain, (**s).clone()) {
+                crate::zone::ShareVerdict::Stored => Some(Validation::Accept),
+                crate::zone::ShareVerdict::Ignored => Some(Validation::Ignore),
+                crate::zone::ShareVerdict::Bad => Some(Validation::Reject),
+                crate::zone::ShareVerdict::Check(_) if self.checks.len() >= MAX_CHECKS => Some(Validation::Ignore),
+                crate::zone::ShareVerdict::Check(job) => {
+                    let id = self.next_check;
+                    self.next_check += 1;
+                    let share = job.share.clone();
+                    self.checks.insert(id, PendingCheck { zone: z, share, msg_id: msg_id.to_vec(), from });
+                    out.push(Action::Verify { id, job });
+                    None
+                }
+            };
+        }
+        Some(match (topic, g) {
             (Topic::BeaconBlock, Gossip::BeaconBlock(b)) => self.on_beacon_block(now, *b, Some(from), out),
             (Topic::BeaconTx, Gossip::Tx(t)) => self.on_tx(now, *t),
             (Topic::Commit, Gossip::ZoneCommit(zc, _cp)) => self.on_zone_commit(*zc),
@@ -469,26 +536,38 @@ impl Node {
             (Topic::ZoneBlock(z), Gossip::ZoneBlock(b)) if b.header().zone == z => {
                 self.on_zone_block(now, Arc::new(*b), Some(from), out)
             }
-            (Topic::ZoneProof(z), Gossip::ProofShare(s)) if s.leaf.zone == z => match self.engines.get_mut(&z) {
-                Some(e) => match e.on_share(&self.ctx, &self.chain, *s) {
-                    crate::zone::ShareVerdict::Stored => Validation::Accept,
-                    crate::zone::ShareVerdict::Ignored => Validation::Ignore,
-                    crate::zone::ShareVerdict::Bad => Validation::Reject,
-                },
-                None => Validation::Accept,
-            },
             // Shares travel on the zone's proof topic only; consumers never used them here.
             (Topic::ZoneOut(_), Gossip::ProofShare(_)) => Validation::Ignore,
             (Topic::ZoneOut(z), Gossip::Output(b)) if b.producer.header.zone == z => self.on_output(*b),
             (Topic::ZoneVote(z), Gossip::Vote(v)) if v.vote.zone == z => {
                 if !v.verify_sig() {
-                    return Validation::Reject;
+                    return Some(Validation::Reject);
                 }
                 self.vote_pool.entry(z).or_default().insert((v.vote.proposal_id, v.vote.voter), *v);
                 Validation::Accept
             }
             _ => Validation::Reject,
-        }
+        })
+    }
+
+    /// A share check finished: store or drop the share, then release its gossip validation
+    /// (a bad share is rejected and not forwarded).
+    fn on_verify_done(&mut self, id: u64, ok: bool, out: &mut Vec<Action>) {
+        let Some(c) = self.checks.remove(&id) else { return };
+        self.stats.shares_checked += 1;
+        self.stats.shares_bad += u64::from(!ok);
+        let result = match self.engines.get_mut(&c.zone).map(|e| e.share_checked(c.share, ok)) {
+            Some(crate::zone::ShareVerdict::Stored) => Validation::Accept,
+            Some(crate::zone::ShareVerdict::Bad) => Validation::Reject,
+            _ => {
+                if ok {
+                    Validation::Ignore
+                } else {
+                    Validation::Reject
+                }
+            }
+        };
+        out.push(Action::Validate { msg_id: c.msg_id, from: c.from, result });
     }
 
     fn on_tx(&mut self, now: u64, t: SignedTx) -> Validation {

@@ -49,9 +49,8 @@ Read `.plan/HANDOFF.md` first (how to build, test, machine quirks, conventions).
    the prover. Cheapest first step: `GpuDft` (umis-gpu, drop-in `TwoAdicSubgroupDft`) in a batch leaf config,
    measured; then GPU Merkle hashing of the wide trace; the quotient needs the JIT path (`umis-gpu/src/jit.rs`) made
    multi-table with LogUp. The 3090 Ti was busy with another project's job on 2026-11-24; the A6000 was free.
-6. **Hygiene:** B1 (P3R upstream issue draft `.plan/drafts/p3r-issue-periodic-columns.md`: now two fixes, ask
-   before posting); B8 (share verification off the event loop: SimNet relies on deterministic event order, so
-   async verification needs a design for keeping it deterministic, e.g. verify at a fixed later tick); B9 (above).
+6. **Hygiene:** ~~B1~~ (owner 2026-11-24: not reported upstream; the local patch stays); ~~B8~~ done 2026-11-25 (share checks off the event loop, deterministic in SimNet via a fixed
+   delay; `docs/ARCHITECTURE.md`); B9 (above).
 
 ## Commands (copy-paste)
 

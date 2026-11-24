@@ -76,6 +76,12 @@ fn stark() {
     ok("stark", 20);
 }
 
+/// B8: shares are checked off the event loop; corrupted ones are rejected, never trusted.
+#[test]
+fn stark_bad_shares() {
+    ok("stark-bad-shares", 20);
+}
+
 #[test]
 fn life_stark_keccak() {
     ok("life-stark-keccak", 20);

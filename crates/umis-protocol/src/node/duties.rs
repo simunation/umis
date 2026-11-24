@@ -330,7 +330,7 @@ impl Node {
         for o in outs {
             match o {
                 crate::zone::ProveOut::Share(s) => {
-                    let g = Gossip::ProofShare(Box::new(s));
+                    let g = Gossip::ProofShare(Box::new(self.outgoing_share(s)));
                     self.publish(Topic::ZoneProof(z), &g, out);
                 }
                 crate::zone::ProveOut::Job(j) => self.job_queue.push((z, *j)),
@@ -390,6 +390,17 @@ impl Node {
         self.job_queue = queue.collect();
     }
 
+    /// A share as this node gossips it (an adversary corrupts its proof).
+    fn outgoing_share(&mut self, mut s: ProofShare) -> ProofShare {
+        if self.cfg.adversary.corrupt_shares && !s.proof.is_empty() {
+            let last = s.proof.len() - 1;
+            s.proof[last] ^= 1;
+            s.leaf.proof_address = self.ctx.proof_address(&s.proof);
+            self.stats.corrupted_shares.insert(s.leaf.proof_address);
+        }
+        s
+    }
+
     pub(super) fn on_compute_done(&mut self, id: u64, result: Result<Bytes, String>, out: &mut Vec<Action>) {
         let Some((z, job)) = self.jobs.remove(&id) else { return };
         self.pump_jobs(out);
@@ -410,7 +421,7 @@ impl Node {
                 let shares: Vec<_> = members.iter().zip(proofs).map(|(m, proof)| eng.job_done(m, proof)).collect();
                 for s in shares {
                     self.stats.proved += 1;
-                    let g = Gossip::ProofShare(Box::new(s));
+                    let g = Gossip::ProofShare(Box::new(self.outgoing_share(s)));
                     self.publish(Topic::ZoneProof(z), &g, out);
                 }
             }

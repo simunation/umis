@@ -305,6 +305,21 @@ module and calls `proveJob`; up to half the cores, at most 4, shared by the
 page's nodes; `?prover=inline` proves on the page thread).
 `umis_proof::JobRunner` caches task instances and the STARK setup per zone.
 
+**Share checks off the event loop (B8, 2026-11-25).** A proof share this node can verify
+alone (an async backend, a single-slot block whose states it holds, not a group part) is not
+verified in `ZoneEngine::on_share`: the verdict is `ShareVerdict::Check(ShareCheck)`, a
+self-contained job (statement, owned public data, proof). The node emits
+`Action::Verify { id, job }` and **defers the share's gossip validation**, so an unchecked
+share is never forwarded; `Event::VerifyDone { id, ok }` stores it as trusted
+(`ZoneEngine::share_checked`) or rejects it, then releases `Action::Validate`. At most
+`MAX_CHECKS = 256` checks are in flight; further verifiable shares are ignored meanwhile.
+`ShareCheck::run` goes through `Ctx::verify_proof`, so the beacon's later check of the same
+proof is a cache hit. Native nodes run checks on their own rayon pool (a quarter of the cores,
+at least 2), apart from proving. SimNet runs them inline and delivers the result after
+`verify_delay_ms` (50 ms), so runs stay deterministic. Mock shares (a signature check) stay
+inline. Test: SimNet `stark-bad-shares` (an adversary gossips its shares with a corrupted
+proof: every one is checked and rejected, none trusted, no rollback; mutation-checked).
+
 **Verification cost.** A proof commitment's leaves are verified in parallel
 natively (rayon), and both results and proof addresses (a BMT over ~200 KB)
 are memoized in `Ctx`, since block building and fork choice re-apply bodies

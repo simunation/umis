@@ -143,6 +143,11 @@ pub struct Runtime {
     executor: Option<Box<dyn Executor>>,
     done_tx: mpsc::UnboundedSender<(u64, Result<Vec<u8>, String>)>,
     done_rx: mpsc::UnboundedReceiver<(u64, Result<Vec<u8>, String>)>,
+    /// Share checks (`Action::Verify`, B8) run here, off the event loop; their own pool so
+    /// they never queue behind proving jobs.
+    verifier: rayon::ThreadPool,
+    verified_tx: mpsc::UnboundedSender<(u64, bool)>,
+    verified_rx: mpsc::UnboundedReceiver<(u64, bool)>,
     topics: Topics,
     pending: HashMap<OutboundRequestId, u64>,
     wake: u64,
@@ -155,12 +160,22 @@ impl Runtime {
         let (tx, rx) = mpsc::unbounded();
         let topics = Topics::new(node.ctx.genesis.genesis8());
         let (done_tx, done_rx) = mpsc::unbounded();
+        let (verified_tx, verified_rx) = mpsc::unbounded();
+        let threads = std::thread::available_parallelism().map_or(2, |n| (n.get() / 4).max(2));
+        let verifier = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .thread_name(|i| format!("umis-verify-{i}"))
+            .build()
+            .expect("share verifier pool");
         let rt = Self {
             node,
             net,
             executor: None,
             done_tx,
             done_rx,
+            verifier,
+            verified_tx,
+            verified_rx,
             topics,
             pending: HashMap::new(),
             wake: 0,
@@ -257,6 +272,12 @@ impl Runtime {
                         let _ = self.done_tx.unbounded_send((job.id, r));
                     }
                 },
+                Action::Verify { id, job } => {
+                    let (ctx, tx) = (self.node.ctx.clone(), self.verified_tx.clone());
+                    self.verifier.spawn(move || {
+                        let _ = tx.unbounded_send((id, job.run(&ctx)));
+                    });
+                }
                 Action::Ui(u) => {
                     if let Some(tx) = &self.ui {
                         let _ = tx.unbounded_send(u);
@@ -325,6 +346,9 @@ impl Runtime {
                 d = self.done_rx.next() => if let Some((id, result)) = d {
                     self.feed(Event::ComputeDone { id, result });
                 },
+                v = self.verified_rx.next() => if let Some((id, ok)) = v {
+                    self.feed(Event::VerifyDone { id, ok });
+                },
                 c = self.rx.next() => match c {
                     Some(Control::Command(c)) => self.feed(Event::Command(c)),
                     Some(Control::Snapshot(tx)) => { let _ = tx.send(self.node.snapshot(now_ms())); }
@@ -350,6 +374,7 @@ fn event_kind(ev: &Event) -> String {
         Event::PeerConnected(_) | Event::PeerDisconnected(_) => "peer".into(),
         Event::Command(_) => "command".into(),
         Event::ComputeDone { .. } => "compute done".into(),
+        Event::VerifyDone { .. } => "verify done".into(),
     }
 }
 

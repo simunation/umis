@@ -700,6 +700,9 @@ impl ZoneEngine {
 
     /// Stores a received proof share: verified shares are trusted and replace an unchecked
     /// candidate; a share this node cannot verify alone is kept only while the slot has none.
+    /// A STARK share this node can verify is not verified here (B8): the verdict is
+    /// [`ShareVerdict::Check`], a self-contained job the node runs off the event loop and
+    /// reports to [`ZoneEngine::share_checked`].
     pub fn on_share(&mut self, ctx: &Ctx, chain: &BeaconChain, s: ProofShare) -> ShareVerdict {
         let Some(e) = self.entries.get(&s.block_hash) else { return ShareVerdict::Ignored };
         let slot = s.leaf.from_slot;
@@ -723,7 +726,8 @@ impl ZoneEngine {
             let inputs = e.block.as_ref().map(|b| exec::input_map(&b.inputs, &b.attachments)).unwrap_or_default();
             match zone.as_ref().and_then(|z| self.share_public(ctx, z, e, &inputs)) {
                 Some(pd) if !ctx.backend.batches(&zone.as_ref().expect("zone").task_id) || !is_batch_part(&s.proof) => {
-                    Some(ctx.verify_proof(&stmt, &pd, &s.proof).is_ok())
+                    let job = ShareCheck::new(stmt, &pd, s);
+                    return ShareVerdict::Check(Box::new(job));
                 }
                 _ => None,
             }
@@ -736,18 +740,38 @@ impl ZoneEngine {
             )
         };
         match verified {
-            Some(false) => ShareVerdict::Bad,
-            Some(true) => {
-                self.shares.insert(key, s);
-                self.trusted.insert(key);
-                ShareVerdict::Stored
-            }
+            Some(ok) => self.store_checked(s, ok),
             None if self.shares.contains_key(&key) => ShareVerdict::Ignored,
             None => {
                 self.shares.insert(key, s);
                 ShareVerdict::Stored
             }
         }
+    }
+
+    /// Whether the share stored under `key` (block hash, slot) was verified.
+    pub fn is_trusted(&self, key: &(Hash, u64)) -> bool {
+        self.trusted.contains(key)
+    }
+
+    /// The result of a [`ShareVerdict::Check`] job: a verified share is trusted (unless its
+    /// block is gone or the slot got a trusted share meanwhile).
+    pub fn share_checked(&mut self, s: ProofShare, ok: bool) -> ShareVerdict {
+        let key = (s.block_hash, s.leaf.from_slot);
+        if !self.entries.contains_key(&s.block_hash) || self.trusted.contains(&key) {
+            return if ok { ShareVerdict::Ignored } else { ShareVerdict::Bad };
+        }
+        self.store_checked(s, ok)
+    }
+
+    fn store_checked(&mut self, s: ProofShare, ok: bool) -> ShareVerdict {
+        if !ok {
+            return ShareVerdict::Bad;
+        }
+        let key = (s.block_hash, s.leaf.from_slot);
+        self.shares.insert(key, s);
+        self.trusted.insert(key);
+        ShareVerdict::Stored
     }
 
     /// For an adversarial node (tests): a proof commitment and shares for `zc` with the
@@ -1030,12 +1054,62 @@ impl ZoneEngine {
 }
 
 /// What [`ZoneEngine::on_share`] did with a share.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShareVerdict {
     Stored,
     Ignored,
     /// It failed verification.
     Bad,
+    /// Verify it off the event loop ([`ShareCheck::run`]), then [`ZoneEngine::share_checked`].
+    Check(Box<ShareCheck>),
+}
+
+/// A proof share's verification as a self-contained job (B8): everything
+/// [`Ctx::verify_proof`] needs, owned, so a worker thread can run it while the node keeps
+/// handling events. Running it through the node's `Ctx` also fills its proof cache, so the
+/// beacon chain's own check of the same proof is a cache hit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareCheck {
+    pub share: ProofShare,
+    stmt: umis_core::records::TransitionStatement,
+    task_id: String,
+    params: Bytes,
+    prev_state: Bytes,
+    next_state: Bytes,
+    inputs: BTreeMap<u32, Bytes>,
+    input_refs: Vec<umis_core::records::InputRef>,
+}
+
+impl ShareCheck {
+    fn new(stmt: umis_core::records::TransitionStatement, pd: &umis_proof::PublicData<'_>, share: ProofShare) -> Self {
+        let own = |b: Option<&[u8]>| b.map(<[u8]>::to_vec).unwrap_or_default();
+        Self {
+            share,
+            stmt,
+            task_id: pd.task_id.unwrap_or_default().to_string(),
+            params: own(pd.params),
+            prev_state: own(pd.prev_state),
+            next_state: own(pd.next_state),
+            inputs: pd.inputs.cloned().unwrap_or_default(),
+            input_refs: pd.input_refs.map(<[_]>::to_vec).unwrap_or_default(),
+        }
+    }
+
+    /// Whether the share's proof verifies (memoized in `ctx`).
+    pub fn run(&self, ctx: &Ctx) -> bool {
+        let pd = umis_proof::PublicData {
+            task_id: Some(&self.task_id),
+            params: Some(&self.params),
+            genesis_seed: Some(ctx.genesis.seed),
+            prev_state: Some(&self.prev_state),
+            next_state: Some(&self.next_state),
+            inputs: Some(&self.inputs),
+            input_refs: Some(&self.input_refs),
+            prev_witness: None,
+            next_witness: None,
+        };
+        ctx.verify_proof(&self.stmt, &pd, &self.share.proof).is_ok()
+    }
 }
 
 /// A batch head or reference (life2d tags 2 and 3): verifies only with its whole group.
