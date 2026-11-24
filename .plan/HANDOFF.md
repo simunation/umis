@@ -112,5 +112,6 @@ fit and the degree intuition: `docs/simulation-fit.md`.
 
 ## Next action
 
-Follow `.plan/NEXT.md` (S6b `d_faces` done 2026-11-24; next: aggregation over multi-slot leaves). `docs/stencil.md` describes what exists and how to try
+Follow `.plan/NEXT.md`. 2026-11-24: S6b `d_faces` done; steps 3–4 measured and closed (no gain / `MIN_HEIGHT`
+stays); next real project is the GPU batch leaf (step 5); open B9 (multi-height security model for recursion). `docs/stencil.md` describes what exists and how to try
 it.

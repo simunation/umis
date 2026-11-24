@@ -43,9 +43,15 @@ Read `.plan/HANDOFF.md` first (how to build, test, machine quirks, conventions).
      gives 0 bits there (its guard) and 57 bits at 2^1, meaningless for a codeword every query covers, so
      `recursive_shape` still reports the tallest table (105 bits at layer 1, 103 down to 2^5). Needs a
      multi-height FRI argument (or asking p3-security upstream how mixed heights should be modelled).
-5. **GPU batch leaf:** not before 2 (the CPU-only symbolic step would dominate). `umis-gpu` is single-table.
+5. **GPU batch leaf** (the next real project, 2+ sessions). Profile 2026-11-24, LBM 32², 8 slots, P100, warm: prove
+   515 ms = cells quotients ~130–140 ms (parallel over AIRs) + FRI ~30 ms + ~340 ms trace commit (LDE and Merkle
+   hashing of 5548-wide rows); verify 622 ms is almost all FRI/Merkle (constraints ~5 ms), so the GPU helps only
+   the prover. Cheapest first step: `GpuDft` (umis-gpu, drop-in `TwoAdicSubgroupDft`) in a batch leaf config,
+   measured; then GPU Merkle hashing of the wide trace; the quotient needs the JIT path (`umis-gpu/src/jit.rs`) made
+   multi-table with LogUp. The 3090 Ti was busy with another project's job on 2026-11-24; the A6000 was free.
 6. **Hygiene:** B1 (P3R upstream issue draft `.plan/drafts/p3r-issue-periodic-columns.md`: now two fixes, ask
-   before posting); B8.
+   before posting); B8 (share verification off the event loop: SimNet relies on deterministic event order, so
+   async verification needs a design for keeping it deterministic, e.g. verify at a fixed later tick); B9 (above).
 
 ## Commands (copy-paste)
 
