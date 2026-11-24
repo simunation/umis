@@ -9,7 +9,7 @@
 //! [`StencilStark`] proofs.
 //!
 //! The verifier runs every native check of every member ([`StencilStark::native_claim`]),
-//! derives each member's statement `public_values(E, next) = [d_prev, d_halo, d_next]` itself,
+//! derives each member's statement `statement(E, next) = [d_prev, d_halo, d_next, d_faces]` itself,
 //! and verifies the aggregate against their concatenation with its own verifier for the leaf
 //! relation and member count (INV-STENCIL-AGG-2). Owner trees are built once per (relation,
 //! member count) from a boundary-filled leaf; proofs made with another node's tree verify
@@ -240,12 +240,12 @@ mod tests {
             let proof: BatchStarkProof<crate::AggConfig> = postcard::from_bytes(&body).unwrap();
             let statement: Vec<_> = exts
                 .iter()
-                .flat_map(|e| umis_stencil::air::public_values(&batch.shape, e, &e.evolve(&batch.rule, 1)))
+                .flat_map(|e| umis_stencil::batch::statement(&batch.shape, e, &e.evolve(&batch.rule, 1)))
                 .collect();
             let vb = b.tree(k).unwrap().agg.node(m as usize).unwrap();
             vb.rep.verifier.verify(&proof, &statement).unwrap_or_else(|e| panic!("m = {m}: {e:?}"));
             let mut wrong = statement.clone();
-            wrong.swap(0, 24);
+            wrong.swap(0, umis_stencil::batch::N_STATEMENT);
             assert!(vb.rep.verifier.verify(&proof, &wrong).is_err(), "m = {m}");
             let other = b.tree(k).unwrap().agg.node(m as usize + 1).unwrap();
             assert!(other.rep.verifier.verify(&proof, &statement).is_err(), "m = {m}");

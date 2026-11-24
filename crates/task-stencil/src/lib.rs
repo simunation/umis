@@ -269,14 +269,14 @@ fn u64_at(b: &[u8], at: usize) -> u64 {
     u64::from_le_bytes(b[at..at + 8].try_into().expect("8 bytes"))
 }
 
-fn put_u16s(out: &mut Vec<u8>, vals: &[u32]) {
+pub(crate) fn put_u16s(out: &mut Vec<u8>, vals: &[u32]) {
     for v in vals {
         out.extend_from_slice(&(*v as u16).to_le_bytes());
     }
 }
 
 /// `count` values of at most `bits` bits each; `None` if a value is out of range.
-fn get_u16s(b: &[u8], count: usize, bits: usize) -> Option<Vec<u32>> {
+pub(crate) fn get_u16s(b: &[u8], count: usize, bits: usize) -> Option<Vec<u32>> {
     if b.len() != 2 * count {
         return None;
     }

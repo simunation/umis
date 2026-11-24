@@ -220,10 +220,100 @@ pub fn halo_digest(s: &Shape, ext: &Grid) -> [Val; DIGEST] {
     st[..DIGEST].try_into().expect("digest")
 }
 
-/// The public values of a claim: `[d_prev, d_halo, d_next]`.
+/// The public values of a claim of the uni-STARK [`StencilAir`]: `[d_prev, d_halo, d_next]`.
+/// The batch leaf appends `d_faces` ([`crate::batch::statement`]).
 pub fn public_values(s: &Shape, ext: &Grid, next: &Grid) -> Vec<Val> {
     let prev = root(s, &ext.inner(s.n, s.halo()));
     prev.into_iter().chain(halo_digest(s, ext)).chain(root(s, next)).collect()
+}
+
+// The border of a zone board (INV-STENCIL-ROOT-3): every cell within `h = k·r` of an edge,
+// i.e. the union of the regions its 8 output ports carry. A **cap row** (`y < h` or
+// `y ≥ n − h`) is whole; every other row has its `2h` side cells (columns `[0, h)` and
+// `[n − h, n)`).
+impl Shape {
+    pub fn cap_row(&self, y: usize) -> bool {
+        y < self.halo() || y + self.halo() >= self.n
+    }
+    /// Whether some row is not a cap row.
+    fn has_sides(&self) -> bool {
+        self.n > 2 * self.halo()
+    }
+    /// Board columns of a side row's border cells.
+    pub(crate) fn side_columns(&self) -> impl Iterator<Item = usize> + '_ {
+        let h = if self.has_sides() { self.halo() } else { 0 };
+        (0..h).chain(self.n - h..self.n)
+    }
+    pub(crate) fn side_limbs(&self) -> usize {
+        (if self.has_sides() { 2 * self.halo() * self.spec.values } else { 0 }).div_ceil(self.per_limb())
+    }
+    pub(crate) fn side_perms(&self) -> usize {
+        self.side_limbs().div_ceil(RATE)
+    }
+    /// Permutations `d_faces` spends on board row `y`.
+    pub(crate) fn face_perms(&self, y: usize) -> usize {
+        if self.cap_row(y) { self.perms(Region::Next) } else { self.side_perms() }
+    }
+    /// The first `d_faces` block of board row `y` (`y = n`: the block count).
+    pub(crate) fn face_seq(&self, y: usize) -> usize {
+        (0..y).map(|u| self.face_perms(u)).sum()
+    }
+    /// Border cells of a zone board.
+    pub fn border_cells(&self) -> usize {
+        let h = self.halo().min(self.n);
+        (0..self.n).map(|y| if self.cap_row(y) { self.n } else { 2 * h }).sum()
+    }
+}
+
+/// The border values of a zone board (`n × n`), row by row in canonical order: a cap row's
+/// values, then each other row's side cells.
+pub fn border(s: &Shape, board: &Grid) -> Vec<u32> {
+    assert!(board.w == s.n && board.h == s.n && board.values == s.spec.values);
+    let mut out = Vec::with_capacity(s.border_cells() * s.spec.values);
+    for y in 0..s.n {
+        if s.cap_row(y) {
+            out.extend_from_slice(board.row(y));
+        } else {
+            s.side_columns().for_each(|x| out.extend_from_slice(board.cell(x, y)));
+        }
+    }
+    out
+}
+
+/// A zone board with border values `values` ([`border`]'s order) and `fill` elsewhere;
+/// `None` if `values` has the wrong length.
+pub fn with_border(s: &Shape, values: &[u32], fill: &[u32]) -> Option<Grid> {
+    let v = s.spec.values;
+    if values.len() != s.border_cells() * v || fill.len() != v {
+        return None;
+    }
+    let mut g = Grid::filled(s.n, s.n, fill);
+    let mut it = values.chunks_exact(v);
+    for y in 0..s.n {
+        let xs: Vec<usize> = if s.cap_row(y) { (0..s.n).collect() } else { s.side_columns().collect() };
+        for x in xs {
+            g.cell_mut(x, y).copy_from_slice(it.next().expect("length checked"));
+        }
+    }
+    Some(g)
+}
+
+/// The canonical digest of a zone board's border (`d_faces`, INV-STENCIL-ROOT-3): a sponge
+/// over the board rows in order, a cap row packed as for [`root`], any other row its side
+/// cells packed `30/bits` per limb and zero-padded to whole permutations. It reads only the
+/// border, so a checker recomputes it from the output payloads.
+pub fn faces_digest(s: &Shape, board: &Grid) -> [Val; DIGEST] {
+    assert!(board.w == s.n && board.h == s.n && board.values == s.spec.values);
+    let mut st = [Val::ZERO; WIDTH];
+    for y in 0..s.n {
+        if s.cap_row(y) {
+            absorb(&mut st, &pack_u32(s, board.row(y), s.perms(Region::Next)));
+        } else {
+            let side: Vec<u32> = s.side_columns().flat_map(|x| board.cell(x, y).to_vec()).collect();
+            absorb(&mut st, &pack_u32(s, &side, s.side_perms()));
+        }
+    }
+    st[..DIGEST].try_into().expect("digest")
 }
 
 /// The AIR of rule `R` on a zone shape. Depends on the shape only (INV-STENCIL-AIR-1).

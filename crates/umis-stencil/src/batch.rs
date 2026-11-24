@@ -4,11 +4,14 @@
 //!
 //! - **Cells**: the generations and the rule's constraints, as in [`crate::air`], plus the
 //!   committed limbs of every digest row. Each 8-limb block is sent on [`HASH_BUS`] as
-//!   `(region, seq, block)` when its row belongs to the region; `seq = row·P + m` is the
-//!   block's position in the canonical absorption order. Every range request `(x, b)`,
+//!   `(tag, seq, block)` when its row belongs to the digest; `seq` is the block's position in
+//!   the canonical absorption order (`row·P + m` for the row digests). Four digests per slot
+//!   (tag `4·slot + d`): `d_prev`, `d_halo`, `d_next` as in [`crate::air`], and `d_faces`
+//!   ([`faces_digest`], INV-STENCIL-BATCH-5), whose cap rows resend the `d_next` limbs and
+//!   whose other rows send the generation-`k` side cells from their own limb columns. Every range request `(x, b)`,
 //!   `2 ≤ b ≤ 16`, is one lookup of the pair `(x, b)` on [`RANGE_BUS`]; `b = 1` is a booleanity
 //!   constraint (INV-STENCIL-BATCH-3).
-//! - **Hash**: one Poseidon2 permutation per row, the three sponges one after the other in
+//! - **Hash**: one Poseidon2 permutation per row, the four sponges one after the other in
 //!   canonical order. Each active row is a table entry `(region, seq, block)` with
 //!   multiplicity 1, its capacity chains from the previous row (zero at a region's first
 //!   row), and a region's last row outputs its digest (the public values).
@@ -26,7 +29,7 @@
 //! Bus keys and counts use only main and preprocessed columns: rc.2's LogUp trace builder
 //! cannot see periodic columns.
 
-use crate::air::{Cells, N_PUBLIC, REGIONS, Region, StencilAir, pack, region_values};
+use crate::air::{Cells, REGIONS, Region, StencilAir, faces_digest, pack, public_values, region_values};
 use crate::poseidon::{DIGEST, PERM_COLS, RATE, WIDTH, eval_permutation, permute_into};
 use crate::{Grid, Rule, Shape, Val};
 use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
@@ -39,6 +42,49 @@ use std::borrow::Cow;
 use umis_stark::config::{FriPreset, koala_bear};
 
 pub const HASH_BUS: &str = "stencil-hash";
+/// Digests per slot: `[d_prev, d_halo, d_next, d_faces]`.
+pub const DIGESTS: usize = 4;
+/// The `d_faces` digest's index.
+pub const FACES: usize = 3;
+/// Public values per slot: the four digests.
+pub const N_STATEMENT: usize = DIGESTS * DIGEST;
+
+/// A slot's leaf statement `[d_prev, d_halo, d_next, d_faces]` for extended board `ext` and
+/// next board `next` (canonical, recomputable natively).
+pub fn statement(s: &Shape, ext: &Grid, next: &Grid) -> Vec<Val> {
+    let mut v = public_values(s, ext, next);
+    v.extend(faces_digest(s, next));
+    v
+}
+
+/// What a cells AIR sends to the hash table at each slot of a trace row: the rows of the
+/// three row digests, and the rows of `d_faces`, a cap row (its `d_next` limbs again) or a
+/// side row (the side limbs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Feed {
+    Row(Region),
+    Cap,
+    Side,
+}
+const FEEDS: [Feed; 5] =
+    [Feed::Row(Region::Prev), Feed::Row(Region::Halo), Feed::Row(Region::Next), Feed::Cap, Feed::Side];
+
+impl Feed {
+    fn index(self) -> usize {
+        match self {
+            Feed::Row(g) => g as usize,
+            Feed::Cap => 3,
+            Feed::Side => 4,
+        }
+    }
+    /// The digest it feeds.
+    fn digest(self) -> usize {
+        match self {
+            Feed::Row(g) => g as usize,
+            Feed::Cap | Feed::Side => FACES,
+        }
+    }
+}
 pub const RANGE_BUS: &str = "stencil-range";
 /// The widest range request.
 pub const RANGE_BITS: usize = 16;
@@ -70,12 +116,12 @@ const H_IN: usize = 0;
 const H_PERM: usize = WIDTH;
 const H_WIDTH: usize = WIDTH + PERM_COLS;
 // Hash AIR preprocessed columns (for `m` slots): active, first, one last-row flag per
-// (slot, region), the tag `3·slot + region` and the block's seq.
+// (slot, digest), the tag `4·slot + digest` and the block's seq.
 const HP_ACTIVE: usize = 0;
 const HP_FIRST: usize = 1;
-const HP_LAST: usize = 2; // + 3·slot + region
+const HP_LAST: usize = 2; // + 4·slot + digest
 const fn hp_tag(m: usize) -> usize {
-    HP_LAST + 3 * m
+    HP_LAST + DIGESTS * m
 }
 const fn hp_seq(m: usize) -> usize {
     hp_tag(m) + 1
@@ -91,30 +137,65 @@ impl Shape {
     fn limb_col(&self, g: Region, i: usize, q: usize) -> usize {
         self.limb_base(g) + i * self.limbs(g) + q
     }
-    fn batch_cells_width(&self) -> usize {
+    fn side_limb_base(&self) -> usize {
         self.limb_base(Region::Next) + self.rpr * self.limbs(Region::Next)
     }
-    // cells preprocessed: per (region, slot) a gate and the first block's seq
-    fn pre_gate(&self, g: Region, i: usize) -> usize {
-        2 * (g as usize * self.rpr + i)
+    fn batch_cells_width(&self) -> usize {
+        self.side_limb_base() + self.rpr * self.side_limbs()
     }
-    fn pre_seq(&self, g: Region, i: usize) -> usize {
-        self.pre_gate(g, i) + 1
+    /// Limbs and permutations of a feed's row.
+    fn feed_size(&self, f: Feed) -> (usize, usize) {
+        match f {
+            Feed::Row(g) => (self.limbs(g), self.perms(g)),
+            Feed::Cap => (self.limbs(Region::Next), self.perms(Region::Next)),
+            Feed::Side => (self.side_limbs(), self.side_perms()),
+        }
     }
-    fn region_rows(&self, g: Region) -> usize {
-        if g == Region::Halo { self.we } else { self.n }
+    /// The column of limb `q` a feed sends at slot `i`.
+    fn feed_limb_col(&self, f: Feed, i: usize, q: usize) -> usize {
+        match f {
+            Feed::Row(g) => self.limb_col(g, i, q),
+            Feed::Cap => self.limb_col(Region::Next, i, q),
+            Feed::Side => self.side_limb_base() + i * self.side_limbs() + q,
+        }
     }
-    /// Hash rows used by region `g`, and the first of them.
-    fn hash_span(&self, g: Region) -> (usize, usize) {
-        let start = REGIONS[..g as usize].iter().map(|r| self.region_rows(*r) * self.perms(*r)).sum();
-        (start, self.region_rows(g) * self.perms(g))
+    // cells preprocessed: per (feed, slot) a gate and the first block's seq
+    fn pre_gate(&self, f: Feed, i: usize) -> usize {
+        2 * (f.index() * self.rpr + i)
+    }
+    fn pre_seq(&self, f: Feed, i: usize) -> usize {
+        self.pre_gate(f, i) + 1
+    }
+    /// The seq of the first block feed `f` sends at trace row `r`, slot `i`, if it sends.
+    fn feed_seq(&self, f: Feed, r: usize, i: usize) -> Option<usize> {
+        match f {
+            Feed::Row(g) => self.absorbed_row(g, r, i).map(|y| y * self.perms(g)),
+            Feed::Cap | Feed::Side => {
+                let y = self.absorbed_row(Region::Next, r, i)?;
+                (self.cap_row(y) == (f == Feed::Cap)).then(|| self.face_seq(y))
+            }
+        }
+    }
+    /// Hash rows of digest `d`.
+    fn digest_blocks(&self, d: usize) -> usize {
+        match d {
+            FACES => self.face_seq(self.n),
+            _ => {
+                let g = REGIONS[d];
+                (if g == Region::Halo { self.we } else { self.n }) * self.perms(g)
+            }
+        }
+    }
+    /// Hash rows used by digest `d`, and the first of them.
+    fn hash_span(&self, d: usize) -> (usize, usize) {
+        ((0..d).map(|e| self.digest_blocks(e)).sum(), self.digest_blocks(d))
     }
     pub fn hash_height(&self) -> usize {
         self.hash_height_for(1)
     }
     /// Hash rows one slot uses.
     fn slot_hash_rows(&self) -> usize {
-        let (s, l) = self.hash_span(Region::Next);
+        let (s, l) = self.hash_span(FACES);
         s + l
     }
     /// The hash table's height for `m` slots (slot `j`'s rows start at `j·slot_hash_rows`).
@@ -132,7 +213,7 @@ impl Shape {
 /// One of the AIRs: a cells AIR per slot, one hash table, one range table.
 #[derive(Clone)]
 pub enum BatchAir<R> {
-    /// The generations of slot `slot` (its blocks carry the tag `3·slot + region`).
+    /// The generations of slot `slot` (its blocks carry the tag `4·slot + digest`).
     Cells {
         rule: R,
         shape: Shape,
@@ -188,7 +269,7 @@ impl<R: Rule + Clone> BaseAir<Val> for BatchAir<R> {
     }
     fn preprocessed_width(&self) -> usize {
         match self {
-            Self::Cells { shape, .. } => 2 * REGIONS.len() * shape.rpr,
+            Self::Cells { shape, .. } => 2 * FEEDS.len() * shape.rpr,
             Self::Hash { slots, .. } => hp_width(*slots),
             Self::Range(RangeTable::Pairs) => 2,
             Self::Range(RangeTable::Single) => 1,
@@ -197,14 +278,14 @@ impl<R: Rule + Clone> BaseAir<Val> for BatchAir<R> {
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<Val>> {
         Some(match self {
             Self::Cells { shape: s, .. } => {
-                let w = 2 * REGIONS.len() * s.rpr;
+                let w = 2 * FEEDS.len() * s.rpr;
                 let mut v = Val::zero_vec(s.height * w);
                 for (r, row) in v.chunks_mut(w).enumerate() {
-                    for g in REGIONS {
+                    for f in FEEDS {
                         for i in 0..s.rpr {
-                            if let Some(y) = s.absorbed_row(g, r, i) {
-                                row[s.pre_gate(g, i)] = Val::ONE;
-                                row[s.pre_seq(g, i)] = Val::from_usize(y * s.perms(g));
+                            if let Some(seq) = s.feed_seq(f, r, i) {
+                                row[s.pre_gate(f, i)] = Val::ONE;
+                                row[s.pre_seq(f, i)] = Val::from_usize(seq);
                             }
                         }
                     }
@@ -216,10 +297,10 @@ impl<R: Rule + Clone> BaseAir<Val> for BatchAir<R> {
                 let h = s.hash_height_for(m);
                 let mut v = Val::zero_vec(h * w);
                 for j in 0..m {
-                    for g in REGIONS {
-                        let (start, len) = s.hash_span(g);
+                    for d in 0..DIGESTS {
+                        let (start, len) = s.hash_span(d);
                         let start = j * s.slot_hash_rows() + start;
-                        let tag = 3 * j + g as usize;
+                        let tag = DIGESTS * j + d;
                         for k in 0..len {
                             let row = &mut v[(start + k) * w..][..w];
                             row[HP_ACTIVE] = Val::ONE;
@@ -277,10 +358,17 @@ impl<R: Rule + Clone> BaseAir<Val> for BatchAir<R> {
     }
     fn num_public_values(&self) -> usize {
         match self {
-            Self::Hash { slots, .. } => N_PUBLIC * slots,
+            Self::Hash { slots, .. } => N_STATEMENT * slots,
             _ => 0,
         }
     }
+}
+
+/// The generation-`k` side cells of slot `i` (the board's side columns, cell-major): what a
+/// side row of `d_faces` absorbs.
+fn side_values<E: From<V>, V: Copy>(s: &Shape, cells: &Cells<'_, V>, i: usize) -> Vec<E> {
+    let (h, v) = (s.halo(), s.spec.values);
+    s.side_columns().flat_map(|x| (0..v).map(move |j| (x, j))).map(|(x, j)| cells.get(s.k, i, h + x, j)).collect()
 }
 
 /// The rule's constraints and range requests on the current and next row.
@@ -353,27 +441,37 @@ where
                         }
                     }
                 }
-                // INV-STENCIL-BATCH-1: limbs bound to the cells, blocks sent to the hash table.
-                let hash = LookupBus::new(HASH_BUS);
-                for g in REGIONS {
-                    for i in 0..s.rpr {
+                // INV-STENCIL-BATCH-1: limbs bound to the cells (the side limbs to the
+                // generation-k side cells, INV-STENCIL-BATCH-5), blocks sent to the hash table.
+                for i in 0..s.rpr {
+                    for g in REGIONS {
                         let vals = region_values::<AB::Expr, AB::Var>(s, g, &cells, i, &per[i]);
                         let packed = pack(s, &vals, s.perms(g));
                         for q in 0..s.limbs(g) {
                             builder.assert_eq(cur[s.limb_col(g, i, q)], packed[q].clone());
                         }
+                    }
+                    let packed = pack(s, &side_values::<AB::Expr, AB::Var>(s, &cells, i), s.side_perms());
+                    for q in 0..s.side_limbs() {
+                        builder.assert_eq(cur[s.feed_limb_col(Feed::Side, i, q)], packed[q].clone());
+                    }
+                }
+                let hash = LookupBus::new(HASH_BUS);
+                for f in FEEDS {
+                    let (limbs, perms) = s.feed_size(f);
+                    for i in 0..s.rpr {
                         let limb = |q: usize| -> AB::Expr {
-                            if q < s.limbs(g) { cur[s.limb_col(g, i, q)].into() } else { AB::Expr::ZERO }
+                            if q < limbs { cur[s.feed_limb_col(f, i, q)].into() } else { AB::Expr::ZERO }
                         };
-                        for m in 0..s.perms(g) {
+                        for m in 0..perms {
                             let key: Vec<AB::Expr> = [
-                                AB::Expr::from_usize(3 * slot + g as usize),
-                                p[s.pre_seq(g, i)].into() + AB::Expr::from_usize(m),
+                                AB::Expr::from_usize(DIGESTS * slot + f.digest()),
+                                p[s.pre_seq(f, i)].into() + AB::Expr::from_usize(m),
                             ]
                             .into_iter()
                             .chain((0..RATE).map(|j| limb(m * RATE + j)))
                             .collect();
-                            hash.lookup_key(builder, key, Count::bounded(p[s.pre_gate(g, i)].into(), 1));
+                            hash.lookup_key(builder, key, Count::bounded(p[s.pre_gate(f, i)].into(), 1));
                         }
                     }
                 }
@@ -393,8 +491,8 @@ where
                     let chain = pn[HP_ACTIVE] - pn[HP_FIRST];
                     builder.when_transition().assert_zero(chain * (next[H_IN + j] - po[j].clone()));
                 }
-                // INV-STENCIL-BATCH-4: slot `s`'s digests are its public values `[24s, 24s + 24)`.
-                for tag in 0..3 * m {
+                // INV-STENCIL-BATCH-4: slot `s`'s digests are its public values `[32s, 32s + 32)`.
+                for tag in 0..DIGESTS * m {
                     for j in 0..DIGEST {
                         let d = public[tag * DIGEST + j].clone();
                         builder.assert_zero(p[HP_LAST + tag] * (po[j].clone() - d));
@@ -485,7 +583,7 @@ impl<R: Rule + Clone> StencilBatch<R> {
     }
 
     /// Per-AIR public values of a leaf with claim `public` (the hash AIR carries the claim:
-    /// `N_PUBLIC` values per slot).
+    /// `N_STATEMENT` values per slot).
     pub fn publics(&self, public: &[Val]) -> Vec<Vec<Val>> {
         (0..self.airs.len()).map(|a| if a == self.slots { public.to_vec() } else { Vec::new() }).collect()
     }
@@ -550,6 +648,26 @@ impl<R: Rule + Clone> StencilBatch<R> {
         cells: &[RowMajorMatrix<Val>],
         order: &[usize],
     ) -> (Vec<RowMajorMatrix<Val>>, Vec<Val>) {
+        self.assemble_inner(cells, order, None)
+    }
+
+    /// [`Self::assemble`] with every slot's side limbs taken from board `sides` instead of the
+    /// cells (and the hash table absorbing them): a forgery only the side-limb constraints stop.
+    #[cfg(test)]
+    pub(crate) fn assemble_with_sides(
+        &self,
+        cells: &RowMajorMatrix<Val>,
+        sides: &Grid,
+    ) -> (Vec<RowMajorMatrix<Val>>, Vec<Val>) {
+        self.assemble_inner(std::slice::from_ref(cells), &[0], Some(sides))
+    }
+
+    fn assemble_inner(
+        &self,
+        cells: &[RowMajorMatrix<Val>],
+        order: &[usize],
+        sides: Option<&Grid>,
+    ) -> (Vec<RowMajorMatrix<Val>>, Vec<Val>) {
         assert_eq!(cells.len(), self.slots, "one cells trace per slot");
         let s = &self.shape;
         let (cw, bw, h) = (s.cells_width(), s.batch_cells_width(), s.height);
@@ -562,21 +680,42 @@ impl<R: Rule + Clone> StencilBatch<R> {
         let per_slot = |cells: &RowMajorMatrix<Val>| {
             let mut mult = vec![0u32; 1 << table.log_height()];
             let mut v = Val::zero_vec(h * bw);
-            let mut b: [Vec<Vec<Val>>; 3] = Default::default();
+            let mut b: [Vec<Vec<Val>>; DIGESTS] = Default::default();
             for r in 0..h {
                 let (cur, nxt) = (&cells.values[r * cw..][..cw], &cells.values[((r + 1) % h) * cw..][..cw]);
                 let row = &mut v[r * bw..(r + 1) * bw];
                 row[..cw].copy_from_slice(cur);
                 let view = Cells { s, cur, next: nxt };
-                for g in REGIONS {
-                    for i in 0..s.rpr {
-                        let inner0 = Val::from_bool(s.inner0(r, i));
-                        let limbs = pack(s, &region_values::<Val, Val>(s, g, &view, i, &inner0), s.perms(g));
-                        for q in 0..s.limbs(g) {
-                            row[s.limb_col(g, i, q)] = limbs[q];
+                // the feeds' limbs (a cap row's are its `d_next` limbs), in canonical order
+                let mut fed: [Vec<Vec<Val>>; 5] = Default::default();
+                for i in 0..s.rpr {
+                    let inner0 = Val::from_bool(s.inner0(r, i));
+                    for g in REGIONS {
+                        fed[g as usize].push(pack(s, &region_values::<Val, Val>(s, g, &view, i, &inner0), s.perms(g)));
+                    }
+                    fed[Feed::Cap.index()].push(fed[Region::Next as usize][i].clone());
+                    let side = match (sides, s.absorbed_row(Region::Next, r, i)) {
+                        (Some(g), Some(y)) => {
+                            s.side_columns().flat_map(|x| g.cell(x, y).to_vec()).map(Val::from_u32).collect()
                         }
-                        if s.absorbed_row(g, r, i).is_some() {
-                            b[g as usize].push(limbs);
+                        _ => side_values::<Val, Val>(s, &view, i),
+                    };
+                    fed[Feed::Side.index()].push(pack(s, &side, s.side_perms()));
+                }
+                for f in FEEDS {
+                    for i in 0..s.rpr {
+                        let limbs = &fed[f.index()][i];
+                        for q in 0..s.feed_size(f).0 {
+                            row[s.feed_limb_col(f, i, q)] = limbs[q];
+                        }
+                    }
+                }
+                // blocks per digest in canonical (board row) order; d_faces takes a row's cap
+                // or side limbs, whichever it is
+                for i in 0..s.rpr {
+                    for f in FEEDS {
+                        if s.feed_seq(f, r, i).is_some() {
+                            b[f.digest()].push(fed[f.index()][i].clone());
                         }
                     }
                 }
@@ -595,7 +734,7 @@ impl<R: Rule + Clone> StencilBatch<R> {
         let parts: Vec<_> = cells.par_iter().map(per_slot).collect();
         let mut mult = vec![0u32; 1 << table.log_height()];
         let mut traces = Vec::with_capacity(self.airs.len());
-        let mut blocks: Vec<[Vec<Vec<Val>>; 3]> = Vec::with_capacity(cells.len());
+        let mut blocks: Vec<[Vec<Vec<Val>>; DIGESTS]> = Vec::with_capacity(cells.len());
         for (t, b, m) in parts {
             for (a, x) in mult.iter_mut().zip(m) {
                 *a += x;
@@ -606,15 +745,15 @@ impl<R: Rule + Clone> StencilBatch<R> {
         let m = self.slots;
         let hh = s.hash_height_for(m);
         let mut hv = Val::zero_vec(hh * H_WIDTH);
-        let mut public = Vec::with_capacity(N_PUBLIC * m);
+        let mut public = Vec::with_capacity(N_STATEMENT * m);
         for (j, &src) in order.iter().enumerate() {
-            for g in REGIONS {
-                let (start, len) = s.hash_span(g);
+            for d in 0..DIGESTS {
+                let (start, len) = s.hash_span(d);
                 let start = j * s.slot_hash_rows() + start;
                 let mut st = [Val::ZERO; WIDTH];
                 let mut k = 0;
-                for limbs in &blocks[src][g as usize] {
-                    for q in 0..s.perms(g) {
+                for limbs in &blocks[src][d] {
+                    for q in 0..limbs.len() / RATE {
                         st[..RATE].copy_from_slice(&limbs[q * RATE..][..RATE]);
                         let row = &mut hv[(start + k) * H_WIDTH..][..H_WIDTH];
                         row[H_IN..H_IN + WIDTH].copy_from_slice(&st);
@@ -665,7 +804,7 @@ impl<R: Rule + Clone> StencilBatch<R> {
     }
 
     pub fn verify(&self, proof: &BatchProof<koala_bear::Config>, public: &[Val]) -> Result<(), String> {
-        if public.len() != N_PUBLIC * self.slots {
+        if public.len() != N_STATEMENT * self.slots {
             return Err(format!("{} public values for {} slots", public.len(), self.slots));
         }
         let publics = self.publics(public);
@@ -695,6 +834,10 @@ impl Shape {
     #[cfg(test)]
     pub(crate) fn test_limb_col(&self, g: Region, i: usize, q: usize) -> usize {
         self.limb_col(g, i, q)
+    }
+    #[cfg(test)]
+    pub(crate) fn test_side_limb_col(&self, i: usize, q: usize) -> usize {
+        self.feed_limb_col(Feed::Side, i, q)
     }
 }
 

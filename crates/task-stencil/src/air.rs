@@ -8,8 +8,8 @@
 //!   and every header field of the next state equals [`apply`]'s; a hold or birth slot is
 //!   checked entirely natively (proof `[0]`);
 //! - **STARK (TASK-2):** for an advance, the verifier derives the extended board `E` itself and
-//!   checks the proof against `public_values(E, next.grid)` (`d_prev`, `d_halo`, `d_next`), so
-//!   the proof binds `next.grid = E.evolve(rule, k)`.
+//!   checks the proof against `statement(E, next.grid)` (`d_prev`, `d_halo`, `d_next`,
+//!   `d_faces`), so the proof binds `next.grid = E.evolve(rule, k)` and its border digest.
 //!
 //! Proof bytes: `0` (native), `1 ‖ postcard(BatchProof)` (one slot), or a **multi-slot group**
 //! (INV-STENCIL-TASK-3): a commitment's advancing slots of one zone in one batch proof with one
@@ -26,8 +26,7 @@ use umis_core::records::TransitionStatement;
 use umis_core::{Hash, NodeId, SecretKey, SegRecord, bmt};
 use umis_proof::{ProofBackend, ProofError, PublicData, Witness};
 use umis_stark::config::{FriPreset, koala_bear};
-use umis_stencil::air::public_values;
-use umis_stencil::batch::StencilBatch;
+use umis_stencil::batch::{StencilBatch, statement};
 use umis_stencil::{Grid, Rule, Val};
 use umis_task::{Bytes, PortId, ZoneTask};
 
@@ -100,8 +99,9 @@ impl StencilStark {
     }
 
     /// Every native check; for an advancing slot `Some(statement)`, the leaf's public values
-    /// `[d_prev, d_halo, d_next]` the STARK must prove. From full states (members, shares) or,
-    /// without states, from state witnesses (the stateless beacon, INV-STENCIL-TASK-4).
+    /// `[d_prev, d_halo, d_next, d_faces]` the STARK must prove. From full states (members,
+    /// shares) or, without states, from state witnesses (the stateless beacon,
+    /// INV-STENCIL-TASK-4, TASK-5).
     fn native(
         &self,
         stmt: &TransitionStatement,
@@ -150,7 +150,7 @@ impl StencilStark {
                 if header(&s_out) != header(&expect) {
                     return bad("advanced state header or previous board");
                 }
-                let public = public_values(&z.batch.shape, &ext, &s_out.grid);
+                let public = statement(&z.batch.shape, &ext, &s_out.grid);
                 Ok((z, Some(public)))
             }
             (None, None, Some(wp), Some(wn)) => {
@@ -160,8 +160,12 @@ impl StencilStark {
                 ) else {
                     return bad("state witnesses do not match the statement roots");
                 };
-                // `outputs_root` is not checked here: members re-execute every block and an
-                // inconsistent one is an InvalidTransition fault until settlement.
+                // INV-STENCIL-TASK-5: the outputs read only the header and both borders, which
+                // the witness opens against the summary's border digests.
+                if outputs_root(&<Stencil2d as ZoneTask>::outputs(&z.ctx, &b.outer)) != stmt.outputs_root {
+                    return bad("outputs_root");
+                }
+                let (a, b) = (a.summary, b.summary);
                 // The decision reads only the header and the inputs (the zone part of `E` is
                 // not in the halo digest), so a blank board stands in for the state's.
                 let blank = Grid::filled(p.n(), p.n(), &z.ctx.rule.boundary());
@@ -182,15 +186,23 @@ impl StencilStark {
                 }
                 match decision {
                     Decision::Advance { ext } => {
-                        if b.prev != a.board {
+                        if b.prev != a.board || b.prev_faces != a.faces {
                             return bad("the previous board of an advanced state");
                         }
                         let halo = umis_stencil::air::halo_digest(&z.batch.shape, &ext);
-                        Ok((z, Some(a.board.into_iter().chain(halo).chain(b.board).collect())))
+                        Ok((z, Some([a.board, halo, b.board, b.faces].concat())))
                     }
-                    Decision::Hold if proof == [NATIVE] && b.board == a.board && b.prev == a.prev => Ok((z, None)),
+                    Decision::Hold
+                        if proof == [NATIVE]
+                            && (b.board, b.prev, b.faces, b.prev_faces) == (a.board, a.prev, a.faces, a.prev_faces) =>
+                    {
+                        Ok((z, None))
+                    }
                     Decision::Birth(_)
-                        if proof == [NATIVE] && b.board == summary::blank_root(p) && b.prev == b.board =>
+                        if proof == [NATIVE]
+                            && b.board == summary::blank_root(p)
+                            && b.faces == summary::blank_faces(p)
+                            && (b.prev, b.prev_faces) == (b.board, b.faces) =>
                     {
                         Ok((z, None))
                     }
@@ -273,7 +285,7 @@ impl StencilStark {
 
     /// For the verifier of another backend: every native check of this slot (INV-STENCIL-TASK-1,
     /// from states or witnesses); `Some((key, statement))` for an advance, with the leaf
-    /// statement `[d_prev, d_halo, d_next]`. A hold or birth slot must carry the native proof
+    /// statement `[d_prev, d_halo, d_next, d_faces]`. A hold or birth slot must carry the native proof
     /// `[0]`.
     pub fn native_claim(
         &self,

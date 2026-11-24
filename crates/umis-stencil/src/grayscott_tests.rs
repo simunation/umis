@@ -2,8 +2,8 @@
 //! batch proofs verify, and the **release-mode verifier** rejects each staged division moved
 //! out of its range (INV-STENCIL-RULE-2).
 
-use crate::air::public_values;
 use crate::batch::StencilBatch;
+use crate::batch::statement;
 use crate::grayscott::{BITS, GrayScott, U};
 use crate::{Grid, Rule, Val};
 use p3_field::PrimeCharacteristicRing;
@@ -64,7 +64,7 @@ fn honest_gray_scott_batch_proofs_verify() {
         let ext = seeded(b.shape.we);
         let (t, public, next) = b.generate(&ext);
         assert_eq!(next, ext.evolve(&gs, k));
-        assert_eq!(public, public_values(&b.shape, &ext, &next));
+        assert_eq!(public, statement(&b.shape, &ext, &next));
         assert!(accepted(&b, t, &public), "{n},{k},{rpr}");
     }
 }

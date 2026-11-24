@@ -1,8 +1,8 @@
 //! The lattice Boltzmann toy (D2Q9): physics sanity, honest batch proofs, and the
 //! **release-mode verifier** rejecting wrong roundings that the equations alone would allow.
 
-use crate::air::public_values;
 use crate::batch::StencilBatch;
+use crate::batch::statement;
 use crate::lbm::{C, Lbm, U};
 use crate::{Grid, Rule, Val};
 use p3_field::PrimeCharacteristicRing;
@@ -72,7 +72,7 @@ fn honest_lbm_batch_proofs_verify() {
         let ext = pulse(b.shape.we, 150);
         let (t, public, next) = b.generate(&ext);
         assert_eq!(next, ext.evolve(&Lbm::default(), k));
-        assert_eq!(public, public_values(&b.shape, &ext, &next));
+        assert_eq!(public, statement(&b.shape, &ext, &next));
         assert!(accepted(&b, t, &public), "{n},{k},{rpr}");
     }
 }

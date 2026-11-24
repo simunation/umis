@@ -103,9 +103,11 @@ every check needs.
   aggregate instead of one leaf per slot (LBM 32²: ~6 MB per slot before). Cost per slot (J101, CPU): EF5 leaf
   plus layer-1 recursion, heat 64² ≈ 1 s, LBM 32² ≈ 6 s; each 2-to-1 step ≈ 1 s. SimNet: `stencil-agg`,
   `stencil-agg-lbm`, `stencil-agg-junk`.
-- **Stateless beacon (2026-11-22):** proof commitments carry ~0.5 KB state witnesses instead of the states (37 KB
-  for an LBM 32² zone); the beacon checks every proof without zone states. `outputs_root` is still guarded by
-  members' fault proofs until settlement (in-circuit binding is the next step, `.plan/NEXT.md`).
+- **Stateless beacon (2026-11-22, complete 2026-11-24):** proof commitments carry state witnesses instead of the
+  states: a summary, its inclusion proof and the borders of both boards (~5 KB for an LBM 32² zone with k = 1; the
+  state is 37 KB). The beacon checks every proof without zone states, including `outputs_root`: the proof binds a
+  digest of the board's border (`d_faces`), and the payloads are rebuilt from the witnessed borders. Witnesses
+  grow with `k` (the border is `4h(n − h)` cells for halo `h = k·r`).
 - **GPU:** the GPU prover (`umis-gpu`) handles single-table proofs only; the batch leaf proves on the CPU.
 - **Block size:** without aggregation a beacon block carries every leaf proof of its slot. The gossip and sync size
   limits were raised to 128 MB and 256 MB for this (2026-11-22). Use `koalabear-agg` for large worlds.

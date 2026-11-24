@@ -121,8 +121,8 @@ circuit proofs, so `umis_agg::native` builds the same trusted construction from 
   structure), then:
   - **INV-AGG-NB-1 (VK pin):** the `CommonData` preprocessed-commitment targets are constrained to the relation's
     commitment (`ConstrainConstantCommitment`). Needs the local P3R patch below.
-  - **INV-AGG-NB-2 (statement):** `set_statement_exports` exports exactly the leaf's AIR public values (24 for a
-    stencil leaf: `d_prev, d_halo, d_next`). Every other circuit input, including the leaf's commitments and
+  - **INV-AGG-NB-2 (statement):** `set_statement_exports` exports exactly the leaf's AIR public values (32 for a
+    stencil leaf: `d_prev, d_halo, d_next, d_faces`; 24 before S6b). Every other circuit input, including the leaf's commitments and
     openings allocated with `public_input()`, is witness: `CircuitVerifier::verify(proof, statement)` checks only
     the statement table. The in-circuit transcript binds the witness commitments.
   - **INV-AGG-NB-3:** one owner per relation and shape proves every leaf of that shape (`prove` checks the shape and

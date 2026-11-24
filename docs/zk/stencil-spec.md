@@ -42,6 +42,12 @@ Missing neighbours: the caller fills their part of `E` with `Rule::boundary()`, 
   Each row's `n·values` values are packed `30/bits` per limb and zero-padded to whole permutations. It is
   independent of the layout (`roots_do_not_depend_on_the_layout`, rpr 2–5).
 - **ROOT-2:** `halo_digest(E)` is the same over every row of `E`, with the zone's cells set to 0.
+- **ROOT-3 (S6b):** `faces_digest(board)` is the same sponge over the board's **border**, the cells within
+  `h = k·r` of an edge (the union of the 8 output port regions). It goes row by row: a cap row (`y < h` or
+  `y ≥ n − h`) is packed as for ROOT-1, and every other row's `2h` side cells (columns `[0, h)`, `[n − h, n)`) are
+  packed `30/bits` per limb, zero-padded to whole permutations. It reads only the border
+  (`the_faces_digest_is_the_border_digest`: every border cell changes it, no interior cell does). `border` and
+  `with_border` give the canonical border values and rebuild a board from them.
 - **DIG-1 (limbs):** per trace row, slot and digest, the row's limbs are committed columns constrained to the
   packing of the cells (`digest_columns_are_bound_to_the_cells`):
   - `d_prev` reads generation 0 at slot `i + k·r`, so its rows line up with `d_next`, which reads generation
@@ -109,10 +115,13 @@ preprocessed columns: rc.2's LogUp trace builder cannot see periodic columns.
 - **Cells AIR:**
   - the generations and the rule's constraints;
   - committed limbs of every digest row, bound to the cells (BATCH-1);
-  - each 8-limb block sent on `stencil-hash` as `(region, seq, block)`, with count = a preprocessed gate. `seq`
-    is preprocessed: board row × P + m, the canonical absorption order;
+  - each 8-limb block sent on `stencil-hash` as `(tag, seq, block)`, with count = a preprocessed gate. `seq`
+    is preprocessed: board row × P + m for the row digests, the canonical absorption order;
+  - `d_faces` (BATCH-5): a cap row resends its `d_next` limbs, another zone row sends its own side limbs,
+    which are constrained to the generation-`k` side cells; seq = the row's first block in ROOT-3 order;
   - range requests looked up on `stencil-range`.
-- **Hash AIR:** one Poseidon2 permutation per row, the three sponges in canonical order.
+- **Hash AIR:** one Poseidon2 permutation per row, the four sponges (`d_prev`, `d_halo`, `d_next`, `d_faces`) in
+  canonical order.
   - Each active row is a table entry `(region, seq, block)` with multiplicity 1 (preprocessed).
   - Zero capacity at a region's first row; chaining `(next.active − next.first)·(next.in − out) = 0` (BATCH-2).
   - The region's last row outputs its public digest.
@@ -120,7 +129,13 @@ preprocessed columns: rc.2's LogUp trace builder cannot see periodic columns.
 - **BATCH-3 (range requests):** `(x, b)` with `2 ≤ b ≤ 16` looks up `x` and, when `b < 16`, `x·2^(16−b)`. Since
   `x < 2^16`, the product is `< 2^30 < p` and cannot wrap. `b = 1` would wrap (`65025·2^15 − p < 2^16`,
   `the_one_bit_range_trick_would_wrap`), so it is a booleanity constraint.
-- The public values equal the canonical `root` / `halo_digest` (`honest_batch_proofs_verify_for_both_toys`).
+- The public values are `statement(E, next) = [d_prev, d_halo, d_next, d_faces]` (32 elements), equal to the
+  canonical `root` / `halo_digest` / `faces_digest` (`honest_batch_proofs_verify_for_both_toys`). The uni-STARK
+  `StencilAir` (tests and reference only) keeps the first three.
+- **BATCH-5 (S6b):** the proof binds `d_faces = faces_digest(next)`. `a_false_faces_digest_is_rejected` (honest
+  trace, the faces digest of a board with one border cell changed, single- and multi-slot) is rejected by the
+  last-row output check. `side_limbs_are_bound_to_the_cells` (honest cells, side limbs and hash table from a false
+  board) is rejected only by the side-limb constraints (mutation-checked: without them it verifies).
 - Security: `StencilBatch::security_shape(proof)` reads the opened codewords from the proof (with upper estimates
   for constraints and LogUp). P100 clears 101 bits (`batch_leaves_clear_the_target_at_p100`).
 
@@ -132,7 +147,8 @@ Tests (each mutation-checked, two-sided for the buses):
 | `limbs_are_bound_to_the_cells` (run a's cells, run b's limbs and hash table) | limb constraints |
 | `the_hash_table_must_absorb_the_cells_blocks` (run b's hash table) | hash bus |
 | `the_hash_chain_cannot_restart` | hash chaining |
-| `cells_and_hash_blocks_must_agree` (tampered limb, block, public digest) | bus, last-row output |
+| `cells_and_hash_blocks_must_agree` (tampered limb incl. a side limb, block, public digest) | bus, last-row output |
+| `side_limbs_are_bound_to_the_cells` | side-limb constraints (BATCH-5) |
 
 Measured (P100, CPU):
 
@@ -146,11 +162,11 @@ Measured (P100, CPU):
 For heat, the fixed 2^16-row range table dominates small zones; multi-slot leaves (below) amortise it.
 
 **Multi-slot leaves (INV-STENCIL-BATCH-4, `StencilBatch::new_multi`, 2026-11-22):** `m` slots of one zone in one
-proof: `m` cells AIRs (one per slot), one hash table holding the `3m` sponges slot by slot, one range table.
-- Cells AIR `j` sends its blocks with tag `3j + region`; the hash table's preprocessed tag column carries the same
+proof: `m` cells AIRs (one per slot), one hash table holding the `4m` sponges slot by slot, one range table.
+- Cells AIR `j` sends its blocks with tag `4j + digest`; the hash table's preprocessed tag column carries the same
   tag per span, so a slot's blocks reach only its own sponges (`slots_cannot_swap_their_blocks`: the table
   absorbing slot 1's cells into slot 0's digests is rejected; mutation-checked by dropping the slot from the tag).
-- The hash table has one last-row flag per (slot, region) and `24m` public values, slot `j` at `[24j, 24j + 24)`.
+- The hash table has one last-row flag per (slot, digest) and `32m` public values, slot `j` at `[32j, 32j + 32)`.
 - For `m = 1` the AIRs and preprocessed data are exactly the single-slot leaf's.
 - Per-slot cells traces are assembled in parallel.
 
@@ -212,7 +228,7 @@ Missing neighbours are the rule's boundary cells.
 - **TASK-1 (native):** roots, canonical states (values in range), `outputs_root`, inputs against InputRefs, the
   decision recomputed, and every header field. Hold and birth slots are checked natively only (proof `[0]`).
 - **TASK-2 (STARK):** for an advance, the verifier builds `E` itself and verifies the batch leaf against
-  `public_values(E, next.grid)`.
+  `statement(E, next.grid)`.
 - **TASK-3 (multi-slot groups):** a commitment's advancing slots of one zone (up to `MAX_MULTI = 8`) share one
   multi-slot leaf: head `2 ‖ m ‖ member addresses ‖ proof`, references `3 ‖ keccak(head) ‖ index`
   (`umis_proof::group`). The verifier runs TASK-1 for every member, derives each statement, and verifies the leaf
@@ -228,29 +244,37 @@ Tests:
 SimNet: `stencil-{life,heat,lbm,gs}` (mock), `stencil-{life,lbm,gs}-stark` (they require a multi-slot proof on
 chain), `stencil-lbm-junk`.
 
-## 6e'. The stateless beacon (S6 v1, `task-stencil/src/summary.rs`; INV-STENCIL-TASK-4)
+## 6e'. The stateless beacon (S6, `task-stencil/src/summary.rs`; INV-STENCIL-TASK-4, TASK-5)
 
-- **State layout v2:** `keccak(summary) ‖ header (48 B) ‖ board ‖ previous board`, where
-  `summary = header ‖ root(board) ‖ root(prev)` (canonical Poseidon2 roots, 8 u32 LE each). `decode_state`
+- **State layout v3 (S6b):** `keccak(summary) ‖ header (48 B) ‖ board ‖ previous board`, where
+  `summary = header ‖ root(board) ‖ root(prev) ‖ faces(board) ‖ faces(prev)` (canonical Poseidon2 digests, 8 u32
+  LE each; v2 had the roots only). `decode_state`
   accepts a state only if its first 32 bytes (BMT segment 0) are its own summary's hash, so every keccak BMT
   `state_root` (statements, headers) commits to the summary.
-- **Witness:** `borsh(summary, BMT inclusion proof of segment 0)`, about 0.5 KB (an LBM 32² state is 37 KB).
+- **Witness:** `borsh(summary, BMT inclusion proof of segment 0, border(board), border(prev))` (u16 LE values in
+  ROOT-3 order). LBM 32², k = 1: 4.9 KB (the state is 37 KB); it grows with `k` (the border is `4h(n − h)` cells).
   `ProofBackend::stateless(task)` is true for stencil backends; proof commitments then carry witnesses
   (`LeafData::witnesses`) instead of states, and the beacon passes them as `PublicData::{prev,next}_witness`.
 - **What the verifier checks without states:** both witnesses open the statement's `prev_state_root` /
   `state_root`; the decision from the prev header and the inputs (`decide` reads only header fields and inputs;
   a blank board stands in for the zone part of `E`, which the halo digest zeroes anyway); the next header equals
-  `apply`'s; for an advance `next.prev_root = prev.board_root` and the STARK statement
-  `[prev.board_root, halo_digest(E), next.board_root]`; for a hold equal roots, for a birth blank roots, both with
-  proof `[0]`.
-- **Not checked statelessly:** `outputs_root` (the payloads are a function of the next state). Members re-execute
-  every block, so an inconsistent `outputs_root` is an `InvalidTransition` fault until the commitment settles
-  (`D` slots after Proven). Binding the payloads in-circuit (a `d_faces` sponge) is the follow-up.
+  `apply`'s; for an advance `next.prev_root = prev.board_root`, `next.prev_faces = prev.faces` and the STARK
+  statement `[prev.board_root, halo_digest(E), next.board_root, next.faces]`; for a hold equal digests, for a
+  birth blank ones, both with proof `[0]`.
+- **TASK-5 (`outputs_root`, S6b):** the witness's borders must hash to the summary's `faces` / `prev_faces`; the
+  verifier rebuilds both boards from them (interior = boundary value, which no payload reads), computes the 8
+  payloads with the task's own `outputs` and checks `outputs_root`. With BATCH-5 (`faces` is the proof's
+  `d_faces`) and the chain `next.prev_faces = prev.faces`, every payload is the proven board's (and the
+  previous proven board's) border. So the beacon checks the whole statement without states.
 - Members (shares) still verify from full states; both paths share the same code (`StencilStark::native`).
 - Tests (`tests/proofs.rs`, release): honest slots of all four rules verify from witnesses; swapped or repeated
   witnesses fail; a false next board with re-derived roots and summary is rejected by the STARK; an edited
-  summary is rejected (mutation-checked: without the root check it verifies). SimNet stencil STARK and agg
-  scenarios run the beacon's stateless path.
+  summary is rejected (mutation-checked: without the root check it verifies). TASK-5:
+  `stateless_outputs_root_is_checked` (payloads of another border; a witness border its summary does not digest;
+  mutation-checked: without the check it verifies) and
+  `a_false_border_with_a_consistent_summary_is_rejected_by_the_stark` (honest board root, a false border with its
+  own summary, state root and payloads: every native check passes, the STARK rejects; control: the honest border
+  verifies). SimNet stencil STARK and agg scenarios run the beacon's stateless path.
 
 ## 6f. Recursion and aggregation (`crates/umis-agg`, S5b + S4; INV-AGG-NB-*, INV-STENCIL-AGG-*)
 
@@ -258,13 +282,13 @@ Details: `docs/zk/aggregation.md` §Native batch leaves.
 
 - The batch leaf is reproved under the EF5 aggregation config (`umis_agg::native::NativeRelation` over
   `StencilBatch::airs()`), then verified in-circuit by `NativeLayer1` with its verifying key pinned (NB-1) and the
-  statement `[d_prev, d_halo, d_next]` exported (NB-2).
+  statement `[d_prev, d_halo, d_next, d_faces]` exported (NB-2).
 - **INV-STENCIL-AGG-1 (group format):** a commitment's advancing slots of one leaf relation (`LeafKey`: rule, n, k,
   rows per trace row) become `AggHead ‖ m ‖ member addresses ‖ postcard(aggregate)` on the first member and
   `AggRef ‖ keccak(head) ‖ index` on the others (life2d's tags 4/5; stencil plain proofs use 0/1). A single
   advancing slot and hold/birth slots keep `StencilStark` proofs.
 - **INV-STENCIL-AGG-2 (verifier):** every member passes `StencilStark::native_claim` (all native checks of
-  INV-STENCIL-TASK-1); the verifier derives each statement as `public_values(E, next)` from public data and checks
+  INV-STENCIL-TASK-1); the verifier derives each statement as `statement(E, next)` from public data and checks
   the aggregate with its own verifier for (relation, member count).
 - **INV-STENCIL-AGG-3 (independent trees):** owner trees are built per relation from a boundary-filled leaf; an
   aggregate made with one node's tree verifies with another's; another member count's verifier rejects it.

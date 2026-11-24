@@ -22,14 +22,11 @@ Read `.plan/HANDOFF.md` first (how to build, test, machine quirks, conventions).
 
 ## Order
 
-1. **S6b: bind the output payloads in-circuit (`d_faces`)** so `outputs_root` is checked statelessly too. About
-   1.5 sessions.
-   - A 4th sponge over the next board's border strips (the payload `cur` regions, canonical port order) in both
-     AIRs (`air.rs` `REGIONS`, `batch.rs` hash spans; the uni AIR too or drop it for batch only).
-   - The payload's `prev` strips are the previous leaf's `d_faces`: add `faces_root` to the summary.
-   - Verifier: recompute the digest of each payload's `cur` strips natively and compare with `d_faces`, then
-     `keccak(payloads)` → `outputs_root`. Statement grows to 32 elements: update `stencil_chain`, the agg trees.
-   - Tests: a payload that differs from the proven board, mutation-checked.
+1. ~~**S6b `d_faces`**~~ **done 2026-11-24** (INV-STENCIL-ROOT-3, BATCH-5, TASK-5): a 4th sponge over the next
+   board's border in the batch leaf only (cap rows resend the `d_next` limbs, other rows send new side limbs; the
+   uni AIR is test-only and keeps 3 digests). Summary v3 adds both boards' border digests; witnesses carry both
+   borders; the verifier rebuilds the payloads and checks `outputs_root`. LBM 32²: +36 columns, proof +1 %,
+   prove/verify within noise (A/B back to back).
 2. ~~Plonky3 degree-inference cache~~ **done 2026-11-23** (owner OK): `vendor/p3-batch-stark-degree-cache.patch`,
    LBM 32² 8-slot prove 134 → 60 ms per slot, verify 156 → 82 ms.
 3. **Aggregation over multi-slot leaves:** one layer-1 per commitment instead of per slot (`NativeLayer1` already

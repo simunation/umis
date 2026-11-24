@@ -37,10 +37,10 @@ fn heat_batch_leaf_recurses_and_binds_its_statement() {
     let leaf = rel.prove(&P, &traces, b.publics(&public)).unwrap();
     let owner = NativeLayer1::new(&P, &rel, &leaf).unwrap();
     let rec = owner.prove(&leaf).unwrap();
-    assert_eq!(rec.statement, public, "statement = [d_prev, d_halo, d_next]");
+    assert_eq!(rec.statement, public, "statement = [d_prev, d_halo, d_next, d_faces]");
     rec.verify().unwrap();
     // INV-AGG-NB-2: the recursive proof does not verify for any other statement.
-    for i in [0, 9, 23] {
+    for i in [0, 9, 23, 31] {
         let mut wrong = public.clone();
         wrong[i] += Val::ONE;
         assert!(rec.verifier.verify(&rec.out.0, &wrong).is_err(), "statement element {i}");

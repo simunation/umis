@@ -284,10 +284,10 @@ pub fn chain(statement: &[Val]) -> Result<([Val; DIGEST], [Val; DIGEST]), String
 }
 
 /// [`chain`] for stencil leaves (`umis_stencil`, INV-STENCIL-6): each leaf statement is
-/// `[d_prev, d_halo, d_next]`; returns the first `d_prev` and the last `d_next` if every leaf's
+/// `[d_prev, d_halo, d_next, d_faces]`; returns the first `d_prev` and the last `d_next` if every leaf's
 /// `d_next` is the next leaf's `d_prev`.
 pub fn stencil_chain(statement: &[Val]) -> Result<([Val; SD], [Val; SD]), String> {
-    const N: usize = umis_stencil::air::N_PUBLIC;
+    const N: usize = umis_stencil::batch::N_STATEMENT;
     if statement.is_empty() || statement.len() % N != 0 {
         return Err(format!("statement length {} is not a positive multiple of {N}", statement.len()));
     }
