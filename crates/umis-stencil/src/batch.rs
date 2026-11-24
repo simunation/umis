@@ -327,10 +327,8 @@ where
                 let (cur, next) = (main.current_slice(), main.next_slice());
                 let prep = builder.preprocessed().clone();
                 let p = prep.current_slice();
-                let mut per: Vec<AB::Expr> = builder.periodic_values().iter().map(|x| (*x).into()).collect();
-                if per.is_empty() {
-                    per = vec![AB::Expr::ZERO; s.rpr]; // see `StencilAir::eval`
-                }
+                // Every builder declares the periodic columns (the P3R layouts too: vendor/p3r-periodic-layout.patch).
+                let per: Vec<AB::Expr> = builder.periodic_values().iter().map(|x| (*x).into()).collect();
                 let cells = Cells { s, cur, next };
                 let (mut out, mut ranges) = (Vec::new(), Vec::new());
                 rule_rows::<AB::Expr, AB::Var, R>(rule, s, &cells, &mut out, &mut ranges);

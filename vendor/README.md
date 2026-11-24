@@ -14,7 +14,9 @@
   - `p3r-common-data-preprocessed.patch`: public accessor for the preprocessed-commitment targets of
     `CommonDataTargets` (pinning a native batch leaf's verifying key, `docs/zk/aggregation.md`).
   - `p3r-periodic-layout.patch`: declare periodic columns in two `AirLayout`s (upstream bug; batch AIRs with
-    periodic columns panic in `replay_batch_stark_transcript`).
+    periodic columns panic in `replay_batch_stark_transcript`, and `declares_interactions` evaluates AIRs without
+    them). Upstream fix with regression tests prepared, not yet posted (`.plan/drafts/p3r-issue-periodic-columns.md`).
+    Our AIRs no longer substitute zeros for missing periodic values (2026-11-24): a builder without them panics.
   - `p3r-common-data-cache-field.patch`: the two `CommonData` struct literals in P3R gain the new cache field
     (needed by the p3-batch-stark patch below).
 - `p3-batch-stark` (gitignored, built by `scripts/vendor-p3r.sh` from the crates.io 0.9.0-rc.2 source) plus

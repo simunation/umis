@@ -417,12 +417,8 @@ impl<AB: AirBuilder<F = Val>, R: Rule + Clone> Air<AB> for StencilAir<R> {
         let main = builder.main();
         let (cur, next) = (main.current_slice(), main.next_slice());
         let cells = Cells { s, cur, next };
-        let mut per: Vec<AB::Expr> = builder.periodic_values().iter().map(|x| (*x).into()).collect();
-        if per.is_empty() {
-            // Plonky3-recursion's interaction probe (rev 3a69ba6) omits periodic columns; only
-            // the constraint shape matters there.
-            per = vec![AB::Expr::ZERO; s.num_periodic()];
-        }
+        // Every builder declares the periodic columns (the P3R layouts too: vendor/p3r-periodic-layout.patch).
+        let per: Vec<AB::Expr> = builder.periodic_values().iter().map(|x| (*x).into()).collect();
         let public: Vec<AB::Expr> = builder.public_values().iter().map(|x| (*x).into()).collect();
         let mut out: Vec<AB::Expr> = Vec::new();
         let mut ranges: Vec<(AB::Expr, usize)> = Vec::new();

@@ -480,11 +480,8 @@ impl<AB: AirBuilder<F = Val>> Air<AB> for LifeDigestAir {
         let main = builder.main();
         let (cur, next) = (main.current_slice(), main.next_slice());
         let cells = Cells::new(&s, cur, next);
-        let mut per: Vec<AB::Expr> = builder.periodic_values().iter().map(|x| (*x).into()).collect();
-        if per.is_empty() {
-            // See `LifeAir::eval`: Plonky3-recursion's interaction probe omits periodic columns.
-            per = vec![AB::Expr::ZERO; d.num_periodic()];
-        }
+        // Every builder declares the periodic columns (the P3R layouts too: vendor/p3r-periodic-layout.patch).
+        let per: Vec<AB::Expr> = builder.periodic_values().iter().map(|x| (*x).into()).collect();
         let public: Vec<AB::Expr> = builder.public_values().iter().map(|x| (*x).into()).collect();
         let absent = |by: usize, bx: usize| public[ABSENT + DigestShape::port(by, bx)].clone();
 

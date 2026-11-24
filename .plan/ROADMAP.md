@@ -263,7 +263,8 @@ verifier and recurse. Until then aggregation leaves prove on the CPU (16.8–23 
 
 ### B. Hygiene (small, any time)
 
-- **B1** (drafted 2026-11-21: `.plan/drafts/p3r-issue-periodic-columns.md`, not posted) Report the P3R bug upstream: `RecursiveAir::declares_interactions` omits `num_periodic_columns`
+- **B1** (2026-11-24: fix + tests committed in a local P3R clone, push/post pending the owner, see the draft; our
+  zero-fill workarounds removed) (drafted 2026-11-21: `.plan/drafts/p3r-issue-periodic-columns.md`, not posted) Report the P3R bug upstream: `RecursiveAir::declares_interactions` omits `num_periodic_columns`
   (`recursion/src/traits/air.rs:236` at `3a69ba6`); our workaround is in `LifeAir::eval`. Draft the issue text for
   the owner (do not post without asking).
 - ~~**B2**~~ Done 2026-11-21: `stark`, `life-stark-keccak`, `life-stark-junk`, `life-stark-l0` run in

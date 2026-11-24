@@ -263,14 +263,8 @@ impl<AB: AirBuilder<F = Val>> Air<AB> for LifeAir {
         let s = self.shape;
         let main = builder.main();
         let cells = Cells::new(&s, main.current_slice(), main.next_slice());
-        let mut per: Vec<AB::Expr> = builder.periodic_values().iter().map(|x| (*x).into()).collect();
-        if per.is_empty() {
-            // Plonky3-recursion's interaction probe (`RecursiveAir::declares_interactions`,
-            // rev 3a69ba6) builds its symbolic layout without the periodic columns. Only the
-            // constraint shape matters there; every prover and verifier builder supplies all of
-            // them, and zeros in a real check would reject honest proofs, not accept others.
-            per = vec![AB::Expr::ZERO; s.num_periodic()];
-        }
+        // Every builder declares the periodic columns (the P3R layouts too: vendor/p3r-periodic-layout.patch).
+        let per: Vec<AB::Expr> = builder.periodic_values().iter().map(|x| (*x).into()).collect();
         // Generation 0: boolean, and equal to the claimed extended board.
         for i in 0..s.rpr {
             eval_gen0_boolean(builder, &cells, i);
