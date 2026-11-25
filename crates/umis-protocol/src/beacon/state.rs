@@ -150,6 +150,24 @@ pub struct CommitInfo {
     pub last_inputs: BTreeMap<u32, InputRef>,
     pub unresolved: u32,
     pub proof_bmt_root: Option<Hash>,
+    /// Beacon slot of the block that proved it (0: not proven).
+    pub proven_at: u64,
+    /// An aggregator replaced its leaf proofs by an aggregate (genesis `agg_lag`,
+    /// INV-STENCIL-AGG-4); `agg_root` is that proof commitment's root.
+    pub aggregated: bool,
+    pub agg_root: Option<Hash>,
+}
+
+impl CommitInfo {
+    /// Whether an aggregate may still replace this commitment's leaf proofs at beacon slot `e`:
+    /// proven (or settled) `L_agg` slots ago at most, not yet aggregated.
+    pub fn agg_open(&self, p: &umis_core::genesis::ChainParams, e: u64) -> bool {
+        p.agg_lag > 0
+            && !self.aggregated
+            && self.proven_at > 0
+            && matches!(self.status, CommitStatus::Proven | CommitStatus::Settled)
+            && e <= self.proven_at + p.agg_lag
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize)]
@@ -810,6 +828,9 @@ impl BeaconState {
             last_inputs,
             unresolved: 0,
             proof_bmt_root: None,
+            proven_at: 0,
+            aggregated: false,
+            agg_root: None,
         };
         self.commits.get_mut(&z).expect("zone commits").push(info);
         self.apply_decisions(ctx, e, z, &decisions);
@@ -1019,13 +1040,20 @@ impl BeaconState {
         &mut self,
         ctx: &Ctx,
         view: &dyn ChainView,
-        _e: u64,
+        e: u64,
         pce: &ProofCommitEnvelope,
     ) -> VResult<()> {
-        let (idx, root) = self.check_proof_commitment(ctx, view, pce)?;
+        let (idx, root) = self.check_proof_commitment(ctx, view, e, pce)?;
         let c = &mut self.commits.get_mut(&pce.pc.zone).expect("z")[idx];
-        c.status = CommitStatus::Proven;
-        c.proof_bmt_root = Some(root);
+        if c.status == CommitStatus::Optimistic {
+            c.status = CommitStatus::Proven;
+            c.proof_bmt_root = Some(root);
+            c.proven_at = e;
+        } else {
+            // INV-STENCIL-AGG-4: an aggregate replaced the leaf proofs; nothing else changes.
+            c.aggregated = true;
+            c.agg_root = Some(root);
+        }
         Ok(())
     }
 
@@ -1037,6 +1065,7 @@ impl BeaconState {
         &self,
         ctx: &Ctx,
         view: &dyn ChainView,
+        e: u64,
         pce: &ProofCommitEnvelope,
     ) -> VResult<(usize, Hash)> {
         let pc = &pce.pc;
@@ -1044,10 +1073,22 @@ impl BeaconState {
         ensure!(self.can_act_for(z, &pc.signer), "proof commitment signer");
         ensure!(ctx.verify(&pc.signer, &pc.address(), &pce.sig), "proof commitment signature");
         let Some(list) = self.commits.get(&z) else { reject!("unknown zone") };
-        let Some(idx) = list.iter().position(|c| c.e == pc.beacon_slot && c.status == CommitStatus::Optimistic) else {
-            reject!("no optimistic commitment of zone {z} for slot {}", pc.beacon_slot)
+        // An optimistic commitment's proofs, or (INV-STENCIL-AGG-4) an aggregate replacing a
+        // proven commitment's leaf proofs within its window.
+        let Some(idx) = list
+            .iter()
+            .position(|c| c.e == pc.beacon_slot && (c.status == CommitStatus::Optimistic || c.agg_open(&ctx.p, e)))
+        else {
+            reject!("no optimistic or aggregatable commitment of zone {z} for slot {}", pc.beacon_slot)
         };
         let c = &list[idx];
+        if c.status != CommitStatus::Optimistic {
+            let covered: u64 = c.blocks.iter().map(|b| b.input_count as u64).sum();
+            ensure!(c.inputs.len() as u64 == covered, "the commitment's InputRefs are no longer kept");
+            let task = &self.zones[&z].task_id;
+            let proofs: Vec<&[u8]> = pce.proofs.iter().map(Vec::as_slice).collect();
+            ensure!(ctx.backend.is_aggregate(task, &proofs), "an upgrade must be an aggregate");
+        }
         let n = c.to_slot - c.from_slot;
         ensure!(
             pc.leaf_count as u64 == n && pce.leaves.len() as u64 == n && pce.proofs.len() as u64 == n,
@@ -1092,7 +1133,8 @@ impl BeaconState {
                 prev_witness: stateless.then(|| pce.data.witnesses[i].as_slice()),
                 next_witness: stateless.then(|| pce.data.witnesses[i + 1].as_slice()),
                 inputs: Some(&input_maps[i]),
-                input_refs: Some(&c.inputs[b.input_start as usize..(b.input_start + b.input_count) as usize]),
+                // Absent (never panics) if the InputRefs were dropped; the proof then fails.
+                input_refs: c.inputs.get(b.input_start as usize..(b.input_start + b.input_count) as usize),
             }
         };
         let warm: Vec<_> = pce
@@ -1134,6 +1176,12 @@ impl BeaconState {
     /// commitment for it can be checked against this state).
     pub fn awaits_proof(&self, z: ZoneId, e: u64) -> bool {
         self.commits.get(&z).is_some_and(|l| l.iter().any(|c| c.e == e && c.status == CommitStatus::Optimistic))
+    }
+
+    /// Whether zone `z`'s commitment for beacon slot `ce` can take an aggregate at beacon
+    /// slot `e` (INV-STENCIL-AGG-4).
+    pub fn awaits_aggregate(&self, ctx: &Ctx, z: ZoneId, ce: u64, e: u64) -> bool {
+        self.commits.get(&z).is_some_and(|l| l.iter().any(|c| c.e == ce && c.agg_open(&ctx.p, e)))
     }
 
     // ------------------------------------------------------------ faults
@@ -1565,7 +1613,10 @@ impl BeaconState {
         for (z, ce) in cand {
             let c = self.commits.get_mut(&z).expect("z").iter_mut().find(|c| c.e == ce).expect("c");
             c.status = CommitStatus::Settled;
-            c.inputs.clear();
+            // An aggregate still verifies against the InputRefs (dropped when its window ends).
+            if !c.agg_open(&ctx.p, e) {
+                c.inputs.clear();
+            }
         }
     }
 
@@ -1573,10 +1624,17 @@ impl BeaconState {
         // Commitments before a zone's newest settled one are history: keep only
         // recent invalid ones (they still mark referenced blocks as bad).
         for list in self.commits.values_mut() {
+            for c in list.iter_mut() {
+                if c.status == CommitStatus::Settled && !c.inputs.is_empty() && !c.agg_open(&ctx.p, e) {
+                    c.inputs.clear();
+                }
+            }
             if let Some(ls) = list.iter().rposition(|c| c.status == CommitStatus::Settled) {
                 let mut i = 0;
                 list.retain(|c| {
-                    let keep = i >= ls || (c.status == CommitStatus::Invalid && c.included_at + ctx.p.unbonding >= e);
+                    let keep = i >= ls
+                        || c.agg_open(&ctx.p, e)
+                        || (c.status == CommitStatus::Invalid && c.included_at + ctx.p.unbonding >= e);
                     i += 1;
                     keep
                 });

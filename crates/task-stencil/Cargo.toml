@@ -20,6 +20,10 @@ postcard = { version = "1.1", features = ["alloc"] }
 p3-field = "=0.9.0-rc.2"
 p3-batch-stark = "=0.9.0-rc.2"
 
+[features]
+# GPU leaf proving (umis-stencil/cuda).
+cuda = ["umis-stencil/cuda"]
+
 [lints]
 workspace = true
 

@@ -52,14 +52,10 @@ impl Setup {
             return Ok(b.clone());
         }
         let p = &self.ctx.p;
-        let b = Arc::new(StencilBatch::new_multi(
-            self.ctx.rule,
-            p.n(),
-            p.k(),
-            p.rows_per_trace_row as usize,
-            self.batch.preset,
-            m,
-        )?);
+        let mut b =
+            StencilBatch::new_multi(self.ctx.rule, p.n(), p.k(), p.rows_per_trace_row as usize, self.batch.preset, m)?;
+        b.use_gpu_if_available();
+        let b = Arc::new(b);
         self.multi.lock().expect("multi").insert(m, b.clone());
         Ok(b)
     }
@@ -91,7 +87,9 @@ impl StencilStark {
         let p: StencilParams = borsh::from_slice(params).map_err(|e| e.to_string())?;
         Stencil2d::validate_params(&p).map_err(|e| e.to_string())?;
         let ctx = Stencil2d::prepare(&p, seed).map_err(|e| e.to_string())?;
-        let batch = StencilBatch::new(ctx.rule, p.n(), p.k(), p.rows_per_trace_row as usize, self.preset)?;
+        let mut batch = StencilBatch::new(ctx.rule, p.n(), p.k(), p.rows_per_trace_row as usize, self.preset)?;
+        // `cuda` builds with a usable GPU prove there (same proofs; verification stays stock).
+        batch.use_gpu_if_available();
         let params_hash = umis_task::params_hash(crate::TASK_ID, crate::LAYER, params);
         let s = Arc::new(Setup { ctx, params_hash, batch, multi: Mutex::new(HashMap::new()) });
         self.setups.lock().expect("setups").insert(key, s.clone());

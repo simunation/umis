@@ -46,6 +46,8 @@ pub struct Adversary {
     /// Gossip this node's own proof shares with one proof byte flipped (and the leaf's proof
     /// address re-derived, so receivers must verify them: B8 tests).
     pub corrupt_shares: bool,
+    /// As an aggregator, gossip aggregates with one proof byte flipped (INV-STENCIL-AGG-4 tests).
+    pub junk_aggregates: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +68,12 @@ pub struct NodeConfig {
     /// Proving jobs handed to the executor at once; the rest wait in a
     /// queue that runs the most urgent first and drops stale ones.
     pub max_jobs: usize,
+    /// Aggregator role (genesis `agg_lag > 0`, INV-STENCIL-AGG-4): build aggregate proof
+    /// commitments for proven commitments of the zones this node follows.
+    pub aggregator: bool,
+    /// Beacon slots an aggregator waits after a commitment is proven (to batch work; tests
+    /// aggregate after settlement with it).
+    pub agg_min_age: u64,
 }
 
 impl NodeConfig {
@@ -80,6 +88,8 @@ impl NodeConfig {
             zone_keep_slots: 64,
             follow_all: false,
             max_jobs: usize::MAX,
+            aggregator: false,
+            agg_min_age: 0,
         }
     }
 }
@@ -227,6 +237,8 @@ pub struct Stats {
     /// because their block went stale.
     pub proved: u64,
     pub jobs_dropped: u64,
+    /// Aggregate proof commitments this node built (aggregator role).
+    pub aggregates_made: u64,
     /// Shares checked off the event loop (B8), and those that failed.
     pub shares_checked: u64,
     pub shares_bad: u64,
@@ -274,6 +286,11 @@ pub struct Node {
     next_job: u64,
     checks: BTreeMap<u64, PendingCheck>,
     next_check: u64,
+    /// Aggregate proof commitments for proven commitments (INV-STENCIL-AGG-4), checked.
+    agg_pool: BTreeMap<(ZoneId, u64), ProofCommitEnvelope>,
+    /// Aggregator jobs in flight: zone, commit slot, its zone commitment, the job.
+    agg_jobs: BTreeMap<u64, (ZoneId, u64, ZoneCommitEnvelope, umis_proof::ProveJob)>,
+    agg_sent: BTreeSet<(ZoneId, u64)>,
     subscribed: BTreeSet<Topic>,
     peering: (Vec<ZoneId>, Vec<ZoneId>),
     proposed: BTreeSet<u64>,
@@ -322,6 +339,9 @@ impl Node {
             next_job: 0,
             checks: BTreeMap::new(),
             next_check: 0,
+            agg_pool: BTreeMap::new(),
+            agg_jobs: BTreeMap::new(),
+            agg_sent: BTreeSet::new(),
             subscribed: BTreeSet::new(),
             peering: (Vec::new(), Vec::new()),
             proposed: BTreeSet::new(),
@@ -618,6 +638,24 @@ impl Node {
             return Validation::Reject;
         }
         let key = (pc.pc.zone, pc.pc.beacon_slot);
+        // INV-STENCIL-AGG-4: an aggregate for a proven commitment (checked before pooling).
+        let e_next = self.chain.head().slot.map_or(0, |s| s + 1);
+        if self.head_state().awaits_aggregate(&self.ctx, key.0, key.1, e_next) {
+            if self.agg_pool.contains_key(&key) {
+                return Validation::Ignore;
+            }
+            let view = self.chain.view();
+            return match self.head_state().check_proof_commitment(&self.ctx, &view, e_next, &pc) {
+                Ok(_) => {
+                    self.agg_pool.insert(key, pc);
+                    Validation::Accept
+                }
+                Err(e) => {
+                    tracing::debug!(zone = key.0, ce = key.1, "aggregate rejected: {e}");
+                    Validation::Ignore
+                }
+            };
+        }
         if self.pc_trusted.contains(&key) {
             return Validation::Ignore;
         }
@@ -662,8 +700,9 @@ impl Node {
         let (z, ce) = (pc.pc.zone, pc.pc.beacon_slot);
         let head = self.chain.head_state();
         let view = self.chain.view();
+        let e_next = self.chain.head().slot.map_or(0, |s| s + 1);
         if head.awaits_proof(z, ce) {
-            let r = head.check_proof_commitment(&self.ctx, &view, pc);
+            let r = head.check_proof_commitment(&self.ctx, &view, e_next, pc);
             if let Err(e) = &r {
                 tracing::debug!(zone = z, ce, "proof commitment check failed: {e}");
             }
@@ -681,7 +720,7 @@ impl Node {
         if !projected.awaits_proof(z, ce) {
             return None;
         }
-        Some(projected.check_proof_commitment(&self.ctx, &view, pc).is_ok())
+        Some(projected.check_proof_commitment(&self.ctx, &view, e_next, pc).is_ok())
     }
 
     /// Checks the pooled candidates that are checkable now: trusted if they pass, evicted

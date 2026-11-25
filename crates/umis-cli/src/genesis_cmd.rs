@@ -68,6 +68,11 @@ pub struct GenesisArgs {
     /// (Poseidon2 Merkle trees everywhere), or their `-test` variants (insecure, fast).
     #[arg(long, default_value = "koalabear-keccak")]
     pub stark_config: String,
+    /// `L_agg`: beacon slots after a commitment is proven during which aggregators may replace its
+    /// leaf proofs by an aggregate (stencil with `--stark-config koalabear-agg[-test]`; 0: off, the
+    /// committer aggregates inline). Run full nodes with `umis-cli node --aggregator`.
+    #[arg(long, default_value_t = 0)]
+    pub agg_lag: u64,
 }
 
 pub fn now_ms() -> u64 {
@@ -92,6 +97,7 @@ pub fn genesis(a: GenesisArgs) -> anyhow::Result<()> {
     if a.proof_backend == "plonky3" {
         params.proof_lag = 1;
     }
+    params.agg_lag = a.agg_lag;
     let mut g = match a.task.as_str() {
         "water" => {
             anyhow::ensure!(a.slot_ticks.len() == 4, "--slot-ticks needs 4 values");

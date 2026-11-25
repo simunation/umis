@@ -25,6 +25,8 @@ pub struct SimConfig {
     pub n_loc: u32,
     pub slot_ticks: Vec<u64>,
     pub proof_lag: u64,
+    /// Genesis `agg_lag` (separate aggregator role); full nodes are the aggregators.
+    pub agg_lag: u64,
     pub model: NetModel,
     /// Add the test-only `probe` layer coupled to water's top face.
     pub probe_layer: bool,
@@ -46,6 +48,7 @@ impl SimConfig {
             n_loc: 4,
             slot_ticks: vec![4, 8, 4, 16],
             proof_lag: 0,
+            agg_lag: 0,
             model: NetModel::default(),
             probe_layer: false,
             proof_backend: "mock".into(),
@@ -126,6 +129,7 @@ impl Sim {
             o.region = [2, (cfg.slot_ticks.len() as i32 + 1) / 2];
             o.slot_ticks = cfg.slot_ticks.clone();
             o.params.proof_lag = cfg.proof_lag;
+            o.params.agg_lag = cfg.agg_lag;
             task_stencil::devnet::devnet_genesis(o)
         } else if cfg.task == "life" {
             let mut o = task_life2d::devnet::LifeOptions::new(seed, GENESIS_MS, faucet.node_id());
@@ -173,6 +177,7 @@ impl Sim {
                 nc.zone_keep_slots = u64::MAX / 4;
                 nc.faucet = Some(faucet.clone());
             }
+            nc.aggregator = i < cfg.full_nodes && cfg.agg_lag > 0;
             let label = if i < cfg.full_nodes {
                 format!("full{i}")
             } else {

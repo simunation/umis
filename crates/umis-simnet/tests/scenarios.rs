@@ -82,6 +82,15 @@ fn stark_bad_shares() {
     ok("stark-bad-shares", 20);
 }
 
+/// INV-STENCIL-AGG-4: a separate aggregator role (genesis `agg_lag`); junk and replayed
+/// "upgrades" are rejected. Recursive aggregation, so release only.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "release only")]
+fn stencil_agg_deferred() {
+    ok("stencil-agg-deferred", 20);
+    ok("stencil-agg-deferred-junk", 20);
+}
+
 #[test]
 fn life_stark_keccak() {
     ok("life-stark-keccak", 20);

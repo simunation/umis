@@ -10,5 +10,8 @@
 extern crate alloc;
 
 pub mod config;
+/// GPU-ready Merkle MMCS (native only: it parallelises with rayon).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod fast_mmcs;
 pub mod security;
 pub mod toy;

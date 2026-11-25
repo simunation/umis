@@ -210,6 +210,11 @@ pub struct NodeArgs {
     /// the `-test` presets): proofs then carry about 2 bits of security (INV-PARAM-1).
     #[arg(long)]
     pub allow_insecure_proofs: bool,
+    /// Aggregator role (genesis `agg_lag > 0`, INV-STENCIL-AGG-4): aggregate the proven
+    /// commitments of the zones this node follows. A full-node validator (the beacon only takes
+    /// proof commitments from members and full nodes).
+    #[arg(long)]
+    pub aggregator: bool,
 }
 
 pub async fn node(a: NodeArgs) -> anyhow::Result<()> {
@@ -222,7 +227,8 @@ pub async fn node(a: NodeArgs) -> anyhow::Result<()> {
     let key = keys::load_or_create_secret(&a.key)?;
     std::fs::create_dir_all(&a.data_dir)?;
     let bootstrap = resolve_bootstrap(&a.bootstrap, a.bootstrap_http.as_deref()).await?;
-    let cfg = NodeConfig::new(key.clone());
+    let mut cfg = NodeConfig::new(key.clone());
+    cfg.aggregator = a.aggregator;
     let Started { runtime, handle } = start(&g, cfg, Role::Node, a.listen.clone(), bootstrap, &a.data_dir).await?;
     let bound = serve(a.http, status_router(handle.clone())).await?;
     std::fs::write(a.data_dir.join("http.addr"), format!("http://{bound}"))?;

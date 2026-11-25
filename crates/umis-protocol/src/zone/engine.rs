@@ -659,6 +659,7 @@ impl ZoneEngine {
                         prev_state: state.clone(),
                         inputs: inputs.clone(),
                         members: Vec::new(),
+                        aggregate: false,
                     })));
                 } else {
                     let w = umis_proof::Witness {
@@ -945,6 +946,73 @@ impl ZoneEngine {
         };
         let sig = key.sign(&pc.address());
         let data = if ctx.backend.is_async() { self.leaf_data(ctx, chain, zc)? } else { Default::default() };
+        Some(ProofCommitEnvelope { pc, sig, leaves, proofs, data })
+    }
+
+    /// An aggregator's job for a proven commitment `zc` (genesis `agg_lag`, INV-STENCIL-AGG-4):
+    /// one slot job per covered slot, from this node's own states, proved together by
+    /// `ProofBackend::aggregate_batch`. `None` if a state or block is missing.
+    pub fn aggregate_job(
+        &self,
+        ctx: &Ctx,
+        chain: &BeaconChain,
+        zc: &ZoneCommitEnvelope,
+        id: u64,
+    ) -> Option<umis_proof::ProveJob> {
+        let zone = chain.head_state().zones.get(&self.z)?.clone();
+        let inst = ctx.instance(&zone.task_id, &zone.params, &zone.params_hash).ok()?;
+        let mut members = Vec::new();
+        for cb in &zc.blocks {
+            let e = self.entries.get(&cb.signed.hash())?;
+            let b = e.block.as_ref()?;
+            let mut state = (**self.entries.get(&e.parent)?.state.as_ref()?).clone();
+            let inputs = exec::input_map(&b.inputs, &b.attachments);
+            let mut prev = e.prev_root;
+            for sr in &e.slot_roots {
+                let stmt = exec::slot_statement(b.header(), prev, *sr);
+                prev = sr.1;
+                members.push(umis_proof::ProveJob {
+                    id,
+                    block_hash: e.hash,
+                    stmt,
+                    task_id: zone.task_id.clone(),
+                    params: zone.params.clone(),
+                    genesis_seed: ctx.genesis.seed,
+                    prev_state: state.clone(),
+                    inputs: inputs.clone(),
+                    members: Vec::new(),
+                    aggregate: false,
+                });
+                if e.slot_roots.len() > 1 {
+                    state = inst.step(&state, &inputs, sr.0).ok()?;
+                }
+            }
+        }
+        (!members.is_empty()).then(|| umis_proof::ProveJob::aggregate(id, members))
+    }
+
+    /// The proof commitment of an aggregator's finished job: the members' leaves and proofs,
+    /// with the public data the beacon chain verifies them against.
+    pub fn aggregate_commitment(
+        &self,
+        ctx: &Ctx,
+        chain: &BeaconChain,
+        key: &SecretKey,
+        zc: &ZoneCommitEnvelope,
+        members: &[umis_proof::ProveJob],
+        proofs: Vec<Bytes>,
+    ) -> Option<ProofCommitEnvelope> {
+        let leaves: Vec<ProofLeaf> =
+            members.iter().zip(&proofs).map(|(m, p)| umis_proof::proof_leaf(&m.stmt, p)).collect();
+        let pc = ProofCommitment {
+            zone: self.z,
+            beacon_slot: zc.commitment.beacon_slot,
+            leaf_count: leaves.len() as u32,
+            proof_bmt_root: umis_proof::proof_bmt_root(&leaves),
+            signer: key.node_id(),
+        };
+        let sig = key.sign(&pc.address());
+        let data = self.leaf_data(ctx, chain, zc)?;
         Some(ProofCommitEnvelope { pc, sig, leaves, proofs, data })
     }
 

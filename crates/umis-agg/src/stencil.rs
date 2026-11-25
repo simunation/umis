@@ -78,13 +78,23 @@ pub struct StencilAggBackend {
     inner: StencilStark,
     p: AggParams,
     trees: Mutex<HashMap<LeafKey, Arc<Tree>>>,
+    /// Separate aggregator role (genesis `agg_lag > 0`): the zone's provers make plain leaf
+    /// proofs (`prove_batch`), aggregators the aggregate (`aggregate_batch`).
+    deferred: bool,
 }
 
 impl StencilAggBackend {
     /// `inner` proves and checks everything that is not aggregated; `p` are the aggregation
     /// FRI parameters.
     pub fn new(inner: StencilStark, p: AggParams) -> Self {
-        Self { inner, p, trees: Mutex::new(HashMap::new()) }
+        Self { inner, p, trees: Mutex::new(HashMap::new()), deferred: false }
+    }
+
+    /// With a separate aggregator role (genesis `agg_lag > 0`, INV-STENCIL-AGG-4): members
+    /// prove plain (multi-slot) leaves; only [`ProofBackend::aggregate_batch`] aggregates.
+    pub fn deferred(mut self) -> Self {
+        self.deferred = true;
+        self
     }
 
     /// From a genesis `stark_config_id`: `koalabear-agg` (P100 leaves, J101 aggregates) and
@@ -172,6 +182,26 @@ impl ProofBackend for StencilAggBackend {
     }
 
     fn prove_batch(
+        &self,
+        items: &[(&TransitionStatement, Witness<'_>)],
+        key: &SecretKey,
+    ) -> Result<Vec<Vec<u8>>, ProofError> {
+        if self.deferred {
+            return self.inner.prove_batch(items, key);
+        }
+        self.aggregate_batch(items, key)
+    }
+
+    fn is_aggregate(&self, task_id: &str, proofs: &[&[u8]]) -> bool {
+        // Every proof is a part of an aggregate group (heads and references), at least one head.
+        let tag = |p: &[u8]| p.first().copied();
+        let (head, r#ref) = (task_life2d::air::ProofTag::AggHead as u8, task_life2d::air::ProofTag::AggRef as u8);
+        task_id == TASK_ID
+            && proofs.iter().any(|p| tag(p) == Some(head))
+            && proofs.iter().all(|p| matches!(tag(p), Some(t) if t == head || t == r#ref))
+    }
+
+    fn aggregate_batch(
         &self,
         items: &[(&TransitionStatement, Witness<'_>)],
         key: &SecretKey,

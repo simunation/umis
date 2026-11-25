@@ -34,7 +34,9 @@ patches), S4 generic stencil aggregation (`koalabear-agg`), multi-slot leaves (2
 2. ~~Plonky3 degree-inference cache~~ done 2026-11-23 (LBM verify 156 → 82 ms, 8-slot prove 134 → 60 ms/slot).
 3. ~~Aggregation over multi-slot leaves~~ measured 2026-11-24: no gain (layer 1 ∝ opened width), m = 8 too big.
 4. ~~Small zones~~ answered 2026-11-24: the shortest instance sets the batch figure, so `MIN_HEIGHT = 64` stays at
-   P100. Open: multi-height model for recursive proofs (B9). Then the GPU batch leaf.
+   P100. ~~B9~~ fixed 2026-11-25 (recursion tables padded to 32 rows).
+5. GPU batch leaf (N4): started 2026-11-25 (GPU Merkle trees, wide-row leaf hash; opt-in, PCIe-bound so far).
+6. ~~Separate aggregator role~~ done 2026-11-25 (genesis `agg_lag`, INV-STENCIL-AGG-4).
 
 **Plan (in order):**
 1. ~~**S1 stencil AIR framework**~~ **done 2026-11-22** (`crates/umis-stencil`, spec `docs/zk/stencil-spec.md`):

@@ -479,3 +479,74 @@ extern "C" __global__ void p2_grind(const uint32_t* base, uint32_t widx, const u
     p2_permute(s, src);
     if ((mred(s[7]) & mask) == 0) atomicMin(found, w);
 }
+
+// Poseidon2 Merkle trees (`umis_stark::fast_mmcs`, the stock KoalaBear `ValMmcs`).
+//
+// `PaddingFreeSponge<Perm, 16, 8, 8>` over each row of a row-major matrix (Montgomery form):
+// the state starts at zero; each chunk of up to 8 values overwrites the rate's first slots,
+// then the state is permuted; the digest is the first 8 words. An empty row is the zero digest.
+extern "C" __global__ void p2_hash_rows(const uint32_t* m, uint64_t width, uint32_t rows, const uint32_t* rc,
+                                        uint32_t* out) {
+    uint32_t r = blockIdx.x * blockDim.x + threadIdx.x;
+    if (r >= rows) return;
+    uint32_t s[16];
+#pragma unroll
+    for (int i = 0; i < 16; i++) s[i] = 0;
+    const uint32_t* row = m + (uint64_t)r * width;
+    for (uint64_t i = 0; i < width; i += 8) {
+        uint64_t n = width - i < 8 ? width - i : 8;
+        for (uint64_t k = 0; k < n; k++) s[k] = row[i + k];
+        p2_permute(s, rc);
+    }
+#pragma unroll
+    for (int i = 0; i < 8; i++) out[8 * (uint64_t)r + i] = s[i];
+}
+
+// Places a `rows × src_w` matrix at columns [off, off + src_w) of a `rows × dst_w` one.
+extern "C" __global__ void concat_cols(const uint32_t* src, uint32_t src_w, uint32_t rows, uint32_t* dst,
+                                       uint32_t dst_w, uint32_t off) {
+    uint64_t t = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    uint64_t n = (uint64_t)rows * src_w;
+    for (; t < n; t += (uint64_t)gridDim.x * blockDim.x) {
+        uint64_t r = t / src_w, c = t % src_w;
+        dst[r * dst_w + off + c] = src[t];
+    }
+}
+
+// The first level of `WideRowHash` (rows longer than `chunk`): the sponge digest of chunk c of
+// row r (values [c·chunk, min((c+1)·chunk, width))) goes to out[(r·nchunks + c)·8 ..].
+extern "C" __global__ void p2_hash_chunks(const uint32_t* m, uint64_t width, uint32_t rows, uint32_t chunk,
+                                          uint32_t nchunks, const uint32_t* rc, uint32_t* out) {
+    uint64_t t = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= (uint64_t)rows * nchunks) return;
+    uint64_t r = t / nchunks, c = t % nchunks;
+    uint64_t lo = c * chunk, hi = lo + chunk < width ? lo + chunk : width;
+    const uint32_t* row = m + r * width;
+    uint32_t s[16];
+#pragma unroll
+    for (int i = 0; i < 16; i++) s[i] = 0;
+    for (uint64_t i = lo; i < hi; i += 8) {
+        uint64_t n = hi - i < 8 ? hi - i : 8;
+        for (uint64_t k = 0; k < n; k++) s[k] = row[i + k];
+        p2_permute(s, rc);
+    }
+#pragma unroll
+    for (int i = 0; i < 8; i++) out[8 * t + i] = s[i];
+}
+
+// `TruncatedPermutation<Perm, 2, 8, 16>`: out[i] = perm(a_i || b_i)[0..8], with a_i at
+// a + i·sa and b_i at b + i·sb (word strides).
+extern "C" __global__ void p2_compress(const uint32_t* a, uint32_t sa, const uint32_t* b, uint32_t sb,
+                                       const uint32_t* rc, uint32_t* out, uint32_t n) {
+    uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= n) return;
+    uint32_t s[16];
+#pragma unroll
+    for (int i = 0; i < 8; i++) {
+        s[i] = a[(uint64_t)t * sa + i];
+        s[8 + i] = b[(uint64_t)t * sb + i];
+    }
+    p2_permute(s, rc);
+#pragma unroll
+    for (int i = 0; i < 8; i++) out[8 * (uint64_t)t + i] = s[i];
+}

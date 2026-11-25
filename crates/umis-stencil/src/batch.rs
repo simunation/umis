@@ -529,6 +529,90 @@ pub struct StencilBatch<R> {
     airs: Vec<BatchAir<R>>,
     degrees: Vec<usize>,
     prover_data: ProverData<koala_bear::Config>,
+    /// Proves instead of the stock configuration when set (the GPU, [`FastProver`]).
+    fast: Option<Box<dyn LeafProver<R>>>,
+}
+
+/// Proves a batch leaf under another configuration whose proofs are byte-identical to the
+/// stock one's (same hash, compression, challenger; another DFT or tree builder).
+pub trait LeafProver<R>: Send + Sync {
+    fn prove(
+        &self,
+        airs: &[BatchAir<R>],
+        traces: &[RowMajorMatrix<Val>],
+        publics: Vec<Vec<Val>>,
+    ) -> Result<BatchProof<koala_bear::Config>, String>;
+}
+
+/// [`LeafProver`] over `koala_bear::config_with(preset, dft, FastMmcs(backend))`.
+pub struct FastProver<D: p3_dft::TwoAdicSubgroupDft<Val> + Send + Sync, B: umis_stark::fast_mmcs::TreeBackend> {
+    config: Fast<D, B>,
+    prover_data: ProverData<Fast<D, B>>,
+}
+
+type Fast<D, B> = koala_bear::ConfigWith<D, umis_stark::fast_mmcs::FastMmcs<B>>;
+
+impl<D, B> FastProver<D, B>
+where
+    D: p3_dft::TwoAdicSubgroupDft<Val> + Send + Sync,
+    B: umis_stark::fast_mmcs::TreeBackend,
+{
+    /// The setup of `batch`'s AIRs under the fast configuration (its preprocessed commitments
+    /// equal the stock ones).
+    pub fn new<R: Rule + Clone>(batch: &StencilBatch<R>, dft: D, backend: B) -> Result<Self, String> {
+        let config = koala_bear::config_with(batch.preset, dft, umis_stark::fast_mmcs::FastMmcs::new(backend));
+        let prover_data = ProverData::from_airs_and_degrees_with_lookup_budgets(
+            &config,
+            &batch.airs,
+            &batch.degrees,
+            &vec![lookup_budget(batch.preset); batch.airs.len()],
+            batch.preset.log_blowup(),
+        )
+        .map_err(|e| format!("fast setup: {e:?}"))?;
+        Ok(Self { config, prover_data })
+    }
+}
+
+/// The GPU prover of `batch` when a device is usable (`cuda` builds): Merkle trees on the GPU
+/// (`umis-gpu`), everything else on the CPU. The LDEs stay on the CPU: the leaf's short traces
+/// (64 rows) transform faster there (`commit_bench`, 2026-11-25); `UMIS_GPU_LDE=1` moves them.
+#[cfg(feature = "cuda")]
+pub fn gpu_prover<R: Rule + Clone>(batch: &StencilBatch<R>) -> Option<Box<dyn LeafProver<R>>> {
+    if !umis_gpu::gpu_available() {
+        return None;
+    }
+    let tree = umis_gpu::merkle::GpuTree::default();
+    let p: Result<Box<dyn LeafProver<R>>, String> = if std::env::var("UMIS_GPU_LDE").as_deref() == Ok("1") {
+        FastProver::new(batch, umis_gpu::GpuDft::default(), tree).map(|p| Box::new(p) as _)
+    } else {
+        FastProver::new(batch, koala_bear::Dft::default(), tree).map(|p| Box::new(p) as _)
+    };
+    p.map_err(|e| eprintln!("umis-stencil: no GPU leaf prover ({e})")).ok()
+}
+
+impl<R, D, B> LeafProver<R> for FastProver<D, B>
+where
+    R: Rule + Clone,
+    D: p3_dft::TwoAdicSubgroupDft<Val> + Send + Sync,
+    B: umis_stark::fast_mmcs::TreeBackend,
+{
+    fn prove(
+        &self,
+        airs: &[BatchAir<R>],
+        traces: &[RowMajorMatrix<Val>],
+        publics: Vec<Vec<Val>>,
+    ) -> Result<BatchProof<koala_bear::Config>, String> {
+        let instances: Vec<StarkInstance<'_, Fast<D, B>, BatchAir<R>>> = airs
+            .iter()
+            .zip(traces)
+            .zip(publics)
+            .map(|((air, trace), public_values)| StarkInstance { air, trace, public_values })
+            .collect();
+        let proof = prove_batch(&self.config, &instances, &self.prover_data).map_err(|e| format!("{e:?}"))?;
+        // The same wire format: the types differ only in the DFT and MMCS they were made with.
+        let bytes = postcard::to_allocvec(&proof).map_err(|e| e.to_string())?;
+        postcard::from_bytes(&bytes).map_err(|e| e.to_string())
+    }
 }
 
 impl<R: Rule + Clone> StencilBatch<R> {
@@ -567,7 +651,31 @@ impl<R: Rule + Clone> StencilBatch<R> {
             preset.log_blowup(),
         )
         .map_err(|e| format!("setup: {e:?}"))?;
-        Ok(Self { rule, shape, preset, slots, config, airs, degrees, prover_data })
+        Ok(Self { rule, shape, preset, slots, config, airs, degrees, prover_data, fast: None })
+    }
+
+    /// Proves with `prover` from now on (verification keeps the stock configuration).
+    pub fn set_prover(&mut self, prover: Box<dyn LeafProver<R>>) {
+        self.fast = Some(prover);
+    }
+
+    /// Proves on the GPU from now on if this is a `cuda` build with a usable device and
+    /// `UMIS_GPU_LEAF=1` ([`gpu_prover`]; opt-in until it beats the CPU, see
+    /// `docs/zk/stencil-spec.md` §GPU); returns whether it does.
+    pub fn use_gpu_if_available(&mut self) -> bool {
+        #[cfg(feature = "cuda")]
+        if std::env::var("UMIS_GPU_LEAF").as_deref() == Ok("1")
+            && let Some(p) = gpu_prover(self)
+        {
+            self.set_prover(p);
+            return true;
+        }
+        false
+    }
+
+    /// Whether a [`LeafProver`] is set.
+    pub fn has_fast_prover(&self) -> bool {
+        self.fast.is_some()
     }
 
     /// The AIRs of the leaf (a cells AIR per slot, the hash table, and the range table if the
@@ -793,6 +901,9 @@ impl<R: Rule + Clone> StencilBatch<R> {
             return Err("one trace per AIR".into());
         }
         let publics = self.publics(public);
+        if let Some(fast) = &self.fast {
+            return fast.prove(&self.airs, traces, publics);
+        }
         let instances: Vec<StarkInstance<'_, koala_bear::Config, BatchAir<R>>> = self
             .airs
             .iter()

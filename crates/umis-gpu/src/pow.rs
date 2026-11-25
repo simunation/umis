@@ -12,7 +12,7 @@ use p3_koala_bear::{
 };
 
 /// The permutation's constants as `p2_permute` (resident.cu) reads them.
-fn constants() -> Vec<u32> {
+pub(crate) fn constants() -> Vec<u32> {
     let mut v = Vec::with_capacity(164);
     v.extend(KOALABEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL.iter().flatten().map(|&x| raw(x)));
     v.extend(KOALABEAR_POSEIDON2_RC_16_INTERNAL.iter().map(|&x| raw(x)));

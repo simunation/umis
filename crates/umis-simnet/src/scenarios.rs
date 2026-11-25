@@ -6,6 +6,7 @@ use crate::oracle::{self, Report};
 use crate::probe;
 use crate::{Sim, SimConfig};
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use umis_core::records::ProposeZone;
 use umis_core::{Hash, NodeId, SegRecord, ShortStr};
 use umis_protocol::beacon::{CommitStatus, ProposalStatus};
@@ -50,6 +51,8 @@ pub enum Scenario {
     StencilAgg,
     StencilAggLbm,
     StencilAggJunk,
+    StencilAggDeferred,
+    StencilAggDeferredJunk,
     StencilGs,
     StencilGsStark,
 }
@@ -72,7 +75,7 @@ pub const LIFE: [&str; 13] = [
 ];
 
 /// The generic local-rule scenarios (`task-stencil`).
-pub const STENCIL: [&str; 11] = [
+pub const STENCIL: [&str; 13] = [
     "stencil-life",
     "stencil-heat",
     "stencil-lbm",
@@ -82,6 +85,8 @@ pub const STENCIL: [&str; 11] = [
     "stencil-agg",
     "stencil-agg-lbm",
     "stencil-agg-junk",
+    "stencil-agg-deferred",
+    "stencil-agg-deferred-junk",
     "stencil-gs",
     "stencil-gs-stark",
 ];
@@ -143,6 +148,8 @@ impl std::str::FromStr for Scenario {
             "stencil-agg" => Scenario::StencilAgg,
             "stencil-agg-lbm" => Scenario::StencilAggLbm,
             "stencil-agg-junk" => Scenario::StencilAggJunk,
+            "stencil-agg-deferred" => Scenario::StencilAggDeferred,
+            "stencil-agg-deferred-junk" => Scenario::StencilAggDeferredJunk,
             "stencil-gs" => Scenario::StencilGs,
             "stencil-gs-stark" => Scenario::StencilGsStark,
             _ => return Err(format!("unknown scenario {s}")),
@@ -233,6 +240,14 @@ pub fn run(s: Scenario, seed: u64, slots: u64) -> Outcome {
             cfg.stark_config = Some("koalabear-agg-test".into());
             aggregated(stencil_checked(stark(cfg, slots.clamp(20, 40))))
         }
+        // A separate aggregator role (genesis `agg_lag`, INV-STENCIL-AGG-4): members prove
+        // plain leaves, full nodes aggregate proven commitments afterwards.
+        Scenario::StencilAggDeferred | Scenario::StencilAggDeferredJunk => {
+            let mut cfg = SimConfig::stencil(seed, "heat");
+            cfg.stark_config = Some("koalabear-agg-test".into());
+            cfg.agg_lag = 8;
+            agg_deferred(cfg, slots.clamp(20, 40), s == Scenario::StencilAggDeferredJunk)
+        }
         Scenario::StencilAggJunk => {
             let mut cfg = SimConfig::stencil(seed, "lbm");
             cfg.stark_config = Some("koalabear-agg-test".into());
@@ -287,6 +302,69 @@ fn carries(mut o: Outcome, tag: u8, what: &str) -> Outcome {
         o.report.violations.push(format!("no proof commitment carries {what}"));
     }
     o
+}
+
+/// INV-STENCIL-AGG-4: commitments are proven by plain leaves first (no member aggregates), then
+/// aggregates replace them on chain: every aggregate's commitment already had plain leaf
+/// proofs, no rollback, the aggregators made aggregates. With `junk`, aggregator 0 gossips
+/// aggregates with a flipped byte: none of them reaches the chain, the honest aggregator's do.
+fn agg_deferred(cfg: SimConfig, slots: u64, junk: bool) -> Outcome {
+    let mut cfg = cfg;
+    cfg.proof_backend = task_water3d::air::BACKEND_ID.into();
+    cfg.proof_lag = 1;
+    cfg.members_per_zone = 4;
+    let mut sim = Sim::new(cfg);
+    sim.net.prove_delay_ms = 300;
+    if junk {
+        sim.net.nodes[0].node.cfg.adversary.junk_aggregates = true;
+        sim.honest[0] = false;
+    } else {
+        // Aggregate after settlement (D = 2 slots), inside the 8-slot window: the beacon must
+        // have kept the commitments' InputRefs.
+        for n in sim.net.nodes.iter_mut() {
+            n.node.cfg.agg_min_age = 4;
+        }
+    }
+    sim.run_to_slot(slots);
+    let mut report = oracle::check(&sim, 4, slots.saturating_sub(2), 4);
+    let a = sim.node(sim.archive);
+    let head = a.chain.head_state().clone();
+    if !head.rollback_log.is_empty() {
+        report.violations.push(format!("{} rollbacks with deferred aggregation", head.rollback_log.len()));
+    }
+    let agg = task_life2d::air::ProofTag::AggHead as u8;
+    let (mut plain, mut aggs, mut early) = (BTreeSet::new(), 0, 0);
+    for b in a.chain.canonical().filter_map(|e| e.block.as_ref()) {
+        for pce in &b.body.proof_commitments {
+            let key = (pce.pc.zone, pce.pc.beacon_slot);
+            if pce.proofs.iter().any(|p| p.first() == Some(&agg)) {
+                aggs += 1;
+                if !plain.contains(&key) {
+                    early += 1;
+                }
+                if junk && pce.pc.signer == sim.net.nodes[0].node.me {
+                    report.violations.push(format!("a junk aggregate reached the chain for {key:?}"));
+                }
+            } else if !plain.insert(key) {
+                report.violations.push(format!("plain leaf proofs accepted twice for {key:?}"));
+            }
+        }
+    }
+    if aggs == 0 {
+        report.violations.push("no aggregate reached the chain".into());
+    }
+    if early > 0 {
+        report.violations.push(format!("{early} aggregates without earlier plain leaf proofs (members aggregated)"));
+    }
+    if std::env::var("UMIS_AGG_STATS").is_ok() {
+        eprintln!("commitments with plain proofs {}, aggregates on chain {aggs}", plain.len());
+    }
+    let made: u64 = sim.net.nodes.iter().map(|n| n.node.stats.aggregates_made).sum();
+    if made == 0 {
+        report.violations.push("no aggregator made an aggregate".into());
+    }
+    let _ = stencil_checked;
+    finish(sim, report)
 }
 
 /// Every stencil zone's committed state decodes and has advanced at least 5 generations (the

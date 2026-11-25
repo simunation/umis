@@ -374,3 +374,64 @@ fn side_limbs_are_bound_to_the_cells() {
     assert_eq!(claim[24..], faces_digest(&b.shape, &lie)[..]);
     assert!(!accepted(&b, forged, &claim));
 }
+
+/// Step 1 (GPU leaf) groundwork: a leaf proved through `FastProver` (the configurable DFT and
+/// Merkle-tree backend, here the CPU reference tree) verifies with the stock verifier (stock
+/// preprocessed commitments), a wrong statement does not, and its main-trace commitment equals
+/// the stock prover's. Whole proofs are not compared: the stock prover is itself not
+/// deterministic past the commitments (its proof-of-work search is parallel, and the lookup
+/// challenges follow from the witness). Heat (single range table) and LBM (pair table), one
+/// and several slots. The GPU backend (`umis-gpu`) must pass the same check.
+#[test]
+fn fast_prover_proofs_verify_with_the_stock_verifier() {
+    use crate::batch::FastProver;
+    use umis_stark::fast_mmcs::CpuTree;
+    let mut rng = ChaCha8Rng::seed_from_u64(41);
+    let lbm = crate::lbm::Lbm::default();
+    fn check<R: Rule + Clone>(b: &mut StencilBatch<R>, t: Vec<RowMajorMatrix<Val>>, public: Vec<Val>, what: &str) {
+        let stock = b.prove(&t, &public).unwrap();
+        let fast = FastProver::new(b, umis_stark::config::koala_bear::Dft::default(), CpuTree::new(0)).unwrap();
+        b.set_prover(Box::new(fast));
+        assert!(b.has_fast_prover());
+        let p = b.prove(&t, &public).unwrap();
+        assert_eq!(p.commitments.main, stock.commitments.main, "{what}: main commitment");
+        b.verify(&p, &public).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let mut wrong = public.clone();
+        wrong[1] += Val::ONE;
+        assert!(b.verify(&p, &wrong).is_err(), "{what}: wrong statement");
+    }
+    for m in [1, 2] {
+        let mut b = StencilBatch::new_multi(heat(), 8, 1, 2, FriPreset::P100, m).unwrap();
+        let exts: Vec<Grid> = (0..m).map(|_| random(&mut rng, b.shape.we, 1 << 16)).collect();
+        let (t, public, _) = b.generate_multi(&exts);
+        check(&mut b, t, public, &format!("heat m = {m}"));
+    }
+    let mut b = StencilBatch::new(lbm, 8, 1, 2, FriPreset::Test).unwrap();
+    let rest = Grid::filled(b.shape.we, b.shape.we, &lbm.boundary());
+    let (t, public, _) = b.generate(&rest);
+    check(&mut b, t, public, "lbm");
+}
+
+/// Step 1 on the device: the GPU leaf prover (GPU LDE and Merkle trees) gives proofs the stock
+/// verifier accepts, with the stock main commitment; LBM 32², 8 slots. Skipped without a GPU.
+#[cfg(feature = "cuda")]
+#[test]
+fn gpu_leaf_proofs_verify_with_the_stock_verifier() {
+    if !umis_gpu::gpu_available() {
+        eprintln!("no GPU: skipped");
+        return;
+    }
+    let lbm = crate::lbm::Lbm::default();
+    let mut b = StencilBatch::new_multi(lbm, 32, 1, 2, FriPreset::P100, 8).unwrap();
+    let rest = Grid::filled(b.shape.we, b.shape.we, &lbm.boundary());
+    let (t, public, _) = b.generate_multi(&vec![rest; 8]);
+    let stock = b.prove(&t, &public).unwrap();
+    let gpu = crate::batch::gpu_prover(&b).expect("a GPU prover");
+    b.set_prover(gpu);
+    let p = b.prove(&t, &public).unwrap();
+    assert_eq!(p.commitments.main, stock.commitments.main);
+    b.verify(&p, &public).unwrap();
+    let mut wrong = public.clone();
+    wrong[5] += Val::ONE;
+    assert!(b.verify(&p, &wrong).is_err());
+}

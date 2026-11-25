@@ -53,7 +53,7 @@ pub fn backend_for(g: &Genesis) -> Result<Arc<dyn ProofBackend>, String> {
                 .with(task_water3d::TASK_ID, Arc::new(water))
                 .with(task_life2d::TASK_ID, life);
             #[cfg(not(target_arch = "wasm32"))]
-            let multi = multi.with(task_stencil::TASK_ID, stencil_backend(id)?);
+            let multi = multi.with(task_stencil::TASK_ID, stencil_backend(id, g.params.agg_lag > 0)?);
             Ok(Arc::new(multi))
         }
         other => Err(format!("unknown proof backend {other}")),
@@ -67,10 +67,12 @@ fn life_agg(id: &str) -> Result<Arc<dyn ProofBackend>, String> {
 
 /// The stencil backend: aggregating for `koalabear-agg*`, plain batch leaves otherwise.
 #[cfg(not(target_arch = "wasm32"))]
-fn stencil_backend(id: Option<&str>) -> Result<Arc<dyn ProofBackend>, String> {
+fn stencil_backend(id: Option<&str>, deferred: bool) -> Result<Arc<dyn ProofBackend>, String> {
     Ok(match id {
         Some(agg) if agg.starts_with("koalabear-agg") => {
-            Arc::new(umis_agg::stencil::StencilAggBackend::from_config_id(agg)?)
+            let b = umis_agg::stencil::StencilAggBackend::from_config_id(agg)?;
+            // A separate aggregator role (genesis `agg_lag`): members prove plain leaves.
+            Arc::new(if deferred { b.deferred() } else { b })
         }
         _ => Arc::new(task_stencil::air::StencilStark::from_config_id(id)),
     })
