@@ -11,7 +11,7 @@
 //! 2. **VK pin** (INV-AGG-NB-1): the leaf's preprocessed commitment (`CommonData`) targets are
 //!    constrained to the owner's constants, so a leaf for another relation cannot be verified.
 //! 3. **Statement** (INV-AGG-NB-2): exactly the leaf's AIR public values (for a stencil leaf
-//!    `[d_prev, d_halo, d_next]`, 24 elements) are exported as the recursive proof's statement.
+//!    `[d_prev, d_halo, d_next, d_faces]`, 32 elements) are exported as the recursive proof's statement.
 //!    Every other circuit input (leaf commitments, openings, Merkle paths) is a witness: the
 //!    circuit prover's verifier (`CircuitVerifier::verify(proof, statement)`) sees only the
 //!    statement table, so the low-level allocator's `public_input()` targets are not exported.

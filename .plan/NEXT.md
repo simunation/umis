@@ -22,27 +22,36 @@ Read `.plan/HANDOFF.md` first (how to build, test, machine quirks, conventions).
 
 ## Order
 
-1. **S6b: bind the output payloads in-circuit (`d_faces`)** so `outputs_root` is checked statelessly too. About
-   1.5 sessions.
-   - A 4th sponge over the next board's border strips (the payload `cur` regions, canonical port order) in both
-     AIRs (`air.rs` `REGIONS`, `batch.rs` hash spans; the uni AIR too or drop it for batch only).
-   - The payload's `prev` strips are the previous leaf's `d_faces`: add `faces_root` to the summary.
-   - Verifier: recompute the digest of each payload's `cur` strips natively and compare with `d_faces`, then
-     `keccak(payloads)` → `outputs_root`. Statement grows to 32 elements: update `stencil_chain`, the agg trees.
-   - Tests: a payload that differs from the proven board, mutation-checked.
+1. ~~**S6b `d_faces`**~~ **done 2026-11-24** (INV-STENCIL-ROOT-3, BATCH-5, TASK-5): a 4th sponge over the next
+   board's border in the batch leaf only (cap rows resend the `d_next` limbs, other rows send new side limbs; the
+   uni AIR is test-only and keeps 3 digests). Summary v3 adds both boards' border digests; witnesses carry both
+   borders; the verifier rebuilds the payloads and checks `outputs_root`. LBM 32²: +36 columns, proof +1 %,
+   prove/verify within noise (A/B back to back).
 2. ~~Plonky3 degree-inference cache~~ **done 2026-11-23** (owner OK): `vendor/p3-batch-stark-degree-cache.patch`,
    LBM 32² 8-slot prove 134 → 60 ms per slot, verify 156 → 82 ms.
-3. **Aggregation over multi-slot leaves:** one layer-1 per commitment instead of per slot (`NativeLayer1` already
-   works on any relation; the owner tree is per (relation, m)). LBM layer 1 costs 5.3 s per slot today (60 queries
-   × 5.5k opened columns hashed in-circuit), so measure: a multi leaf's layer 1 grows with the opened width.
-   Cheaper layer 1 for wide leaves: higher leaf blowup (fewer queries) under its own leaf config
-   (`NativeLayer1` with separate in/out params).
-4. **Small zones:** the cells trace is padded to `MIN_HEIGHT = 64` (LBM 32² uses 17 rows). The batch leaf's security
-   is set by its tallest instance (the 2^16–2^17 range table), so a lower minimum for batch cells AIRs may be
-   sound; check with p3-security how mixed heights enter before changing it.
-5. **GPU batch leaf:** not before 2 (the CPU-only symbolic step would dominate). `umis-gpu` is single-table.
-6. **Hygiene:** B1 (P3R upstream issue draft `.plan/drafts/p3r-issue-periodic-columns.md`: now two fixes, ask
-   before posting); B8.
+3. ~~**Aggregation over multi-slot leaves**~~ **measured 2026-11-24, not built:** one layer 1 over an m-slot LBM
+   leaf costs 4.9–5.0 s per slot (m = 2, 4) against 4.3 s + ~1 s of 2-to-1 per slot today, and m = 8 exceeds the
+   2^24 FFT domain (`docs/zk/aggregation.md`). Layer 1 is in-circuit hashing of the opened columns, ∝ queries ×
+   cells width. Real levers, if needed: a narrower cells AIR for LBM (fewer helper columns per cell), or fewer
+   queries in Johnson at higher blowup (~10 % net, measured estimate).
+4. ~~**Small zones**~~ **answered 2026-11-24: no.** The batch figure is set by the **shortest** instance
+   (`ρ⁺ = (k + 2)/n` in the unique-decoding term), not the range table: cells at 2^6 give 101.6 bits, 2^5 would give
+   100.5 (`the_shortest_instance_sets_the_batch_figure`). `security_shapes` now reports the worse height (it
+   modelled the tallest only and overstated leaves by ~1.2 bits; they still cleared 101). Smaller padding needs
+   more queries, a pure trade-off.
+   - ~~**B9**~~ **fixed 2026-11-25:** recursive proofs had a 1-row table (by the per-instance unique-decoding
+     term ~48 bits at J101). Every P3R table is now padded to `MIN_TABLE_HEIGHT = 32` rows
+     (`TablePacking::with_min_trace_height`), and `recursive_shapes` reports the worse of the tallest and shortest
+     table: layer 1 and 2-to-1 clear 101 (`stencil_leaves_and_their_recursion_clear_101_bits_at_j101`,
+     mutation-checked with the padding removed: 0 bits).
+5. **GPU batch leaf** (the next real project, 2+ sessions). Profile 2026-11-24, LBM 32², 8 slots, P100, warm: prove
+   515 ms = cells quotients ~130–140 ms (parallel over AIRs) + FRI ~30 ms + ~340 ms trace commit (LDE and Merkle
+   hashing of 5548-wide rows); verify 622 ms is almost all FRI/Merkle (constraints ~5 ms), so the GPU helps only
+   the prover. Cheapest first step: `GpuDft` (umis-gpu, drop-in `TwoAdicSubgroupDft`) in a batch leaf config,
+   measured; then GPU Merkle hashing of the wide trace; the quotient needs the JIT path (`umis-gpu/src/jit.rs`) made
+   multi-table with LogUp. The 3090 Ti was busy with another project's job on 2026-11-24; the A6000 was free.
+6. **Hygiene:** ~~B1~~ (owner 2026-11-24: not reported upstream; the local patch stays); ~~B8~~ done 2026-11-25 (share checks off the event loop, deterministic in SimNet via a fixed
+   delay; `docs/ARCHITECTURE.md`); B9 (above).
 
 ## Commands (copy-paste)
 

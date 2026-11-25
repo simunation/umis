@@ -25,6 +25,7 @@ pub enum Scenario {
     ZoneLayers,
     ZoneSparse,
     Stark,
+    StarkBadShares,
     LifeBasic,
     LifeMixed,
     LifeCreate,
@@ -85,7 +86,7 @@ pub const STENCIL: [&str; 11] = [
     "stencil-gs-stark",
 ];
 
-pub const ALL: [&str; 13] = [
+pub const ALL: [&str; 14] = [
     "basic",
     "churn",
     "partition",
@@ -97,6 +98,7 @@ pub const ALL: [&str; 13] = [
     "zone-layers",
     "zone-sparse",
     "stark",
+    "stark-bad-shares",
     "junk-proofs",
     "junk-proofs-l0",
 ];
@@ -116,6 +118,7 @@ impl std::str::FromStr for Scenario {
             "zone-layers" => Scenario::ZoneLayers,
             "zone-sparse" => Scenario::ZoneSparse,
             "stark" => Scenario::Stark,
+            "stark-bad-shares" => Scenario::StarkBadShares,
             "life" => Scenario::LifeBasic,
             "life-mixed" => Scenario::LifeMixed,
             "life-create" => Scenario::LifeCreate,
@@ -167,6 +170,7 @@ pub fn run(s: Scenario, seed: u64, slots: u64) -> Outcome {
         Scenario::ZoneLayers => zone_layers(cfg, slots.max(50)),
         Scenario::ZoneSparse => zone_sparse(cfg, slots.max(50)),
         Scenario::Stark => stark(cfg, slots.clamp(20, 40)),
+        Scenario::StarkBadShares => stark_bad_shares(cfg, slots.clamp(20, 40)),
         Scenario::LifeBasic => life_checked(basic(SimConfig::life(seed), slots), true),
         Scenario::LifeMixed => {
             let cfg = SimConfig { slot_ticks: vec![4, 8, 4, 16], ..SimConfig::life(seed) };
@@ -853,6 +857,65 @@ pub fn zone_sparse(mut cfg: SimConfig, slots: u64) -> Outcome {
 /// Real Plonky3 proofs (test FRI preset; water3d or life2d AIR by zone task) with proof lag L = 1: helpers prove
 /// off the event loop, proof commitments follow their zone commitments one
 /// beacon slot later, and beacon validators verify every STARK.
+/// B8: share checks run off the event loop (`Action::Verify`). Node 0 gossips its shares
+/// with a corrupted proof from slot 4: receivers must check and reject them (never trust or
+/// forward one), honest shares keep the chain proven without rollbacks, and every honest
+/// node really checked shares off the loop. Mutation-checked: trusting a failed check makes
+/// this fail.
+pub fn stark_bad_shares(mut cfg: SimConfig, slots: u64) -> Outcome {
+    cfg.proof_backend = task_water3d::air::BACKEND_ID.into();
+    cfg.proof_lag = 1;
+    cfg.members_per_zone = 4;
+    let mut sim = Sim::new(cfg);
+    sim.net.prove_delay_ms = 300;
+    sim.run_to_slot(4);
+    sim.net.nodes[0].node.cfg.adversary.corrupt_shares = true;
+    sim.honest[0] = false;
+    // No honest node stores a corrupted share as trusted (checked early, before a broken
+    // rejection could stall the run).
+    let trusts_corrupted = |sim: &Sim| {
+        let bad = &sim.net.nodes[0].node.stats.corrupted_shares;
+        sim.net.nodes.iter().skip(1).any(|n| {
+            n.node
+                .engines
+                .values()
+                .any(|e| e.shares.iter().any(|(k, s)| e.is_trusted(k) && bad.contains(&s.leaf.proof_address)))
+        })
+    };
+    sim.run_to_slot(8);
+    let early = trusts_corrupted(&sim);
+    let corrupted = sim.net.nodes[0].node.stats.corrupted_shares.len();
+    if !early {
+        sim.run_to_slot(slots);
+    }
+    let mut report = oracle::check(&sim, 4, slots.saturating_sub(2), 4);
+    if early || trusts_corrupted(&sim) {
+        report.violations.push("an honest node trusts a corrupted share".into());
+    }
+    if corrupted == 0 {
+        report.violations.push("the adversary corrupted no share".into());
+    }
+    let head = sim.node(sim.archive).chain.head_state().clone();
+    if !head.rollback_log.is_empty() {
+        report.violations.push(format!("{} rollbacks with corrupted shares", head.rollback_log.len()));
+    }
+    let proven = head
+        .commits
+        .values()
+        .flatten()
+        .filter(|c| matches!(c.status, CommitStatus::Proven | CommitStatus::Settled))
+        .count();
+    if proven == 0 {
+        report.violations.push("no commitment was proven".into());
+    }
+    let (checked, bad) =
+        sim.net.nodes.iter().fold((0, 0), |a, n| (a.0 + n.node.stats.shares_checked, a.1 + n.node.stats.shares_bad));
+    if checked == 0 || bad == 0 {
+        report.violations.push(format!("shares checked off the loop {checked}, failed {bad}: expected both > 0"));
+    }
+    finish(sim, report)
+}
+
 pub fn stark(cfg: SimConfig, slots: u64) -> Outcome {
     stark_with_lag(cfg, slots, 1)
 }

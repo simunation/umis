@@ -1,7 +1,8 @@
 //! The stencil proof backend on real zone slots with neighbours: honest proofs verify for every
 //! rule; a false next board (all roots recomputed, so every native check passes) is rejected by
 //! the **release-mode verifier**; hold slots are native only (INV-STENCIL-TASK-1/2). The same
-//! from state witnesses only (the stateless beacon, INV-STENCIL-TASK-4).
+//! from state witnesses only (the stateless beacon, INV-STENCIL-TASK-4), including
+//! `outputs_root` from the witnessed borders (S6b, INV-STENCIL-TASK-5).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -199,13 +200,14 @@ fn slots_verify_from_witnesses_and_false_claims_do_not() {
         let mut s = slot_of(default_rule(name).unwrap(), 3, false);
         let proof = s.prove(&backend);
         let (wp, wn) = s.witnesses();
-        assert!(wp.len() < 1024 && wn.len() < 1024, "{name}: witnesses are small ({} B)", wn.len());
+        let p: task_stencil::StencilParams = borsh::from_slice(&s.params).unwrap();
+        let borders = 2 * 2 * p.shape().unwrap().border_cells() * p.values();
+        assert!(wn.len() < 700 + borders, "{name}: summary, proof and borders only ({} B)", wn.len());
         assert!(s.verify_stateless(&backend, &proof, &wp, &wn), "{name}: honest slot");
         // Swapped or repeated witnesses do not open the statement's roots.
         assert!(!s.verify_stateless(&backend, &proof, &wn, &wp), "{name}: swapped");
         assert!(!s.verify_stateless(&backend, &proof, &wp, &wp), "{name}: prev twice");
         // A false board with every root and summary re-derived: only the STARK stands.
-        let p: task_stencil::StencilParams = borsh::from_slice(&s.params).unwrap();
         let mut st = decode_state(&p, &s.next).unwrap();
         let c = st.grid.cell_mut(3, 4);
         c[0] = if c[0] == 0 { 1 } else { c[0] - 1 };
@@ -233,10 +235,88 @@ fn edited_summaries_are_rejected() {
     // Edit the next summary's next_slot: a header the hold rule would also reject, so edit
     // both summaries' generation the same way instead (hold keeps it equal).
     let edit = |w: &Bytes| -> Bytes {
-        let (mut sum, pr): (Vec<u8>, Vec<ChunkInclusionProof>) = borsh::from_slice(w).unwrap();
+        let (mut sum, pr, b, pb): (Vec<u8>, Vec<ChunkInclusionProof>, Vec<u8>, Vec<u8>) = borsh::from_slice(w).unwrap();
         let g = u64::from_le_bytes(sum[8..16].try_into().unwrap()) + p.gens as u64;
         sum[8..16].copy_from_slice(&g.to_le_bytes());
-        borsh::to_vec(&(sum, pr)).unwrap()
+        borsh::to_vec(&(sum, pr, b, pb)).unwrap()
     };
     assert!(!s.verify_stateless(&backend, &proof, &edit(&wp), &edit(&wn)));
+}
+
+/// INV-STENCIL-TASK-5: without states the verifier checks `outputs_root`. Honest proof and
+/// witnesses, but an `outputs_root` of payloads with one border cell changed, is rejected
+/// (mutation-checked: before S6b this verified). So is a witness whose border is not the one
+/// its summary digests.
+#[test]
+fn stateless_outputs_root_is_checked() {
+    let backend = StencilStark::from_config_id(Some("koalabear-test"));
+    for name in ["heat", "lbm"] {
+        let mut s = slot_of(default_rule(name).unwrap(), 3, false);
+        let proof = s.prove(&backend);
+        let (wp, wn) = s.witnesses();
+        assert!(s.verify_stateless(&backend, &proof, &wp, &wn), "{name}: honest");
+        let p: task_stencil::StencilParams = borsh::from_slice(&s.params).unwrap();
+        let mut st = decode_state(&p, &s.next).unwrap();
+        bump(&mut st.grid, name, 0, 3); // a side cell of the -x face
+        let honest_root = s.stmt.outputs_root;
+        s.stmt.outputs_root = outputs_root_of(&s, &encode_state(&p, &st));
+        assert_ne!(s.stmt.outputs_root, honest_root);
+        assert!(!s.verify_stateless(&backend, &proof, &wp, &wn), "{name}: payloads of another border");
+        s.stmt.outputs_root = honest_root;
+        // the witness's border replaced, its summary kept
+        let (sum, pr, _, pb): (Vec<u8>, Vec<umis_core::bmt::ChunkInclusionProof>, Vec<u8>, Vec<u8>) =
+            borsh::from_slice(&wn).unwrap();
+        let fake = borsh::to_vec(&(sum, pr, border_bytes(&p, &st.grid), pb)).unwrap();
+        assert!(!s.verify_stateless(&backend, &proof, &wp, &fake), "{name}: a border its summary does not digest");
+    }
+}
+
+/// INV-STENCIL-BATCH-5 end to end: a minter keeps the honest board root but claims another
+/// border (a summary with that border's digest, a state root over it, the payloads of that
+/// border). Every native check passes; only the proof's `d_faces` stands. Control: the same
+/// construction with the honest border verifies.
+#[test]
+fn a_false_border_with_a_consistent_summary_is_rejected_by_the_stark() {
+    let backend = StencilStark::from_config_id(Some("koalabear-test"));
+    for name in ["life", "heat", "lbm", "grayscott"] {
+        let mut s = slot_of(default_rule(name).unwrap(), 3, false);
+        let proof = s.prove(&backend);
+        let p: task_stencil::StencilParams = borsh::from_slice(&s.params).unwrap();
+        let honest = decode_state(&p, &s.next).unwrap();
+        for lie in [false, true] {
+            let mut st = honest.clone();
+            if lie {
+                bump(&mut st.grid, name, 7, 0);
+            }
+            let mut sum = summary::Summary::of(&p, &honest);
+            sum.faces = umis_stencil::air::faces_digest(&p.shape().unwrap(), &st.grid);
+            let mut bytes = s.next.clone();
+            bytes[..32].copy_from_slice(&sum.hash().0);
+            let file = bmt::ChunkedFile::from_payload(&bytes);
+            let pr = bmt::file_inclusion_proof_bottom_up(&file, 0).unwrap();
+            let w = borsh::to_vec(&(sum.encode(), pr, border_bytes(&p, &st.grid), border_bytes(&p, &st.prev))).unwrap();
+            s.stmt.state_root = bmt::file_address(&bytes);
+            s.stmt.outputs_root = outputs_root_of(&s, &encode_state(&p, &st));
+            let (wp, _) = s.witnesses();
+            assert_eq!(s.verify_stateless(&backend, &proof, &wp, &w), !lie, "{name}: lie {lie}");
+        }
+    }
+}
+
+fn bump(g: &mut umis_stencil::Grid, rule: &str, x: usize, y: usize) {
+    let c = g.cell_mut(x, y);
+    c[0] = if c[0] == 0 { 1 } else { c[0] - 1 };
+    if rule == "lbm" {
+        c[1] += 1;
+    }
+}
+
+fn border_bytes(p: &task_stencil::StencilParams, g: &umis_stencil::Grid) -> Vec<u8> {
+    umis_stencil::air::border(&p.shape().unwrap(), g).iter().flat_map(|v| (*v as u16).to_le_bytes()).collect()
+}
+
+fn outputs_root_of(s: &Slot, state: &[u8]) -> Hash {
+    let outs = s.inst.outputs(state).unwrap();
+    let leaves: Vec<Hash> = outs.values().map(|b| bmt::file_address(b)).collect();
+    bmt::list_root(&leaves)
 }

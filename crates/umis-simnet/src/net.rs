@@ -50,6 +50,7 @@ enum Msg {
     Response { from: NodeId, local_id: u64, resp: SyncResponse },
     Failed { peer: NodeId, local_id: u64 },
     Computed { id: u64, result: Result<Vec<u8>, String> },
+    Verified { id: u64, ok: bool },
 }
 
 pub struct SimNode {
@@ -88,6 +89,8 @@ pub struct SimNet {
     pub events: u64,
     /// Simulated proving time of async backends.
     pub prove_delay_ms: u64,
+    /// Simulated time of an off-loop share check (`Action::Verify`, B8).
+    pub verify_delay_ms: u64,
     /// Wall time spent per event kind (profiling).
     pub cost: std::collections::BTreeMap<String, (u64, std::time::Duration)>,
 }
@@ -109,6 +112,7 @@ impl SimNet {
             delivered: 0,
             events: 0,
             prove_delay_ms: 500,
+            verify_delay_ms: 50,
             cost: Default::default(),
         }
     }
@@ -283,6 +287,12 @@ impl SimNet {
                     let at = self.now + self.prove_delay_ms;
                     self.enqueue(at, i, Msg::Computed { id: job.id, result });
                 }
+                Action::Verify { id, job } => {
+                    // Checked "in a worker": inline here (deterministic), reported after a delay.
+                    let ok = job.run(&self.nodes[i].node.ctx);
+                    let at = self.now + self.verify_delay_ms;
+                    self.enqueue(at, i, Msg::Verified { id, ok });
+                }
                 Action::Validate { .. } | Action::Peering { .. } | Action::Ui(_) => {}
             }
         }
@@ -322,6 +332,7 @@ impl SimNet {
                     }
                     Msg::Failed { peer, local_id } => self.deliver(to, Event::RequestFailed { peer, id: local_id }),
                     Msg::Computed { id, result } => self.deliver(to, Event::ComputeDone { id, result }),
+                    Msg::Verified { id, ok } => self.deliver(to, Event::VerifyDone { id, ok }),
                 }
             } else {
                 let i = next_wake.expect("wake").1;

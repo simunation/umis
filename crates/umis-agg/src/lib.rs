@@ -284,10 +284,10 @@ pub fn chain(statement: &[Val]) -> Result<([Val; DIGEST], [Val; DIGEST]), String
 }
 
 /// [`chain`] for stencil leaves (`umis_stencil`, INV-STENCIL-6): each leaf statement is
-/// `[d_prev, d_halo, d_next]`; returns the first `d_prev` and the last `d_next` if every leaf's
+/// `[d_prev, d_halo, d_next, d_faces]`; returns the first `d_prev` and the last `d_next` if every leaf's
 /// `d_next` is the next leaf's `d_prev`.
 pub fn stencil_chain(statement: &[Val]) -> Result<([Val; SD], [Val; SD]), String> {
-    const N: usize = umis_stencil::air::N_PUBLIC;
+    const N: usize = umis_stencil::batch::N_STATEMENT;
     if statement.is_empty() || statement.len() % N != 0 {
         return Err(format!("statement length {} is not a positive multiple of {N}", statement.len()));
     }
@@ -327,8 +327,16 @@ impl Recursive {
     }
 }
 
+/// Smallest table of a recursive proof (B9, INV-AGG-NB-5): p3-security models one trace
+/// height, and its unique-decoding agreement `(1 + (k + 2)/n)/2` is worst at the shortest
+/// table. P3R pads tables to one row by default (a 1-row table: 48 bits at J101 by that term);
+/// at 2^5 rows every table clears 101 bits, and the padding rows cost next to nothing.
+pub const MIN_TABLE_HEIGHT: usize = 32;
+
 fn params() -> ProveNextLayerParams {
-    ProveNextLayerParams::default()
+    let mut p = ProveNextLayerParams::default();
+    p.table_packing = p.table_packing.with_min_trace_height(MIN_TABLE_HEIGHT);
+    p
 }
 
 /// Layer 1: a recursive proof that verifies `leaf` in-circuit, with the leaf's public values
@@ -400,10 +408,14 @@ pub fn proof_bytes(p: &BatchStarkProof<AggConfig>) -> usize {
 /// tallest table, every opened codeword (base columns count 1, extension columns 5), the
 /// degree its quotient chunking allows, and upper estimates for what the proof does not carry
 /// (constraints: 4 per opened codeword; LogUp: 4 interactions of width 8 per permutation column).
-pub fn recursive_shape(p: &BatchStarkProof<AggConfig>) -> ProofShape {
+///
+/// Returned at the tallest and the shortest table height: a proof's figure is the worse
+/// (`umis_stark::security::worst_bits`; tables are at least [`MIN_TABLE_HEIGHT`] rows, B9).
+pub fn recursive_shapes(p: &BatchStarkProof<AggConfig>) -> Vec<ProofShape> {
     const E: usize = 5;
     let bp = &p.proof;
     let log_height = bp.degree_bits.iter().copied().max().unwrap_or(0);
+    let min_height = bp.degree_bits.iter().copied().min().unwrap_or(0);
     let (mut openings, mut perm_cols, mut chunks) = (0usize, 0usize, 1usize);
     for inst in &bp.opened_values.instances {
         let b = &inst.base_opened_values;
@@ -423,4 +435,5 @@ pub fn recursive_shape(p: &BatchStarkProof<AggConfig>) -> ProofShape {
         batched_openings: openings,
         logup: (perm_cols > 0).then_some((4 * perm_cols, 8)),
     }
+    .at_heights([log_height, min_height])
 }

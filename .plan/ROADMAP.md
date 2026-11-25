@@ -29,10 +29,12 @@ patches), S4 generic stencil aggregation (`koalabear-agg`), multi-slot leaves (2
 (toy 4), S6 v1 stateless beacon (witnesses instead of states; `outputs_root` via the fault path).
 
 **Next (in order; detailed plan in `.plan/NEXT.md`):**
-1. **S6b** `d_faces`: bind output payloads in-circuit, so the beacon checks `outputs_root` statelessly.
+1. ~~**S6b** `d_faces`~~ done 2026-11-24: the beacon checks `outputs_root` statelessly (leaf statement 32 elements,
+   witnesses carry both borders, ~5 KB for LBM 32²; leaf cost within noise).
 2. ~~Plonky3 degree-inference cache~~ done 2026-11-23 (LBM verify 156 → 82 ms, 8-slot prove 134 → 60 ms/slot).
-3. Aggregation over multi-slot leaves; cheaper layer 1 for wide leaves (LBM 5.3 s per slot).
-4. Small zones (`MIN_HEIGHT` padding), then the GPU batch leaf.
+3. ~~Aggregation over multi-slot leaves~~ measured 2026-11-24: no gain (layer 1 ∝ opened width), m = 8 too big.
+4. ~~Small zones~~ answered 2026-11-24: the shortest instance sets the batch figure, so `MIN_HEIGHT = 64` stays at
+   P100. Open: multi-height model for recursive proofs (B9). Then the GPU batch leaf.
 
 **Plan (in order):**
 1. ~~**S1 stencil AIR framework**~~ **done 2026-11-22** (`crates/umis-stencil`, spec `docs/zk/stencil-spec.md`):
@@ -263,7 +265,7 @@ verifier and recurse. Until then aggregation leaves prove on the CPU (16.8–23 
 
 ### B. Hygiene (small, any time)
 
-- **B1** (2026-11-24: fix + tests committed in a local P3R clone, push/post pending the owner, see the draft; our
+- **B1** **Owner decision 2026-11-24: do not report upstream; keep the local patch.** (2026-11-24: fix + tests committed in a local P3R clone, push/post pending the owner, see the draft; our
   zero-fill workarounds removed) (drafted 2026-11-21: `.plan/drafts/p3r-issue-periodic-columns.md`, not posted) Report the P3R bug upstream: `RecursiveAir::declares_interactions` omits `num_periodic_columns`
   (`recursion/src/traits/air.rs:236` at `3a69ba6`); our workaround is in `LifeAir::eval`. Draft the issue text for
   the owner (do not post without asking).
@@ -282,7 +284,8 @@ verifier and recurse. Until then aggregation leaves prove on the CPU (16.8–23 
 - ~~**B6**~~ (dropped 2026-11-22) Measure P100 in wasm for life2d (browser leaf cost) and EF5 leaves in wasm; record in `docs/life2d.md`.
 - ~~**B7**~~ (dropped 2026-11-22, browser demo frozen) Refresh the demo (`scripts/demo/`) with P100 and republish the player artifact (the published one predates
   P100).
-- **B8** Move share verification off the event loop (`ZoneEngine::on_share` verifies synchronously).
+- ~~**B8**~~ **done 2026-11-25:** share verification runs off the event loop (`Action::Verify` / `Event::VerifyDone`,
+  deferred gossip validation; `docs/ARCHITECTURE.md` §Share checks; SimNet `stark-bad-shares`).
 
 ### C. Optional / research
 

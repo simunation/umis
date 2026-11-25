@@ -121,8 +121,8 @@ circuit proofs, so `umis_agg::native` builds the same trusted construction from 
   structure), then:
   - **INV-AGG-NB-1 (VK pin):** the `CommonData` preprocessed-commitment targets are constrained to the relation's
     commitment (`ConstrainConstantCommitment`). Needs the local P3R patch below.
-  - **INV-AGG-NB-2 (statement):** `set_statement_exports` exports exactly the leaf's AIR public values (24 for a
-    stencil leaf: `d_prev, d_halo, d_next`). Every other circuit input, including the leaf's commitments and
+  - **INV-AGG-NB-2 (statement):** `set_statement_exports` exports exactly the leaf's AIR public values (32 for a
+    stencil leaf: `d_prev, d_halo, d_next, d_faces`; 24 before S6b). Every other circuit input, including the leaf's commitments and
     openings allocated with `public_input()`, is witness: `CircuitVerifier::verify(proof, statement)` checks only
     the statement table. The in-circuit transcript binds the witness commitments.
   - **INV-AGG-NB-3:** one owner per relation and shape proves every leaf of that shape (`prove` checks the shape and
@@ -130,6 +130,11 @@ circuit proofs, so `umis_agg::native` builds the same trusted construction from 
   - Prover: the backend's NPO tables plus the statement table, `BatchStarkProver::prepare_circuit`.
 - **INV-AGG-NB-4:** J101 (now 60 queries) gives ≥ 101 proven bits for EF5 stencil leaves (heat 64², LBM 32²,
   life 64²) and the layer-1 proofs over them.
+- **INV-AGG-NB-5 (B9, 2026-11-25):** p3-security models one trace height, and its unique-decoding agreement
+  `(1 + (k + 2)/n)/2` is worst at a proof's **shortest** table. P3R padded tables to one row (a 1-row table: ~48
+  bits by that term). Every recursion table is now at least `MIN_TABLE_HEIGHT = 32` rows
+  (`TablePacking::with_min_trace_height`), and `recursive_shapes` / `security_shapes_of` model both the tallest and
+  the shortest instance (`worst_bits`). Layer 1 and 2-to-1 clear 101 at both.
 - Upper layers are unchanged: `AggOwner` (2-to-1) takes `NativeLayer1`'s recursive proofs; `stencil_chain` checks
   that consecutive leaf statements chain.
 
@@ -148,6 +153,20 @@ Measured (J101, `stencil_agg_bench`, 16 cores, load 5–9; leaf includes its nat
 | heat 64² | 161 ms, 0.64 MB | 367 ms | 852 ms, 0.41 MB | 1.12 s, 0.44 MB | 10 ms |
 | LBM 32² | 610 ms, 3.35 MB | 2.86 s | 5.31 s, 0.45 MB | 1.02 s, 0.45 MB | 10 ms |
 | life 64² | 15 ms, 0.23 MB | 171 ms | 359 ms, 0.39 MB | 1.03 s, 0.44 MB | 9 ms |
+
+**Multi-slot leaves under layer 1 (measured 2026-11-24, `M=m stencil_agg_bench`, J101, load 12–14):** one
+layer-1 proof over an `m`-slot leaf costs the same per slot as `m` layer-1 proofs plus their 2-to-1 steps, since
+layer 1 is dominated by hashing the opened columns in-circuit, which grows with `m`:
+
+| LBM 32² | leaf per slot | layer 1 per slot | layer-1 proof |
+|---|---|---|---|
+| per slot + 2-to-1 (today) | 512 ms | 4.32 s + ~0.97 s per 2-to-1 | 0.48 MB, aggregate 0.49 MB |
+| m = 2 | 355 ms | 4.88 s | 0.58 MB |
+| m = 4 | 271 ms | 4.99 s | 0.72 MB |
+| m = 8 | | fails: the circuit's FFT domain exceeds KoalaBear's 2^24 two-adicity | |
+
+So the backend keeps per-slot layer 1. A higher leaf blowup (J101 already uses 8) would save about 25 % of the
+queries for twice the leaf time, about 10 % net: not worth a separate config.
 
 Tests (`tests/native.rs`, release): honest recursion and statement binding; one owner for many slots plus a 2-to-1
 aggregate that chains; a leaf of another rule (same widths, same preprocessed commitment) rejected by the circuit;
