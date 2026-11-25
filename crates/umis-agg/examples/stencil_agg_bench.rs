@@ -65,6 +65,11 @@ fn run<R: Rule + Clone>(p: &AggParams, rule: R, name: &str, l: &[usize]) {
     let t_l1 = ms(t);
     let rc = owner.prove(&c).expect("layer 1 (2)");
     ra.verify().expect("verify");
+    if std::env::var_os("UMIS_AGG_PROFILE").is_some() {
+        let bp = &ra.out.0.proof;
+        let w: Vec<usize> = bp.opened_values.instances.iter().map(|i| i.base_opened_values.trace_local.len()).collect();
+        eprintln!("layer-1 proof tables: log heights {:?}, widths {w:?}", bp.degree_bits);
+    }
     let t = Instant::now();
     let agg = AggOwner::new(p, &ra, &rc).expect("agg owner");
     let t_agg_owner = ms(t);

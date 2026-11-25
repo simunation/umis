@@ -96,19 +96,25 @@ fn range_row(v: u64, b: usize) -> usize {
     ((1usize << b) - 4) + v as usize
 }
 /// Lookup degree budget per AIR: the largest constraint degree the preset's blowup supports
-/// (`blowup + 1`, at most 5). A larger budget packs more lookups per LogUp column (LBM at P100:
-/// budget 5 instead of 3 gives 35 % smaller proofs; measured 2026-11-22). `UMIS_LOOKUP_BUDGET`
-/// overrides it, for measurements.
+/// (`blowup + 1`, at most [`MAX_LOOKUP_BUDGET`]). A larger budget packs more lookups per LogUp
+/// column (`budget − 1` each): LBM at P100, budget 5 instead of 3, gives 35 % smaller proofs
+/// (measured 2026-11-22); the aggregation leaf (blowup 8), budget 9 instead of 5, a 24 % smaller
+/// leaf and 23 % less layer-1 work (measured 2026-11-25). `UMIS_LOOKUP_BUDGET` overrides it,
+/// for measurements.
 fn lookup_budget(preset: FriPreset) -> usize {
     lookup_budget_for(preset.log_blowup())
 }
 
-/// The LogUp degree budget at FRI blowup `2^log_blowup`: `blowup + 1`, between 3 and 5.
+/// The largest LogUp degree budget (blowup 8).
+pub const MAX_LOOKUP_BUDGET: usize = 9;
+
+/// The LogUp degree budget at FRI blowup `2^log_blowup`: `blowup + 1`, between 3 and
+/// [`MAX_LOOKUP_BUDGET`].
 pub fn lookup_budget_for(log_blowup: usize) -> usize {
     std::env::var("UMIS_LOOKUP_BUDGET")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(((1usize << log_blowup) + 1).clamp(3, 5))
+        .unwrap_or(((1usize << log_blowup) + 1).clamp(3, MAX_LOOKUP_BUDGET))
 }
 
 // Hash AIR columns.
@@ -925,7 +931,8 @@ impl<R: Rule + Clone> StencilBatch<R> {
     /// The shapes of a batch proof for the security calculator, read from the proof: every
     /// opened codeword (base columns 1, EF4 columns 4), the degree its quotient chunking
     /// allows, upper estimates for what it does not carry (constraints: 4 per opened codeword;
-    /// LogUp: 4 interactions of width 10 per permutation column), at its tallest and its
+    /// LogUp: `MAX_LOOKUP_BUDGET − 1` interactions of width 10 per permutation column, the most
+    /// p3-lookup packs into one), at its tallest and its
     /// shortest instance height. The proof's figure is the worse of the two
     /// (`umis_stark::security::worst_bits`; INV-STENCIL-PARAM-1).
     pub fn security_shapes(proof: &BatchProof<koala_bear::Config>) -> Vec<umis_stark::security::ProofShape> {
@@ -982,7 +989,7 @@ pub fn security_shapes_of<SC: p3_batch_stark::StarkGenericConfig>(
         num_constraints: 4 * openings,
         max_degree: chunks + 1,
         batched_openings: openings,
-        logup: (perm_cols > 0).then_some((4 * perm_cols, 2 + RATE)),
+        logup: (perm_cols > 0).then_some(((MAX_LOOKUP_BUDGET - 1) * perm_cols, 2 + RATE)),
     }
     .at_heights([log_height, min_height])
 }

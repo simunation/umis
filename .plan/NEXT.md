@@ -61,6 +61,14 @@ Read `.plan/HANDOFF.md` first (how to build, test, machine quirks, conventions).
    window; missing aggregates are harmless. Follow-ups: pruning of replaced leaf proofs (archive size, the point of
    aggregating), aggregator incentives, and a devnet run with `agg_lag` (`umis-cli genesis` needs a flag).
 
+8. **Faster layer 1 (2026-11-25, owner: "make the LBM proof narrower so aggregation keeps up"):** generic, not
+   LBM-specific. LogUp budget up to `blowup + 1` (aggregation leaf 5 → 9: LBM leaf 3.49 → 2.66 MB) and
+   `LAYER1_HORNER_PACK = 8` (ALU table 2^19 → 2^17): LBM 32² layer 1 5.9 → 3.3–3.7 s, 2-to-1 unchanged, per
+   aggregated slot ~7.4 → ~4.9 s (`docs/zk/aggregation.md`, cost model). Next halving needs the Poseidon2 table
+   under 2^16 (~30 % fewer opened leaf columns): hash limbs as expressions (−1,800 LBM columns) plus a narrower
+   LBM rule (one rounding step instead of two: −8 columns and −8 lookups per cell) might reach it; measure first.
+   Aggregation parallelises across slots and machines (the `agg_lag` window), so it need not match the prover.
+
 ## Commands (copy-paste)
 
 ```sh
