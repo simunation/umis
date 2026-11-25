@@ -130,6 +130,11 @@ circuit proofs, so `umis_agg::native` builds the same trusted construction from 
   - Prover: the backend's NPO tables plus the statement table, `BatchStarkProver::prepare_circuit`.
 - **INV-AGG-NB-4:** J101 (now 60 queries) gives ≥ 101 proven bits for EF5 stencil leaves (heat 64², LBM 32²,
   life 64²) and the layer-1 proofs over them.
+- **INV-AGG-NB-5 (B9, 2026-11-25):** p3-security models one trace height, and its unique-decoding agreement
+  `(1 + (k + 2)/n)/2` is worst at a proof's **shortest** table. P3R padded tables to one row (a 1-row table: ~48
+  bits by that term). Every recursion table is now at least `MIN_TABLE_HEIGHT = 32` rows
+  (`TablePacking::with_min_trace_height`), and `recursive_shapes` / `security_shapes_of` model both the tallest and
+  the shortest instance (`worst_bits`). Layer 1 and 2-to-1 clear 101 at both.
 - Upper layers are unchanged: `AggOwner` (2-to-1) takes `NativeLayer1`'s recursive proofs; `stencil_chain` checks
   that consecutive leaf statements chain.
 

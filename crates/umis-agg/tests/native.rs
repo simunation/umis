@@ -184,7 +184,7 @@ fn a_leaf_of_another_rule_does_not_recurse() {
 #[cfg_attr(debug_assertions, ignore = "release only (J101 proofs are slow in debug)")]
 fn stencil_leaves_and_their_recursion_clear_101_bits_at_j101() {
     // INV-AGG-NB-4: EF5 leaves of every toy at its benchmark size, and a layer-1 proof over one.
-    use umis_agg::recursive_shape;
+    use umis_agg::recursive_shapes;
     use umis_stark::security::worst_bits;
     use umis_stencil::batch::security_shapes_of;
     let j = AggParams::J101;
@@ -212,6 +212,19 @@ fn stencil_leaves_and_their_recursion_clear_101_bits_at_j101() {
     let l = rel.prove(&j, &t, b.publics(&p)).unwrap();
     let r = NativeLayer1::new(&j, &rel, &l).unwrap().prove(&l).unwrap();
     r.verify().unwrap();
-    let bits = j.bits(&recursive_shape(&r.out.0));
-    assert!(bits >= 101.0, "layer 1: {bits:.2}");
+    // B9 / INV-AGG-NB-5: modelled at its shortest table too, which is padded to 2^5 rows.
+    let shapes = recursive_shapes(&r.out.0);
+    assert!(
+        r.out.0.proof.degree_bits.iter().all(|b| 1 << b >= umis_agg::MIN_TABLE_HEIGHT),
+        "{:?}",
+        r.out.0.proof.degree_bits
+    );
+    let bits = umis_stark::security::worst_bits(&shapes, |s| j.bits(s));
+    assert!(bits >= 101.0, "layer 1: {bits:.2} ({:?})", r.out.0.proof.degree_bits);
+    let agg = umis_agg::AggOwner::new(&j, &r, &r).unwrap();
+    let two = agg.prove(&r, &r).unwrap();
+    two.verify().unwrap();
+    assert!(two.out.0.proof.degree_bits.iter().all(|b| 1 << b >= umis_agg::MIN_TABLE_HEIGHT));
+    let bits = umis_stark::security::worst_bits(&recursive_shapes(&two.out.0), |s| j.bits(s));
+    assert!(bits >= 101.0, "2-to-1: {bits:.2} ({:?})", two.out.0.proof.degree_bits);
 }

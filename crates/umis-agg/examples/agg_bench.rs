@@ -6,7 +6,7 @@ use std::time::Instant;
 use task_life2d::Life2dParams;
 use task_life2d::board::Board;
 use umis_agg::{
-    AggOwner, AggParams, Layer1Owner, aggregate, config, digest_leaf, layer1, leaf, proof_bytes, recursive_shape,
+    AggOwner, AggParams, Layer1Owner, aggregate, config, digest_leaf, layer1, leaf, proof_bytes, recursive_shapes,
 };
 
 fn main() {
@@ -59,12 +59,12 @@ fn main() {
                 ms_d(ra.timing.prove),
                 ms_d(rb.timing.prove),
                 proof_bytes(&ra.out.0) / 1024,
-                p.bits(&recursive_shape(&ra.out.0)),
+                umis_stark::security::worst_bits(&recursive_shapes(&ra.out.0), |s| p.bits(s)),
                 ms_d(agg.build),
                 ms_d(ab.timing.prove),
                 ms_d(ba.timing.prove),
                 proof_bytes(&ab.out.0) / 1024,
-                p.bits(&recursive_shape(&ab.out.0)),
+                umis_stark::security::worst_bits(&recursive_shapes(&ab.out.0), |s| p.bits(s)),
             );
             continue;
         }
@@ -88,7 +88,8 @@ fn main() {
         let t_va = ms(t);
         eprintln!("  leaf: {:.1} bits", p.bits(&a.shape()));
         for (name, r) in [("layer1", &ra), ("2-to-1", &agg)] {
-            let sh = recursive_shape(&r.out.0);
+            let shapes = recursive_shapes(&r.out.0);
+            let sh = shapes[0];
             eprintln!(
                 "  {name}: build {:.0} ms prove {:.0} ms | tables {} log heights {:?} openings {} max degree {} bits {:.1}",
                 r.timing.build.as_secs_f64() * 1e3,
@@ -97,7 +98,7 @@ fn main() {
                 r.out.0.proof.degree_bits,
                 sh.batched_openings,
                 sh.max_degree,
-                p.bits(&sh)
+                umis_stark::security::worst_bits(&shapes, |s| p.bits(s))
             );
         }
         println!(

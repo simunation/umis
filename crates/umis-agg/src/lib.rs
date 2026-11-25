@@ -327,8 +327,16 @@ impl Recursive {
     }
 }
 
+/// Smallest table of a recursive proof (B9, INV-AGG-NB-5): p3-security models one trace
+/// height, and its unique-decoding agreement `(1 + (k + 2)/n)/2` is worst at the shortest
+/// table. P3R pads tables to one row by default (a 1-row table: 48 bits at J101 by that term);
+/// at 2^5 rows every table clears 101 bits, and the padding rows cost next to nothing.
+pub const MIN_TABLE_HEIGHT: usize = 32;
+
 fn params() -> ProveNextLayerParams {
-    ProveNextLayerParams::default()
+    let mut p = ProveNextLayerParams::default();
+    p.table_packing = p.table_packing.with_min_trace_height(MIN_TABLE_HEIGHT);
+    p
 }
 
 /// Layer 1: a recursive proof that verifies `leaf` in-circuit, with the leaf's public values
@@ -401,15 +409,13 @@ pub fn proof_bytes(p: &BatchStarkProof<AggConfig>) -> usize {
 /// degree its quotient chunking allows, and upper estimates for what the proof does not carry
 /// (constraints: 4 per opened codeword; LogUp: 4 interactions of width 8 per permutation column).
 ///
-/// Open (2026-11-24, `.plan/NEXT.md`): p3-security models one trace height. Its unique-decoding
-/// term is worst at a proof's shortest instance, and P3R circuit proofs have tables down to one
-/// row, where that per-instance model does not apply (0 bits by its guard; the 8-point codeword
-/// is covered by every query). Leaves report the worse of both heights
-/// (`umis_stencil::batch::security_shapes_of`); recursive proofs need a multi-height argument.
-pub fn recursive_shape(p: &BatchStarkProof<AggConfig>) -> ProofShape {
+/// Returned at the tallest and the shortest table height: a proof's figure is the worse
+/// (`umis_stark::security::worst_bits`; tables are at least [`MIN_TABLE_HEIGHT`] rows, B9).
+pub fn recursive_shapes(p: &BatchStarkProof<AggConfig>) -> Vec<ProofShape> {
     const E: usize = 5;
     let bp = &p.proof;
     let log_height = bp.degree_bits.iter().copied().max().unwrap_or(0);
+    let min_height = bp.degree_bits.iter().copied().min().unwrap_or(0);
     let (mut openings, mut perm_cols, mut chunks) = (0usize, 0usize, 1usize);
     for inst in &bp.opened_values.instances {
         let b = &inst.base_opened_values;
@@ -429,4 +435,5 @@ pub fn recursive_shape(p: &BatchStarkProof<AggConfig>) -> ProofShape {
         batched_openings: openings,
         logup: (perm_cols > 0).then_some((4 * perm_cols, 8)),
     }
+    .at_heights([log_height, min_height])
 }

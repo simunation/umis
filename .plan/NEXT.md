@@ -39,10 +39,11 @@ Read `.plan/HANDOFF.md` first (how to build, test, machine quirks, conventions).
    100.5 (`the_shortest_instance_sets_the_batch_figure`). `security_shapes` now reports the worse height (it
    modelled the tallest only and overstated leaves by ~1.2 bits; they still cleared 101). Smaller padding needs
    more queries, a pure trade-off.
-   - **Open (B9):** recursive (P3R circuit) proofs have tables down to one row. p3-security's per-instance model
-     gives 0 bits there (its guard) and 57 bits at 2^1, meaningless for a codeword every query covers, so
-     `recursive_shape` still reports the tallest table (105 bits at layer 1, 103 down to 2^5). Needs a
-     multi-height FRI argument (or asking p3-security upstream how mixed heights should be modelled).
+   - ~~**B9**~~ **fixed 2026-11-25:** recursive proofs had a 1-row table (by the per-instance unique-decoding
+     term ~48 bits at J101). Every P3R table is now padded to `MIN_TABLE_HEIGHT = 32` rows
+     (`TablePacking::with_min_trace_height`), and `recursive_shapes` reports the worse of the tallest and shortest
+     table: layer 1 and 2-to-1 clear 101 (`stencil_leaves_and_their_recursion_clear_101_bits_at_j101`,
+     mutation-checked with the padding removed: 0 bits).
 5. **GPU batch leaf** (the next real project, 2+ sessions). Profile 2026-11-24, LBM 32², 8 slots, P100, warm: prove
    515 ms = cells quotients ~130–140 ms (parallel over AIRs) + FRI ~30 ms + ~340 ms trace commit (LDE and Merkle
    hashing of 5548-wide rows); verify 622 ms is almost all FRI/Merkle (constraints ~5 ms), so the GPU helps only

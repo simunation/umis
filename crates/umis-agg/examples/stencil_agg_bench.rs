@@ -5,7 +5,7 @@
 //! multi-slot leaves, NEXT step 3).
 use std::time::Instant;
 use umis_agg::native::{NativeLayer1, NativeRelation};
-use umis_agg::{AggOwner, AggParams, proof_bytes, recursive_shape, stencil_chain};
+use umis_agg::{AggOwner, AggParams, proof_bytes, recursive_shapes, stencil_chain};
 use umis_stark::config::FriPreset;
 use umis_stark::security::worst_bits;
 use umis_stencil::batch::{StencilBatch, lookup_budget_for, security_shapes_of};
@@ -84,9 +84,9 @@ fn run<R: Rule + Clone>(p: &AggParams, rule: R, name: &str, l: &[usize]) {
         l[2],
         a.bytes() as f64 / 1e6,
         proof_bytes(&ra.out.0) as f64 / 1e6,
-        p.bits(&recursive_shape(&ra.out.0)),
+        umis_stark::security::worst_bits(&recursive_shapes(&ra.out.0), |s| p.bits(s)),
         proof_bytes(&two.out.0) as f64 / 1e6,
-        p.bits(&recursive_shape(&two.out.0)),
+        umis_stark::security::worst_bits(&recursive_shapes(&two.out.0), |s| p.bits(s)),
     );
 }
 
@@ -132,7 +132,7 @@ fn run_multi<R: Rule + Clone>(p: &AggParams, rule: R, name: &str, l: &[usize], m
         a.bytes() as f64 / 1e6,
         t_l1 / m as f64,
         proof_bytes(&ra.out.0) as f64 / 1e6,
-        p.bits(&recursive_shape(&ra.out.0)),
+        umis_stark::security::worst_bits(&recursive_shapes(&ra.out.0), |s| p.bits(s)),
     );
 }
 
