@@ -112,6 +112,7 @@ fit and the degree intuition: `docs/simulation-fit.md`.
 
 ## Next action
 
-Follow `.plan/NEXT.md`. 2026-11-24: S6b `d_faces` done; steps 3–4 measured and closed (no gain / `MIN_HEIGHT`
-stays); next real project is the GPU batch leaf (step 5); open B9 (multi-height security model for recursion). `docs/stencil.md` describes what exists and how to try
+Follow `.plan/NEXT.md`. 2026-11-25: B8, B9 and the separate aggregator role done; the GPU batch leaf (step 5) is
+started: correct and opt-in, PCIe-bound on the 3090 Ti; next keep the LDE on the device. GPUs are shared with other
+projects: check `nvidia-smi` and wait for an idle card before measuring (the 3090 Ti sits on a ×4 link). `docs/stencil.md` describes what exists and how to try
 it.

@@ -305,6 +305,15 @@ module and calls `proveJob`; up to half the cores, at most 4, shared by the
 page's nodes; `?prover=inline` proves on the page thread).
 `umis_proof::JobRunner` caches task instances and the STARK setup per zone.
 
+**Aggregator role (INV-STENCIL-AGG-4, 2026-11-25).** With genesis `agg_lag > 0` the zone's provers prove plain
+leaves (fast, within `L`), and nodes with `NodeConfig::aggregator` (full nodes that hold the zone states) look
+every slot for proven commitments whose aggregation window is open (`CommitInfo::agg_open`). For each they take
+the zone commitment from the beacon block that included it, run `ProveJob::aggregate` off the loop
+(`ProofBackend::aggregate_batch`) and gossip the result as a proof commitment for the same key. Nodes keep checked
+aggregates in `agg_pool` and proposers include them; the beacon marks the commitment `aggregated`. Optional:
+nothing waits for an aggregate. `agg_min_age` makes an aggregator wait (batching; tests aggregate after
+settlement).
+
 **Share checks off the event loop (B8, 2026-11-25).** A proof share this node can verify
 alone (an async backend, a single-slot block whose states it holds, not a group part) is not
 verified in `ZoneEngine::on_share`: the verdict is `ShareVerdict::Check(ShareCheck)`, a

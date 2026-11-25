@@ -189,6 +189,39 @@ cells quotient ~72–80 ms; the 32² zone fills 17 of its 64 trace rows (`MIN_HE
 Plonky3 patch, done 2026-11-23 (`vendor/p3-batch-stark-degree-cache.patch`): warm LBM 32² prove 290 → 220 ms,
 8 slots per proof 134 → 60 ms per slot, verify 156 → 82 ms (load ≈ 4); the inference runs once per setup.
 
+## 6c'. GPU leaf proving (step 1, 2026-11-25; INV-STENCIL-GPU-*)
+
+- **GPU-1 (wide-row leaf hash):** the KoalaBear Merkle leaf hash is `WideRowHash`: a message of at most
+  `ROW_CHUNK = 512` values is the plain sponge, as before; a longer one is the sponge of its 512-value chunks'
+  sponge digests. It is collision resistant for equal-length messages if the sponge is, and Merkle leaves are
+  equal-length: the verifier binds every opened row's width to the committed dimensions. Why: a batch-leaf commit
+  is 256 LDE rows of 44,384 values (8 LBM slots), and one sequential sponge per row gives a GPU only 256 threads.
+  Rows ≤ 512 values (most trees) hash exactly as before. Tests `wide_rows_hash_their_chunk_digests`.
+- **GPU-2 (`umis_stark::fast_mmcs`):** `FastMmcs<B: TreeBackend>` builds the stock tree (arity 2, cap 0,
+  power-of-two heights; others fall back to `MerkleTreeMmcs`) with a pluggable backend, with identical
+  commitments, openings and pruned multi-proofs (`built_trees_equal_the_stock_mmcs`, mixed and wide shapes);
+  verification delegates to the stock MMCS. `config_with(preset, dft, mmcs)` builds a config around it, and
+  `StencilBatch::set_prover(FastProver)` proves a leaf under it. The proof verifies with the stock verifier
+  (`fast_prover_proofs_verify_with_the_stock_verifier`; proofs are not compared byte for byte because the stock
+  prover itself is not deterministic past the commitments: parallel proof-of-work search).
+- **GPU-3 (`umis_gpu::merkle::GpuTree`):** per-matrix uploads through a pinned staging pool, on-device row
+  concatenation, a chunk-sponge and a row-sponge kernel, pair compression; layers come back for the openings.
+  `tests/merkle.rs` (layers equal the CPU reference and the stock MMCS, including LBM shapes) and
+  `gpu_leaf_proofs_verify_with_the_stock_verifier` (an 8-slot LBM 32² GPU leaf) pass on an RTX 3090 Ti.
+- **Opt-in** (`cuda` builds, `UMIS_GPU_LEAF=1`): `commit_bench` / `bench GPU=1`, LBM 32², 8 slots, P100:
+
+  | device (link) | measured link | tree, GPU vs CPU | leaf prove per slot, GPU vs CPU |
+  |---|---|---|---|
+  | RTX 3090 Ti (PCIe ×4) | 1.9 GB/s | 82 vs 87 ms | 64–67 vs 60–62 ms |
+  | RTX A6000 (reports ×16 gen 4, idle) | 1.7 GB/s | 130–140 vs 129–149 ms | 82–98 vs 69–108 ms (CPU loaded) |
+
+  Both cards transfer below 2 GB/s on this machine (pinned or not), far under their links' rating: the link
+  appears stuck at a low speed (`nvidia-smi` showed gen 1), so this is a machine/BIOS matter to check.
+  The GPU kernels take about 5 ms; the 133 MB LDE upload dominates on a ×4 link. The LDE stays on the CPU
+  (`GpuDft` takes 77 against 37 ms for these 64-row traces; `UMIS_GPU_LDE=1` moves it). Next steps: keep the LDE on
+  the device (GPU LDE + tree, download only for the openings), then the quotient (the JIT path), which removes the
+  upload.
+
 ## 6d. Toy 3: lattice Boltzmann (`lbm.rs`)
 
 D2Q9 BGK with the He–Luo incompressible equilibrium, in exact integer arithmetic (unit `U = 2^10`, 16-bit
@@ -297,6 +330,21 @@ Details: `docs/zk/aggregation.md` §Native batch leaves.
   the aggregate with its own verifier for (relation, member count).
 - **INV-STENCIL-AGG-3 (independent trees):** owner trees are built per relation from a boundary-filled leaf; an
   aggregate made with one node's tree verifies with another's; another member count's verifier rejects it.
+- **INV-STENCIL-AGG-4 (separate aggregator role, 2026-11-25):** with genesis `agg_lag = L_agg > 0` the zone's
+  provers make plain (multi-slot) P100 leaves (`StencilAggBackend::deferred`, `prove_batch`), so a commitment is
+  proven within `L` at leaf cost. Aggregator nodes (`NodeConfig::aggregator`, full nodes in SimNet) then build
+  one aggregate per proven commitment from their own states (`ProveJob::aggregate` → `aggregate_batch`, off the
+  event loop) and gossip it as a proof commitment for the same key. The beacon accepts it while
+  `CommitInfo::agg_open`: proven at most `L_agg` slots ago, not yet aggregated, `ProofBackend::is_aggregate` (every
+  proof a group head or reference), verified exactly like leaf proofs; it then sets `aggregated` / `agg_root`
+  and changes nothing else. A missing aggregate never rolls anything back. Settled commitments keep their
+  InputRefs (and their entry) while the window is open, since the aggregate verifies against them; a
+  commitment whose InputRefs are gone is rejected, never a panic. SimNet: `stencil-agg-deferred` (aggregators
+  wait 4 slots, past settlement: 100 of 116 commitments aggregated in 30 slots, the rest still in their
+  window; no aggregate without earlier plain proofs; no rollback) and `stencil-agg-deferred-junk` (aggregator 0
+  gossips aggregates with a flipped byte and replays the plain proof commitment as an "upgrade": none reaches
+  the chain). Mutation-checked: without the `is_aggregate` check the replay is accepted; clearing InputRefs at
+  settlement as before leaves no aggregate on chain.
 - Genesis: `stark_config_id = koalabear-agg` (P100 single leaves, J101 aggregates) or `koalabear-agg-test`.
 - Tests: `umis-agg/tests/native.rs`, `tests/stencil_backend.rs`, `src/stencil.rs`; SimNet `stencil-agg`,
   `stencil-agg-lbm`, `stencil-agg-junk`.

@@ -1,4 +1,4 @@
-# Next steps in detail (rewritten 2026-11-22 after steps 1–5 of the previous plan)
+# Next steps in detail (rewritten 2026-11-22; updated 2026-11-25)
 
 Read `.plan/HANDOFF.md` first (how to build, test, machine quirks, conventions). This file is the work plan.
 `.plan/ROADMAP.md` §0 holds the goals (N1–N7) and status; `docs/stencil.md` is the user guide.
@@ -44,14 +44,22 @@ Read `.plan/HANDOFF.md` first (how to build, test, machine quirks, conventions).
      (`TablePacking::with_min_trace_height`), and `recursive_shapes` reports the worse of the tallest and shortest
      table: layer 1 and 2-to-1 clear 101 (`stencil_leaves_and_their_recursion_clear_101_bits_at_j101`,
      mutation-checked with the padding removed: 0 bits).
-5. **GPU batch leaf** (the next real project, 2+ sessions). Profile 2026-11-24, LBM 32², 8 slots, P100, warm: prove
-   515 ms = cells quotients ~130–140 ms (parallel over AIRs) + FRI ~30 ms + ~340 ms trace commit (LDE and Merkle
-   hashing of 5548-wide rows); verify 622 ms is almost all FRI/Merkle (constraints ~5 ms), so the GPU helps only
-   the prover. Cheapest first step: `GpuDft` (umis-gpu, drop-in `TwoAdicSubgroupDft`) in a batch leaf config,
-   measured; then GPU Merkle hashing of the wide trace; the quotient needs the JIT path (`umis-gpu/src/jit.rs`) made
-   multi-table with LogUp. The 3090 Ti was busy with another project's job on 2026-11-24; the A6000 was free.
-6. **Hygiene:** ~~B1~~ (owner 2026-11-24: not reported upstream; the local patch stays); ~~B8~~ done 2026-11-25 (share checks off the event loop, deterministic in SimNet via a fixed
-   delay; `docs/ARCHITECTURE.md`); B9 (above).
+5. **GPU batch leaf: started 2026-11-25** (stencil-spec §6c', INV-STENCIL-GPU-1..3). Built and tested on the
+   RTX 3090 Ti: the wide-row leaf hash (`WideRowHash`), `FastMmcs` with a pluggable tree backend (equal to the
+   stock MMCS), `FastProver` / `config_with`, and the CUDA tree (`umis_gpu::merkle::GpuTree`). Opt-in with
+   `UMIS_GPU_LEAF=1`: on the 3090 Ti (PCIe ×4, 1.9 GB/s) it only matches the CPU (tree 82 vs 87 ms per 8-slot LBM
+   commit), because the 133 MB LDE upload dominates. The A6000 measured idle (2026-11-25) moves only 1.7 GB/s too
+   (tree 130–140 vs 129–149 ms): both cards' PCIe links look stuck at a low speed (owner: check BIOS/risers).
+   Measure only on an idle card (wait for `nvidia-smi` utilisation < 10 % and a low load average).
+   Next, in order: keep the LDE on the device (GPU LDE feeding the tree, download only what the openings need),
+   then the quotient on the GPU (multi-table JIT path in `umis-gpu/src/jit.rs` with LogUp), which removes most
+   transfers.
+6. **Hygiene:** ~~B1~~ (owner 2026-11-24: not reported upstream; the local patch stays); ~~B8~~ done 2026-11-25
+   (share checks off the event loop); ~~B9~~ done 2026-11-25 (recursion tables padded to 32 rows).
+7. ~~**Separate aggregator role**~~ **done 2026-11-25** (INV-STENCIL-AGG-4): genesis `agg_lag`; members prove
+   plain leaves, aggregators (`NodeConfig::aggregator`) replace proven commitments' leaf proofs by aggregates in a
+   window; missing aggregates are harmless. Follow-ups: pruning of replaced leaf proofs (archive size, the point of
+   aggregating), aggregator incentives, and a devnet run with `agg_lag` (`umis-cli genesis` needs a flag).
 
 ## Commands (copy-paste)
 

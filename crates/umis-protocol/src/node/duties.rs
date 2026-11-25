@@ -402,6 +402,10 @@ impl Node {
     }
 
     pub(super) fn on_compute_done(&mut self, id: u64, result: Result<Bytes, String>, out: &mut Vec<Action>) {
+        if let Some((z, ce, zc, job)) = self.agg_jobs.remove(&id) {
+            self.aggregate_done(z, ce, &zc, &job, result, out);
+            return;
+        }
         let Some((z, job)) = self.jobs.remove(&id) else { return };
         self.pump_jobs(out);
         let Some(eng) = self.engines.get_mut(&z) else { return };
@@ -432,6 +436,102 @@ impl Node {
                 tracing::warn!(zone = z, slot = job.stmt.from_slot, members = members.len(), "proving failed: {e}");
             }
         }
+    }
+
+    // ------------------------------------------------------------ aggregation
+
+    /// Aggregator role (INV-STENCIL-AGG-4): for every proven commitment of a followed zone
+    /// whose aggregation window is open and that has no aggregate yet, one aggregate job (off
+    /// the event loop) from this node's own states.
+    fn aggregator_duties(&mut self, e: u64, out: &mut Vec<Action>) {
+        if self.ctx.p.agg_lag == 0 {
+            return;
+        }
+        let head = self.head_state().clone();
+        self.agg_pool.retain(|(z, ce), _| head.awaits_aggregate(&self.ctx, *z, *ce, e));
+        self.agg_sent.retain(|(z, ce)| head.commits.get(z).is_some_and(|l| l.iter().any(|c| c.e == *ce)));
+        if !self.cfg.aggregator {
+            return;
+        }
+        let mut todo = Vec::new();
+        for (z, list) in &head.commits {
+            if !self.engines.contains_key(z) {
+                continue;
+            }
+            for c in list {
+                let key = (*z, c.e);
+                if c.agg_open(&self.ctx.p, e)
+                    && c.proven_at + self.cfg.agg_min_age <= e
+                    && !self.agg_sent.contains(&key)
+                    && !self.agg_pool.contains_key(&key)
+                {
+                    todo.push((key, c.included_at));
+                }
+            }
+        }
+        for ((z, ce), included_at) in todo {
+            let Some(zc) = self.chain.canonical_by_slot(included_at).and_then(|b| {
+                b.block
+                    .as_ref()?
+                    .body
+                    .zone_commitments
+                    .iter()
+                    .find(|zc| zc.commitment.zone == z && zc.commitment.beacon_slot == ce)
+                    .cloned()
+            }) else {
+                continue;
+            };
+            self.next_job += 1;
+            let id = self.next_job;
+            let Some(job) = self.engines[&z].aggregate_job(&self.ctx, &self.chain, &zc, id) else { continue };
+            self.agg_sent.insert((z, ce));
+            if self.cfg.adversary.junk_aggregates {
+                // Also replay the commitment's plain leaf proofs as an "upgrade".
+                let replay = self.chain.canonical().filter_map(|b| b.block.as_ref()).find_map(|b| {
+                    b.body.proof_commitments.iter().find(|p| (p.pc.zone, p.pc.beacon_slot) == (z, ce)).cloned()
+                });
+                if let Some(pc) = replay {
+                    self.publish(Topic::Commit, &Gossip::ProofCommit(Box::new(pc)), out);
+                }
+            }
+            tracing::debug!(zone = z, ce, slots = job.members.len(), "aggregate job");
+            out.push(Action::Compute(Box::new(job.clone())));
+            self.agg_jobs.insert(id, (z, ce, zc, job));
+        }
+    }
+
+    fn aggregate_done(
+        &mut self,
+        z: ZoneId,
+        ce: u64,
+        zc: &ZoneCommitEnvelope,
+        job: &umis_proof::ProveJob,
+        result: Result<Bytes, String>,
+        out: &mut Vec<Action>,
+    ) {
+        let proofs = result.and_then(|p| borsh::from_slice::<Vec<Bytes>>(&p).map_err(|e| e.to_string()));
+        let junk = self.cfg.adversary.junk_aggregates;
+        let proofs = proofs.map(|mut p| {
+            if junk && let Some(last) = p.first_mut().and_then(|h| h.last_mut()) {
+                *last ^= 1;
+            }
+            p
+        });
+        let pc = match proofs {
+            Ok(p) if p.len() == job.members.len() => self
+                .engines
+                .get(&z)
+                .and_then(|eng| eng.aggregate_commitment(&self.ctx, &self.chain, &self.cfg.key, zc, &job.members, p)),
+            Ok(_) => None,
+            Err(e) => {
+                tracing::warn!(zone = z, ce, "aggregation failed: {e}");
+                None
+            }
+        };
+        let Some(pc) = pc else { return };
+        self.stats.aggregates_made += 1;
+        self.agg_pool.insert((z, ce), pc.clone());
+        self.publish(Topic::Commit, &Gossip::ProofCommit(Box::new(pc)), out);
     }
 
     // ------------------------------------------------------------ faults
@@ -492,6 +592,7 @@ impl Node {
         }
         self.vote_duties(e, out);
         self.sync_duties(now, e, out);
+        self.aggregator_duties(e, out);
         self.pump_jobs(out);
     }
 
@@ -644,6 +745,19 @@ impl Node {
                         bad_pcs.push(*key);
                     }
                 }
+            }
+        }
+        // Aggregates replacing proven commitments' leaf proofs (INV-STENCIL-AGG-4).
+        for (key, pc) in &self.agg_pool {
+            if !pstate.awaits_aggregate(&self.ctx, key.0, key.1, e) {
+                continue;
+            }
+            let mut trial = body.clone();
+            trial.proof_commitments.push(pc.clone());
+            trial.proof_commitments.sort_by_key(|p| (p.pc.zone, p.pc.beacon_slot));
+            match pstate.apply_body(&self.ctx, &view, e, seed, &trial) {
+                Ok(_) => body = trial,
+                Err(err) => tracing::debug!(zone = key.0, commit = key.1, "aggregate not included: {err}"),
             }
         }
         let state = pstate.apply_body(&self.ctx, &view, e, seed, &body).ok()?;

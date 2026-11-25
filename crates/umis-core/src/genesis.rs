@@ -26,6 +26,11 @@ pub struct ChainParams {
     pub max_beacon_rank: u32,
     /// `L`: proof lag in beacon slots.
     pub proof_lag: u64,
+    /// `L_agg`: beacon slots after a commitment is proven during which aggregators may replace
+    /// its leaf proofs by an aggregate (separate aggregator role); 0 disables it. Omitted from
+    /// the genesis JSON when 0, so existing genesis hashes are unchanged.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub agg_lag: u64,
     /// `δ`: clock tolerance in ms.
     pub clock_tolerance_ms: u64,
     /// `E_hb`: heartbeat timeout in beacon slots.
@@ -48,6 +53,10 @@ pub struct ChainParams {
     pub max_state_bytes: u32,
 }
 
+fn is_zero(x: &u64) -> bool {
+    *x == 0
+}
+
 impl Default for ChainParams {
     fn default() -> Self {
         Self {
@@ -58,6 +67,7 @@ impl Default for ChainParams {
             max_zone_rank: 2,
             max_beacon_rank: 2,
             proof_lag: 0,
+            agg_lag: 0,
             clock_tolerance_ms: 500,
             heartbeat_timeout: 10,
             min_stake: 100,

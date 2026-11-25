@@ -86,13 +86,21 @@ pub struct ProveJob {
     /// proof, [`ProofBackend::prove_batch`]); its result is `borsh(Vec<Bytes>)`,
     /// one proof per member in order, and its own statement fields are unused.
     pub members: Vec<ProveJob>,
+    /// A container job for an aggregator ([`ProofBackend::aggregate_batch`]) rather than for
+    /// the zone's own provers.
+    pub aggregate: bool,
 }
 
 impl ProveJob {
     /// Bundles slot jobs (of one zone and task) into a container job.
     pub fn batch(id: u64, members: Vec<ProveJob>) -> ProveJob {
         let first = members.first().expect("members").clone();
-        ProveJob { id, members, ..ProveJob { members: Vec::new(), ..first } }
+        ProveJob { id, members, ..ProveJob { members: Vec::new(), aggregate: false, ..first } }
+    }
+
+    /// [`Self::batch`] for an aggregator: proved with [`ProofBackend::aggregate_batch`].
+    pub fn aggregate(id: u64, members: Vec<ProveJob>) -> ProveJob {
+        ProveJob { aggregate: true, ..Self::batch(id, members) }
     }
 }
 
@@ -129,7 +137,8 @@ pub fn run_job_on(
     }
     let items: Vec<(&TransitionStatement, Witness<'_>)> =
         job.members.iter().map(|m| (&m.stmt, witness(inst, m))).collect();
-    let proofs = backend.prove_batch(&items, key)?;
+    let proofs =
+        if job.aggregate { backend.aggregate_batch(&items, key)? } else { backend.prove_batch(&items, key)? };
     if proofs.len() != job.members.len() {
         return Err(ProofError::Prover("prove_batch returned the wrong number of proofs".into()));
     }
@@ -218,6 +227,24 @@ pub trait ProofBackend: Send + Sync {
     /// reference each other inside a group). Default: one at a time.
     fn verify_group(&self, items: &[(&TransitionStatement, PublicData<'_>, &[u8])]) -> Vec<Result<NodeId, ProofError>> {
         items.iter().map(|(s, pd, p)| self.verify(s, pd, p)).collect()
+    }
+
+    /// The proofs an aggregator makes for a proven commitment (separate aggregator role,
+    /// genesis `agg_lag`): one recursive aggregate for the slots. Default: [`Self::prove_batch`].
+    fn aggregate_batch(
+        &self,
+        items: &[(&TransitionStatement, Witness<'_>)],
+        prover: &SecretKey,
+    ) -> Result<Vec<Bytes>, ProofError> {
+        self.prove_batch(items, prover)
+    }
+
+    /// Whether a proof commitment's proofs (of task `task_id`) are an aggregate, which the
+    /// beacon chain accepts to replace an already proven commitment's leaf proofs.
+    /// Default: never.
+    fn is_aggregate(&self, task_id: &str, proofs: &[&[u8]]) -> bool {
+        let _ = (task_id, proofs);
+        false
     }
 }
 
@@ -323,6 +350,23 @@ impl ProofBackend for MultiBackend {
             return Err(ProofError::Prover("a batch must be of one task".into()));
         }
         self.get(Some(task)).map_err(|e| ProofError::Prover(e.to_string()))?.prove_batch(items, prover)
+    }
+
+    fn aggregate_batch(
+        &self,
+        items: &[(&TransitionStatement, Witness<'_>)],
+        prover: &SecretKey,
+    ) -> Result<Vec<Bytes>, ProofError> {
+        let Some((_, w)) = items.first() else { return Ok(Vec::new()) };
+        let task = w.instance.task_id();
+        if items.iter().any(|(_, w)| w.instance.task_id() != task) {
+            return Err(ProofError::Prover("a batch must be of one task".into()));
+        }
+        self.get(Some(task)).map_err(|e| ProofError::Prover(e.to_string()))?.aggregate_batch(items, prover)
+    }
+
+    fn is_aggregate(&self, task_id: &str, proofs: &[&[u8]]) -> bool {
+        self.by_task.get(task_id).is_some_and(|b| b.is_aggregate(task_id, proofs))
     }
 
     fn verify_group(&self, items: &[(&TransitionStatement, PublicData<'_>, &[u8])]) -> Vec<Result<NodeId, ProofError>> {

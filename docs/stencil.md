@@ -103,6 +103,10 @@ every check needs.
   aggregate instead of one leaf per slot (LBM 32²: ~6 MB per slot before). Cost per slot (J101, CPU): EF5 leaf
   plus layer-1 recursion, heat 64² ≈ 1 s, LBM 32² ≈ 6 s; each 2-to-1 step ≈ 1 s. SimNet: `stencil-agg`,
   `stencil-agg-lbm`, `stencil-agg-junk`.
+- **Separate aggregators (2026-11-25):** `umis-cli genesis ... --stark-config koalabear-agg --agg-lag 8` makes members
+  prove plain leaves (fast, within the proof lag), and full nodes started with `umis-cli node --aggregator`
+  replace them on chain with one aggregate per commitment within 8 beacon slots. A missing aggregate rolls
+  nothing back. SimNet: `stencil-agg-deferred`, `stencil-agg-deferred-junk`.
 - **Stateless beacon (2026-11-22, complete 2026-11-24):** proof commitments carry state witnesses instead of the
   states: a summary, its inclusion proof and the borders of both boards (~5 KB for an LBM 32² zone with k = 1; the
   state is 37 KB). The beacon checks every proof without zone states, including `outputs_root`: the proof binds a
