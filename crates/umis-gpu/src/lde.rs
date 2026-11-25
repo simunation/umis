@@ -25,6 +25,10 @@ pub(crate) struct Device {
     pub(crate) copy_block: CudaFunction,
     pub(crate) p2_grind: CudaFunction,
     pub(crate) p2_permute_states: CudaFunction,
+    pub(crate) p2_hash_rows: CudaFunction,
+    pub(crate) p2_hash_chunks: CudaFunction,
+    pub(crate) concat_cols: CudaFunction,
+    pub(crate) p2_compress: CudaFunction,
     pub(crate) compress_layer: CudaFunction,
     pub(crate) gather_rows: CudaFunction,
     pub(crate) ext_col_dot_part: CudaFunction,
@@ -37,6 +41,9 @@ pub(crate) struct Device {
     pub(crate) life_fill: CudaFunction,
     /// log n -> (w_n^i, w_n^-i) for i < n/2, on the device.
     twiddles: HashMap<usize, (CudaSlice<u32>, CudaSlice<u32>)>,
+    /// Pinned host staging buffers by length (Merkle uploads run at full PCIe speed from them).
+    pub(crate) pinned: HashMap<usize, Vec<cudarc::driver::PinnedHostSlice<u32>>>,
+    pub(crate) ctx: Arc<CudaContext>,
 }
 
 pub(crate) fn raw(x: F) -> u32 {
@@ -68,6 +75,10 @@ fn init() -> Result<Device, String> {
         copy_block: res.load_function("copy_block").map_err(e)?,
         p2_grind: res.load_function("p2_grind").map_err(e)?,
         p2_permute_states: res.load_function("p2_permute_states").map_err(e)?,
+        p2_hash_rows: res.load_function("p2_hash_rows").map_err(e)?,
+        p2_hash_chunks: res.load_function("p2_hash_chunks").map_err(e)?,
+        concat_cols: res.load_function("concat_cols").map_err(e)?,
+        p2_compress: res.load_function("p2_compress").map_err(e)?,
         compress_layer: res.load_function("compress_layer").map_err(e)?,
         gather_rows: res.load_function("gather_rows").map_err(e)?,
         ext_col_dot_part: res.load_function("ext_col_dot_part").map_err(e)?,
@@ -79,6 +90,8 @@ fn init() -> Result<Device, String> {
         life_gen_step: res.load_function("life_gen_step").map_err(e)?,
         life_fill: res.load_function("life_fill").map_err(e)?,
         twiddles: HashMap::new(),
+        pinned: HashMap::new(),
+        ctx: ctx.clone(),
     })
 }
 

@@ -157,7 +157,49 @@ pub mod koala_bear {
     pub type Challenge = BinomialExtensionField<Val, 4>;
     pub type Perm = Poseidon2KoalaBear<16>;
     /// Sponge: width 16, rate 8, 8-element (~248-bit) digest.
-    pub type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    pub type Sponge = PaddingFreeSponge<Perm, 16, 8, 8>;
+    /// The Merkle leaf hash: [`WideRowHash`] over the sponge.
+    pub type Hash = WideRowHash;
+
+    /// Values per chunk of a wide row ([`WideRowHash`]).
+    pub const ROW_CHUNK: usize = 512;
+
+    /// The Merkle leaf hash (2026-11-25, GPU step 1): a message of at most [`ROW_CHUNK`] values
+    /// is hashed by the sponge as before; a longer one is the sponge of its consecutive
+    /// `ROW_CHUNK`-value chunks' sponge digests (the last chunk may be short). Collision
+    /// resistant for messages of equal length if the sponge is, which is all a Merkle leaf
+    /// needs: the verifier binds every opened row's width to the committed dimensions. It lets
+    /// a GPU hash the chunks of the stencil leaf's wide, short rows (256 rows of 44 k values)
+    /// in parallel instead of one sequential sponge per row.
+    #[derive(Clone, Debug)]
+    pub struct WideRowHash(pub Sponge);
+
+    impl WideRowHash {
+        pub fn new(perm: Perm) -> Self {
+            Self(Sponge::new(perm))
+        }
+    }
+
+    impl<T: Default + Copy> p3_symmetric::CryptographicHasher<T, [T; 8]> for WideRowHash
+    where
+        Sponge: p3_symmetric::CryptographicHasher<T, [T; 8]>,
+    {
+        fn hash_iter<I>(&self, input: I) -> [T; 8]
+        where
+            I: IntoIterator<Item = T>,
+        {
+            let v: alloc::vec::Vec<T> = input.into_iter().collect();
+            self.hash_slice(&v)
+        }
+
+        fn hash_slice(&self, input: &[T]) -> [T; 8] {
+            if input.len() <= ROW_CHUNK {
+                return self.0.hash_slice(input);
+            }
+            let digests: alloc::vec::Vec<T> = input.chunks(ROW_CHUNK).flat_map(|c| self.0.hash_slice(c)).collect();
+            self.0.hash_slice(&digests)
+        }
+    }
     /// 2-to-1 compression of two 8-element digests.
     pub type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
     pub type ValMmcs = MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, Hash, Compress, 2, 8>;
@@ -166,6 +208,25 @@ pub mod koala_bear {
     pub type Dft = Radix2DitParallel<Val>;
     pub type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
     pub type Config = StarkConfig<Pcs, Challenge, Challenger>;
+
+    /// The config with another DFT and input MMCS (`umis-gpu`'s GPU LDE and Merkle trees). With
+    /// the stock hash, compression and challenger, its proofs are byte-identical to
+    /// [`config`]'s and verify with it (the FRI commit-phase trees use the same MMCS).
+    pub type ConfigWith<D, M> =
+        StarkConfig<TwoAdicFriPcs<Val, D, M, ExtensionMmcs<Val, Challenge, M>>, Challenge, Challenger>;
+
+    pub fn config_with<D, M>(preset: FriPreset, dft: D, mmcs: M) -> ConfigWith<D, M>
+    where
+        D: p3_dft::TwoAdicSubgroupDft<Val>,
+        M: p3_commit::Mmcs<Val>,
+    {
+        let perm = default_koalabear_poseidon2_16();
+        let challenge_mmcs = ExtensionMmcs::new(mmcs.clone());
+        let pcs = TwoAdicFriPcs::new(dft, mmcs, preset.fri_params(challenge_mmcs));
+        StarkConfig::new(pcs, Challenger::new(perm))
+            .with_ood_proof_of_work_bits(preset.ood_pow_bits())
+            .with_lookup_proof_of_work_bits(preset.lookup_pow_bits())
+    }
 
     /// Build the KoalaBear STARK config.
     pub fn config(preset: FriPreset) -> Config {

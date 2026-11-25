@@ -17,6 +17,8 @@ pub use lde::{GpuDft, gpu_available};
 #[cfg(feature = "cuda")]
 pub mod jit;
 #[cfg(feature = "cuda")]
+pub mod merkle;
+#[cfg(feature = "cuda")]
 pub mod pow;
 #[cfg(feature = "cuda")]
 pub mod prover;

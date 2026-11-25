@@ -6108,6 +6108,7 @@ dependencies = [
  "postcard",
  "rand_chacha 0.10.0",
  "tracing-subscriber",
+ "umis-gpu",
  "umis-stark",
 ]
 

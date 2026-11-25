@@ -40,6 +40,31 @@ fn run<R: Rule + Clone>(rule: R, l: &[usize], m: usize) {
             .collect();
         let _ = <_ as Pcs<koala_bear::Challenge, koala_bear::Challenger>>::commit(pcs, items);
         let full = t.elapsed();
+        #[cfg(feature = "cuda")]
+        {
+            use p3_commit::Mmcs;
+            let gdft = umis_gpu::GpuDft::default();
+            let t = Instant::now();
+            let ldes: Vec<_> = traces
+                .iter()
+                .map(|tr| gdft.coset_lde_batch(tr.clone(), lb, koala_bear::Val::GENERATOR).to_row_major_matrix())
+                .collect();
+            let g_lde = t.elapsed();
+            let fast = umis_stark::fast_mmcs::FastMmcs::new(umis_gpu::merkle::GpuTree::default());
+            let l2 = ldes.clone();
+            let t = Instant::now();
+            let _ = fast.commit(l2);
+            let g_tree = t.elapsed();
+            let t = Instant::now();
+            let _ = fast.stock.commit(ldes);
+            let c_tree = t.elapsed();
+            println!(
+                "  GPU LDE {:.1} ms | tree: GPU {:.1} ms, stock CPU {:.1} ms",
+                g_lde.as_secs_f64() * 1e3,
+                g_tree.as_secs_f64() * 1e3,
+                c_tree.as_secs_f64() * 1e3
+            );
+        }
         let cells: usize = traces.iter().map(|t| t.width() * t.height()).sum();
         println!(
             "round {round}: {} traces, {cells} cells: LDE {:.1} ms, full commit {:.1} ms (Merkle + rest {:.1} ms)",

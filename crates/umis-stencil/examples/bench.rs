@@ -106,6 +106,15 @@ fn run_batch<R: Rule + Clone>(rule: R, l: &[usize], fill: impl Fn(usize) -> u32)
     // `M=m`: m slots per proof (shared hash and range tables); times are per proof.
     let m = std::env::var("M").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
     let b = StencilBatch::new_multi(rule, l[0], l[1], l[2], FriPreset::P100, m).unwrap();
+    // `GPU=1` (a `--features cuda` build): Merkle trees on the GPU.
+    #[cfg(feature = "cuda")]
+    let b = {
+        let mut b = b;
+        if std::env::var("GPU").as_deref() == Ok("1") {
+            b.set_prover(umis_stencil::batch::gpu_prover(&b).expect("GPU=1 needs a usable GPU"));
+        }
+        b
+    };
     let s = b.shape;
     let mut ext = Grid::filled(s.we, s.we, &vec![0; s.spec.values]);
     for (i, c) in ext.data.iter_mut().enumerate() {
@@ -120,6 +129,7 @@ fn run_batch<R: Rule + Clone>(rule: R, l: &[usize], fill: impl Fn(usize) -> u32)
     let t = Instant::now();
     let proof = b.prove(&traces, &public).unwrap();
     let t_prove = t.elapsed();
+    b.verify(&proof, &public).unwrap(); // warm the verifier's own degree cache too
     let t = Instant::now();
     b.verify(&proof, &public).unwrap();
     let t_verify = t.elapsed();
