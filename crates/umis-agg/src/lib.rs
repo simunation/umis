@@ -200,7 +200,7 @@ impl<'a> Layer1Owner<'a> {
             },
             config(p),
             backend(),
-            params(),
+            layer1_params(),
         )
         .map_err(|e| format!("{e:?}"))?;
         Ok(Self { owner, build: t.elapsed() })
@@ -333,9 +333,24 @@ impl Recursive {
 /// at 2^5 rows every table clears 101 bits, and the padding rows cost next to nothing.
 pub const MIN_TABLE_HEIGHT: usize = 32;
 
+/// FRI `HornerAcc` steps per ALU row in layer 1 (speed only, not soundness). Layer 1 opens
+/// every leaf column at every query, one Horner step each, and P3R packs those on one lane
+/// only (default 2 per row), so they set the ALU table's height: LBM 32² at J101 needs 2^19
+/// rows at 2, 2^17 at 8 (layer 1 5.8 → 3.4 s; 16 is no faster; measured 2026-11-25). The 2-to-1
+/// step verifies narrow recursive proofs and keeps the default.
+pub const LAYER1_HORNER_PACK: usize = 8;
+
+/// Parameters of every recursive layer (2-to-1 and up).
 fn params() -> ProveNextLayerParams {
     let mut p = ProveNextLayerParams::default();
     p.table_packing = p.table_packing.with_min_trace_height(MIN_TABLE_HEIGHT);
+    p
+}
+
+/// Parameters of layer 1 (a leaf verified in-circuit).
+pub(crate) fn layer1_params() -> ProveNextLayerParams {
+    let mut p = params();
+    p.table_packing = p.table_packing.with_horner_pack_k(LAYER1_HORNER_PACK);
     p
 }
 
@@ -354,7 +369,7 @@ pub fn layer1(p: &AggParams, leaf: &Leaf) -> Result<Recursive, String> {
         },
         config(p),
         backend(),
-        params(),
+        layer1_params(),
     )
     .map_err(|e| format!("{e:?}"))?;
     let build = t.elapsed();

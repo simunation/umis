@@ -173,6 +173,24 @@ aggregate that chains; a leaf of another rule (same widths, same preprocessed co
 a leaf proved under a forged verifying key rejected by the circuit (mutation-checked: without the pin it recurses);
 101 bits.
 
+**Layer-1 cost model and the 2026-11-25 speed-up (J101, LBM 32², load 20–35, A/B interleaved).** Layer 1 is
+linear in queries × opened leaf width: per query it hashes every opened row (Poseidon2, rate 8) and takes one FRI
+Horner step per opened column. Its circuit (`UMIS_AGG_PROFILE=1 stencil_agg_bench` prints the table heights) had
+841k ALU ops and 114k Poseidon2 calls; the tables are padded to powers of two, so only crossing one pays:
+
+| change | layer-1 circuit | tables (ALU, Poseidon2) | leaf | layer 1 | 2-to-1 |
+|---|---|---|---|---|---|
+| before | 841k ALU, 114k P2 | 2^19, 2^17 | 3.49 MB | 5.9–6.0 s | 1.41–1.49 s |
+| LogUp budget 5 → 9 (blowup 8 allows degree 9) | 653k, 88k | 2^19, 2^17 | 2.66 MB | same | same |
+| + layer-1 `horner_packed_steps` 2 → 8 | 653k, 88k | 2^17, 2^17 | 2.66 MB | 3.3–3.7 s | 1.39–1.41 s |
+
+P3R packs Horner steps on one ALU lane only, so they, not the ALU lane count (2, 4 or 8: the same 2^19), set the
+ALU height. `horner_packed_steps = 8` only in layer 1 (`LAYER1_HORNER_PACK`): in the 2-to-1 step, which verifies
+narrow recursive proofs, it costs ~20 % and +0.05 MB; 16 is no faster. Heat 64² layer 1 1.1–1.7 → 0.8–1.4 s; life
+unchanged (its leaf is narrow). The Poseidon2 table is now the floor (88k calls, 2^17): the next halving needs it
+below 65,536, about 30 % fewer opened columns. Dropping the hash limbs that copy 16-bit cells (−1,800 of 5,548 main
+columns for LBM; the halo digest needs a row mask) is ~19 % of the opened width, not enough on its own; not built.
+
 ## Tests and tools
 
 - `tests/agg.rs` (test parameters): leaf → layer 1 → 2-to-1, each verified against its statement; a recursive

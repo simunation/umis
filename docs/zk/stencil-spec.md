@@ -239,7 +239,9 @@ Forgeries (each mutation-checked):
 Range table choice (INV-STENCIL-BATCH-3): `Pairs` (`(v, b)` rows, one lookup per request) when a slot makes
 ≥ 2^15 narrow requests (LBM), otherwise `Single` (the 2^16 column, two lookups per narrow request; heat). Each
 form has its own mutation-checked attack tests (`both_range_tables_are_covered_by_the_attack_tests`). Lookup
-degree budget = the preset's maximum degree (P100: 5; LBM proofs 35 % smaller than with 3).
+degree budget = the preset's maximum degree `blowup + 1`, at most 9 (P100: 5, LBM proofs 35 % smaller than with
+3; the aggregation leaf at blowup 8: 9, LBM 32² leaf 3.49 → 2.66 MB). p3-lookup packs at most `budget − 1` lookups
+per LogUp column, which is the count `security_shapes_of` charges per permutation column (INV-STENCIL-PARAM-1).
 
 ## 6d'. Toy 4: Gray–Scott reaction–diffusion (`grayscott.rs`)
 

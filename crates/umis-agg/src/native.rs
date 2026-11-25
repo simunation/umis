@@ -20,7 +20,7 @@
 //!
 //! Upper layers ([`crate::AggOwner`]) take these recursive proofs like any other.
 
-use crate::{AggConfig, Backend, Recursive, Timing, Val, backend, config, params};
+use crate::{AggConfig, Backend, Recursive, Timing, Val, backend, config, layer1_params};
 use p3_air::Air;
 use p3_batch_stark::{BatchProof, CommonData, ProverData, StarkInstance, prove_batch, verify_batch};
 use p3_circuit::{Circuit, CircuitBuilder, NonPrimitiveOpId, StatementExport};
@@ -222,7 +222,7 @@ where
         let schema = b.set_statement_exports::<Val>(&exports).map_err(|e| format!("{e:?}"))?;
         let circuit = b.build().map_err(|e| format!("{e:?}"))?;
 
-        let lp = params();
+        let lp = layer1_params();
         let mut preprocessors: Vec<Box<dyn NpoPreprocessor<Val>>> =
             <Backend as PcsRecursionBackend<AggConfig, BatchOnly, 5>>::non_primitive_preprocessors(&be);
         let mut air_builders: Vec<Box<dyn NpoAirBuilder<AggConfig, 5>>> =
